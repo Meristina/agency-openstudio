@@ -235,6 +235,27 @@ def test_missions_list_and_get_roundtrip(monkeypatch, tmp_path):
         httpd.shutdown()
 
 
+def test_get_mission_rejects_path_traversal(monkeypatch, tmp_path):
+    # A traversal id must be rejected before it can reach store.load(), which
+    # builds a filesystem path from the id (docs/SECURITY.md).
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    def _must_not_load(_mission_id):
+        raise AssertionError("store.load must not be called for a traversal id")
+
+    monkeypatch.setattr("agency_kit.store.load", _must_not_load)
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("GET", "/api/mission/../../../../etc/passwd")
+        resp = conn.getresponse()
+        body = resp.read()
+        assert resp.status == 404
+        assert b"passwd" not in body and b"root:" not in body
+    finally:
+        httpd.shutdown()
+
+
 # ── CORS: loopback only, never wildcard ─────────────────────────────────────────
 
 def test_cors_echoes_loopback_origin_never_wildcard(tmp_path):

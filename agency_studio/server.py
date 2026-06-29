@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,6 +31,15 @@ from urllib.parse import urlparse
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+
+# Loopback hosts the studio is allowed to bind — enforced at the bind point.
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+# A saved mission id is new_mission_id() output: a timestamp + slug, i.e. only
+# [A-Za-z0-9_-]. Anything else (a slash or dot) is rejected before it can reach
+# store.load(), which builds a filesystem path from the id — so the GET-mission
+# route cannot be turned into a path-traversal read.
+_MISSION_ID_RE = re.compile(r"\A[A-Za-z0-9_-]+\Z")
 
 # Content types for the few static extensions the GUI build emits.
 _CONTENT_TYPES = {
@@ -134,6 +144,9 @@ class StudioHandler(BaseHTTPRequestHandler):
     def _handle_get_mission(self, mission_id: str) -> None:
         from agency_kit import store
         mission_id = urlparse(mission_id).path.strip("/")
+        if not _MISSION_ID_RE.match(mission_id):
+            # Reject traversal / malformed ids before they reach the filesystem.
+            return self._send_error_json(404, "mission not found")
         try:
             self._send_json(store.load(mission_id))
         except FileNotFoundError:
@@ -263,6 +276,19 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+def _require_loopback(host: str) -> None:
+    """Refuse any non-loopback bind — Agency Studio is local-first (docs/SECURITY.md).
+
+    Enforced at the bind point so neither ``serve`` nor a direct ``make_server``
+    caller can ever expose the studio beyond loopback.
+    """
+    if host not in _LOOPBACK_HOSTS:
+        raise ValueError(
+            f"refusing to bind host '{host}' — Agency Studio is local-first and binds "
+            f"loopback only (127.0.0.1). Set --host 127.0.0.1."
+        )
+
+
 def make_server(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
@@ -273,8 +299,9 @@ def make_server(
 
     ``static_root`` defaults to ``app/studio/dist`` next to ``project_root`` when
     that build exists; otherwise static serving is disabled (API still works).
-    Host is forced to loopback semantics by the caller — see ``serve``.
+    Refuses to bind any non-loopback host (``_require_loopback``).
     """
+    _require_loopback(host)
     if static_root is None:
         candidate = Path(project_root).resolve() / "app" / "studio" / "dist"
         static_root = candidate if candidate.is_dir() else None
@@ -290,13 +317,10 @@ def serve(
     project_root: str = ".",
     static_root: "str | Path | None" = None,
 ) -> None:
-    """Start the Studio server and serve forever (Ctrl-C to stop)."""
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        # Security gate: never expose the studio beyond loopback (docs/SECURITY.md).
-        raise ValueError(
-            f"refusing to bind host '{host}' — Agency Studio is local-first and binds "
-            f"loopback only (127.0.0.1). Set --host 127.0.0.1."
-        )
+    """Start the Studio server and serve forever (Ctrl-C to stop).
+
+    The loopback bind is enforced inside ``make_server`` (``_require_loopback``).
+    """
     httpd = make_server(host, port, project_root, static_root)
     where = httpd.static_root if httpd.static_root else "(GUI not built)"  # type: ignore[attr-defined]
     print(f"Agency Studio → http://{host}:{port}   serving {where}", flush=True)
