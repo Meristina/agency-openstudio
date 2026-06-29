@@ -1,0 +1,66 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { runMission } from "./api";
+import type { MissionEvent } from "./types";
+
+const realFetch = global.fetch;
+afterEach(() => {
+  global.fetch = realFetch;
+  vi.restoreAllMocks();
+});
+
+/** A ReadableStream that emits the given string chunks then closes. */
+function sseStream(chunks: string[]): ReadableStream<Uint8Array> {
+  const enc = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (const c of chunks) controller.enqueue(enc.encode(c));
+      controller.close();
+    },
+  });
+}
+
+function stubFetch(res: Partial<Response>): void {
+  global.fetch = vi.fn().mockResolvedValue(res) as unknown as typeof fetch;
+}
+
+async function collect(chunks: string[]): Promise<MissionEvent[]> {
+  stubFetch({ ok: true, status: 200, body: sseStream(chunks) });
+  const got: MissionEvent[] = [];
+  await runMission("a goal", (e) => got.push(e));
+  return got;
+}
+
+describe("runMission SSE parsing", () => {
+  it("parses multiple complete frames in order", async () => {
+    const got = await collect([
+      'data: {"phase":"route","status":"done","route":["solve"]}\n\n' +
+        'data: {"phase":"done","mission_id":"m1","verdict":"PASS","path":"/p","residual_risk":null}\n\n',
+    ]);
+    expect(got.map((e) => e.phase)).toEqual(["route", "done"]);
+    expect(got[0]).toMatchObject({ route: ["solve"] });
+  });
+
+  it("reassembles a frame split across stream chunks", async () => {
+    const frame = 'data: {"phase":"dept","dept":"solve","status":"start"}\n\n';
+    const mid = Math.floor(frame.length / 2);
+    const got = await collect([frame.slice(0, mid), frame.slice(mid)]);
+    expect(got).toEqual([{ phase: "dept", dept: "solve", status: "start" }]);
+  });
+
+  it("flushes a final frame that lacks the trailing blank line", async () => {
+    const got = await collect(['data: {"phase":"error","message":"boom"}']);
+    expect(got).toEqual([{ phase: "error", message: "boom" }]);
+  });
+
+  it("ignores non-data lines and blank frames", async () => {
+    const got = await collect([
+      ": keep-alive comment\n\n" + 'data: {"phase":"synth","iteration":1,"status":"start"}\n\n',
+    ]);
+    expect(got).toEqual([{ phase: "synth", iteration: 1, status: "start" }]);
+  });
+
+  it("throws when the response is not ok", async () => {
+    stubFetch({ ok: false, status: 500, body: null });
+    await expect(runMission("g", () => {})).rejects.toThrow(/500/);
+  });
+});

@@ -1,35 +1,12 @@
-// Scaffold Mission Console. Intentionally minimal: it proves all three API
-// paths end-to-end (list missions, run a mission over SSE with a live event
-// log, and the terminal done/error frame). The full timeline + Markdown dossier
-// render lands in the next Wave 1 step — this is the wiring checkpoint.
+// Wave 1 Mission Console: submit a goal → live SSE timeline → on completion,
+// load and render the saved dossier. A history sidebar lists saved missions;
+// clicking one loads its dossier into the same detail pane.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listMissions, runMission } from "./api";
-import type { MissionEvent, MissionSummary } from "./types";
-
-function summarize(e: MissionEvent): string {
-  switch (e.phase) {
-    case "route":
-      return `route → ${e.route.join(" · ")}`;
-    case "dept":
-      return `dept ${e.dept} — ${e.status}`;
-    case "synth":
-      return `synth #${e.iteration} — ${e.status}`;
-    case "inspect":
-      return e.verdict
-        ? `inspect #${e.iteration} — verdict ${e.verdict}`
-        : `inspect #${e.iteration} — start`;
-    case "done":
-      return `done — ${e.verdict ?? "delivered"} (${e.mission_id ?? "?"})`;
-    case "error":
-      return `error — ${e.message}`;
-    default: {
-      // Exhaustiveness guard: a new MissionEvent.phase becomes a compile error here.
-      const _exhaustive: never = e;
-      return String(_exhaustive);
-    }
-  }
-}
+import { getMission, listMissions, runMission } from "./api";
+import Timeline from "./components/Timeline";
+import MissionDetail from "./components/MissionDetail";
+import type { Dossier, MissionEvent, MissionSummary } from "./types";
 
 export default function App() {
   const [missions, setMissions] = useState<MissionSummary[]>([]);
@@ -37,6 +14,9 @@ export default function App() {
   const [events, setEvents] = useState<MissionEvent[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [detail, setDetail] = useState<Dossier | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const refreshMissions = useCallback(async () => {
@@ -51,30 +31,49 @@ export default function App() {
     void refreshMissions();
   }, [refreshMissions]);
 
+  const openMission = useCallback(async (id: string) => {
+    setSelectedId(id);
+    setDetailLoading(true);
+    setError(null);
+    try {
+      setDetail(await getMission(id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setDetail(null);
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
+
   const onRun = useCallback(async () => {
     const trimmed = goal.trim();
     if (!trimmed || running) return;
     setRunning(true);
     setError(null);
     setEvents([]);
+    setDetail(null);
+    setSelectedId(null);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    let completedId: string | null = null;
     try {
       await runMission(
         trimmed,
-        (e) => setEvents((prev) => [...prev, e]),
+        (e) => {
+          setEvents((prev) => [...prev, e]);
+          if (e.phase === "done" && e.mission_id) completedId = e.mission_id;
+        },
         { signal: ctrl.signal },
       );
       await refreshMissions();
+      if (completedId) await openMission(completedId);
     } catch (e) {
-      if (!ctrl.signal.aborted) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
+      if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : String(e));
     } finally {
       setRunning(false);
       abortRef.current = null;
     }
-  }, [goal, running, refreshMissions]);
+  }, [goal, running, refreshMissions, openMission]);
 
   const onCancel = useCallback(() => abortRef.current?.abort(), []);
 
@@ -82,11 +81,11 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <h1>Agency Studio</h1>
-        <span className="tag">Mission Console · scaffold</span>
+        <span className="tag">Mission Console</span>
       </header>
 
-      <main className="grid">
-        <section className="panel">
+      <main className="layout">
+        <section className="panel run-panel">
           <h2>New mission</h2>
           <textarea
             className="goal"
@@ -94,7 +93,7 @@ export default function App() {
             value={goal}
             onChange={(ev) => setGoal(ev.target.value)}
             disabled={running}
-            rows={4}
+            rows={3}
           />
           <div className="row">
             <button onClick={onRun} disabled={running || !goal.trim()}>
@@ -109,17 +108,10 @@ export default function App() {
           {error && <p className="error">{error}</p>}
 
           <h3>Live timeline</h3>
-          <ol className="timeline">
-            {events.length === 0 && <li className="muted">No events yet.</li>}
-            {events.map((e, i) => (
-              <li key={i} className={`ev ev-${e.phase}`}>
-                {summarize(e)}
-              </li>
-            ))}
-          </ol>
+          <Timeline events={events} />
         </section>
 
-        <aside className="panel">
+        <aside className="panel history-panel">
           <div className="row between">
             <h2>History</h2>
             <button className="ghost" onClick={() => void refreshMissions()}>
@@ -130,12 +122,21 @@ export default function App() {
             {missions.length === 0 && <li className="muted">No saved missions.</li>}
             {missions.map((m) => (
               <li key={m.mission_id}>
-                <code>{m.mission_id}</code>
-                {m.goal ? <span className="goal-text"> — {m.goal}</span> : null}
+                <button
+                  className={`mission-item ${selectedId === m.mission_id ? "selected" : ""}`}
+                  onClick={() => void openMission(m.mission_id)}
+                >
+                  <code>{m.mission_id}</code>
+                  {m.goal ? <span className="goal-text">{m.goal}</span> : null}
+                </button>
               </li>
             ))}
           </ul>
         </aside>
+
+        <section className="panel detail-panel">
+          <MissionDetail dossier={detail} loading={detailLoading} />
+        </section>
       </main>
     </div>
   );

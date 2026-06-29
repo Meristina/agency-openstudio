@@ -66,6 +66,22 @@ export interface Dossier {
   route?: string[];
   delivered?: string;
   verdicts?: Array<{ verdict?: string; [k: string]: unknown }>;
+  sources?: string[];
+  decisions?: string[];
+  open_to_verify?: string[];
   residual_risk?: string;
   [k: string]: unknown;
+}
+
+/** The Inspector's final verdict token for a dossier, or null if none recorded. */
+export function lastVerdict(d: Dossier): string | null {
+  const verdicts = d.verdicts ?? [];
+  return verdicts.length ? verdicts[verdicts.length - 1].verdict ?? null : null;
+}
+
+/** Map a verdict token to its badge style class (shared by timeline + detail). */
+export function verdictClass(verdict: string): "ok" | "veto" | "warn" {
+  if (verdict === "PASS") return "ok";
+  if (verdict === "VETO") return "veto";
+  return "warn";
 }

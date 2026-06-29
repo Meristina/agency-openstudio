@@ -28,8 +28,30 @@ npm run build                    # → app/studio/dist/
 `agency_studio/server.py` serves `app/studio/dist/` automatically when it
 exists, so after a build `agency-studio` serves the GUI same-origin (no proxy).
 
+## Test
+
+```bash
+cd app/studio
+npm test                         # vitest run (run once)
+npm run test:watch               # watch mode
+```
+
 ## Layout
 
-- `src/types.ts` — wire types mirroring the server's SSE event frames.
+- `src/types.ts` — wire types mirroring the server's SSE event frames, plus
+  `lastVerdict` / `verdictClass` dossier helpers.
 - `src/api.ts` — typed client; `runMission` streams the POST SSE response.
-- `src/App.tsx` — scaffold Console: new-mission box + live timeline + history.
+- `src/timeline.ts` — pure fold of the event stream into a render-ready model
+  (`groupTimeline`); unit-tested independently of React.
+- `src/components/Timeline.tsx` — structured live timeline (route → departments
+  → synthesis → inspect verdict → terminal; veto retries never collapsed).
+- `src/components/MissionDetail.tsx` — renders a saved/just-completed dossier;
+  the deliverable via `react-markdown` (no raw HTML).
+- `src/App.tsx` — Console: new-mission box, live timeline, history sidebar
+  (click → load dossier), detail pane.
+
+## Tests
+
+- `src/timeline.test.ts` — `groupTimeline` folding, incl. VETO→retry.
+- `src/api.test.ts` — `runMission` SSE parsing (split frames, tail flush, errors).
+- `src/components/Timeline.test.tsx` — render smoke test.
