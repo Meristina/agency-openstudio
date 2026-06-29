@@ -51,3 +51,6 @@ transcriptions/
 Thumbs.db
 .vscode/
 .idea/
+
+# Guard-gate runtime marker (per-checkout review state)
+.claude/.guard-state
