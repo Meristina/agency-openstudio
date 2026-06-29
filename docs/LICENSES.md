@@ -1,33 +1,33 @@
-# Licences des composants tiers — Agency Studio
+# Third-party component licenses — Agency Studio
 
-**Discipline** : Agency Studio est **MIT**. On ne réemploie/porte que du code
-**MIT ou Apache-2.0**. Tout composant **AGPL** est **écarté** (licence virale qui
-contaminerait l'ensemble du projet) — on n'en emprunte que les *concepts*, jamais le code.
+**Discipline**: Agency Studio is **MIT**. We only reuse/port **MIT or Apache-2.0** code.
+Any **AGPL** component is **ruled out** (viral license that would contaminate the whole
+project) — we borrow only its *concepts*, never its code.
 
-## Composants évalués
+## Evaluated components
 
-| Composant | Rôle envisagé | Licence | Décision |
+| Component | Intended role | License | Decision |
 |---|---|---|---|
-| **agency-kit** | Noyau d'orchestration (réemployé) | MIT | ✅ Cœur du projet |
-| **Uncensored-Local-Studio** | Patterns multimodal local (SD/Whisper/Kokoro) | MIT | ✅ Patterns réemployés, **code durci** (pas son serveur troué) |
-| **GPT4All** | Pattern LocalDocs / RAG | MIT | ✅ Concept réemployé |
-| **microsoft/markitdown** | Ingestion documents → Markdown (Vague 4) | MIT | ✅ Dépendance directe |
-| **hyper-extract** | Graphes de connaissances (Vague 6) | Apache-2.0 | ✅ Plug-in optionnel |
-| **agency-agents** | Personas de doctrine (Vague 6) | MIT | ✅ Import curé |
-| **PixelRAG** | RAG visuel (Vague 6, cloud) | Apache-2.0 | ✅ Mode opt-in |
-| **seedance-2.0** | Modalité vidéo (Vague 6, cloud) | MIT | ✅ Mode cloud |
-| **awesome-llm-apps** | Catalogue d'inspiration | Apache-2.0 | 📚 Référence, pas une dépendance |
-| **Jan** | Runner LLM mûr (MCP, OpenAI-compat) | **AGPL-3.0** | ❌ Concepts seulement, **jamais le code** |
-| **chunkr** | OCR/chunking documents | **AGPL-3.0** | ❌ Écarté (AGPL + service Rust/Docker lourd) |
-| **LM Studio** | Runner LLM | Propriétaire | ❌ Fermé, non réutilisable |
+| **agency-kit** | Orchestration core (reused) | MIT | ✅ Project core |
+| **Uncensored-Local-Studio** | Local multimodal patterns (SD/Whisper/Kokoro) | MIT | ✅ Patterns reused, **code hardened** (not its flawed server) |
+| **GPT4All** | LocalDocs / RAG pattern | MIT | ✅ Concept reused |
+| **microsoft/markitdown** | Document → Markdown ingestion (Wave 4) | MIT | ✅ Direct dependency |
+| **hyper-extract** | Knowledge graphs (Wave 6) | Apache-2.0 | ✅ Optional plug-in |
+| **agency-agents** | Doctrine personas (Wave 6) | MIT | ✅ Curated import |
+| **PixelRAG** | Visual RAG (Wave 6, cloud) | Apache-2.0 | ✅ Opt-in mode |
+| **seedance-2.0** | Video modality (Wave 6, cloud) | MIT | ✅ Cloud mode |
+| **awesome-llm-apps** | Inspiration catalog | Apache-2.0 | 📚 Reference, not a dependency |
+| **Jan** | Mature LLM runner (MCP, OpenAI-compat) | **AGPL-3.0** | ❌ Concepts only, **never the code** |
+| **chunkr** | Document OCR/chunking | **AGPL-3.0** | ❌ Ruled out (AGPL + heavy Rust/Docker service) |
+| **LM Studio** | LLM runner | Proprietary | ❌ Closed, not reusable |
 
-## Règle pour les contributeurs / agents
+## Rule for contributors / agents
 
-Avant d'ajouter une dépendance ou de porter du code tiers : **vérifier la licence**.
-Si elle n'est pas MIT/Apache-2.0/BSD/ISC (ou équivalent permissif), ne pas l'intégrer —
-ouvrir une discussion. En cas de doute sur de l'AGPL/GPL : **concepts uniquement**.
+Before adding a dependency or porting third-party code: **check the license**. If it is not
+MIT/Apache-2.0/BSD/ISC (or an equivalent permissive license), do not integrate it — open a
+discussion. When in doubt about AGPL/GPL: **concepts only**.
 
 ## Attribution
 
-Les portages de code MIT/Apache conservent leur notice de copyright d'origine dans les
-fichiers concernés, conformément aux termes de ces licences.
+Ports of MIT/Apache code retain their original copyright notice in the affected files, as
+required by those licenses.

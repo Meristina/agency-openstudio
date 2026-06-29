@@ -1,17 +1,17 @@
 # Architecture — Agency Studio
 
-> Cible. Aucun de ces fichiers n'existe encore (repo en scaffold). Voir `ROADMAP.md`
-> pour l'ordre de construction.
+> Target state. None of these files exist yet (repo is a scaffold). See `ROADMAP.md`
+> for the build order.
 
-## Vue empilée
+## Stacked view
 
-Agency Studio n'est pas un runner de modèle de plus — c'est **l'étage d'orchestration**
-posé au-dessus. Trois couches :
+Agency Studio is not one more model runner — it's the **orchestration layer** placed on
+top. Three layers:
 
 ```
-┌─ app/studio/ — React 19 + Vite (servi sur 127.0.0.1) ──────────────┐
-│  Mission Console : goal → timeline live (SSE) → dossier + livrable  │
-│  + Gallery images · Lecteur TTS · Model Manager · Docs/RAG          │
+┌─ app/studio/ — React 19 + Vite (served on 127.0.0.1) ──────────────┐
+│  Mission Console: goal → live timeline (SSE) → dossier + deliverable│
+│  + Image gallery · TTS player · Model Manager · Docs/RAG            │
 └───────────────────────────────┬────────────────────────────────────┘
                                 ▼  HTTP / SSE
 ┌─ agency_cli/server.py — http.server stdlib, bind 127.0.0.1 ────────┐
@@ -19,42 +19,42 @@ posé au-dessus. Trois couches :
 │  /api/image · /api/tts · /api/stt · /api/docs · /api/models         │
 └───────────────────────────────┬────────────────────────────────────┘
                                 ▼
-┌─ NOYAU agency-kit — logique INCHANGÉE ─────────────────────────────┐
+┌─ agency-kit CORE — logic UNCHANGED ────────────────────────────────┐
 │  run_mission_cli(goal, engine, on_event=…) route→exec→synth→inspect │
 │  runner_bridge: serialize_dossier · store.save                      │
 └──────────┬───────────────────────┬─────────────────────────────────┘
            ▼                       ▼
-   OUTILS départements      INFÉRENCE LOCALE (multimodal only, Metal)
-   • web search (Claude       • SD · Whisper · Kokoro (mut. exclusif)
-     WebSearch déjà câblé)    • rag.py: markitdown → embeddings → SQLite
-   • image/TTS = livrable     • mcp_client (idées Jan, code neuf MIT)
+   department tools         LOCAL INFERENCE (multimodal only, Metal)
+   • web search (Claude       • SD · Whisper · Kokoro (mutually exclusive)
+     WebSearch already wired) • rag.py: markitdown → embeddings → SQLite
+   • image/TTS = deliverable  • mcp_client (Jan ideas, fresh MIT code)
 ```
 
-## Couche 1 — Cerveau (agency-kit, réemployé)
+## Layer 1 — Brain (agency-kit, reused)
 
-Le cœur reste agency-kit, **inchangé dans sa logique** :
-- `run_mission_cli(goal, engine)` : route → execute (9 départements) → synthesize →
-  inspect (boucle veto, `MAX_ITERS=3`).
-- Engine par défaut `claude-code` → Opus via l'abonnement Claude CLI (coût nul).
-- `runner_bridge.serialize_dossier` / `run` persistent la mission ; `store` la liste/charge.
+The core stays agency-kit, **logic unchanged**:
+- `run_mission_cli(goal, engine)`: route → execute (9 departments) → synthesize →
+  inspect (veto loop, `MAX_ITERS=3`).
+- Default engine `claude-code` → Opus via the Claude CLI subscription (zero cost).
+- `runner_bridge.serialize_dossier` / `run` persist the mission; `store` lists/loads it.
 
-**Seule extension** : un callback **observationnel** `on_event` sur `run_mission_cli`,
-pour streamer la progression vers la GUI. Les `print(..., flush=True)` actuels
-(cli_engine.py:251-275) mappent 1:1 vers des events. Défaut `None` ⇒ comportement
-identique à aujourd'hui. La boucle veto et `_short_verdict` ne changent **pas**.
+**The only extension**: an **observational** `on_event` callback on `run_mission_cli`, to
+stream progress to the GUI. The current `print(..., flush=True)` calls
+(cli_engine.py:251-275) map 1:1 to events. Default `None` ⇒ behavior identical to today.
+The veto loop and `_short_verdict` do **not** change.
 
-## Couche 2 — Serveur (neuf, stdlib)
+## Layer 2 — Server (new, stdlib)
 
-`agency_cli/server.py` = `ThreadingHTTPServer` (Python stdlib, **zéro dépendance**).
-Bind **`127.0.0.1`** strict. Sert l'API + la GUI buildée (`app/studio/dist/`) avec une
-garde `path_inside()` sur le static handler.
+`agency_cli/server.py` = `ThreadingHTTPServer` (Python stdlib, **zero dependencies**).
+Strict **`127.0.0.1`** bind. Serves the API + the built GUI (`app/studio/dist/`) with a
+`path_inside()` guard on the static handler.
 
-## Couche 3 — Inférence locale (neuf, Metal, différé)
+## Layer 3 — Local inference (new, Metal, deferred)
 
-Wrappers subprocess autour de stable-diffusion.cpp / whisper.cpp / Kokoro, ciblés
-Apple Silicon. Chargement **mutuellement exclusif** image↔LLM (contrainte 16 Go).
+Subprocess wrappers around stable-diffusion.cpp / whisper.cpp / Kokoro, targeting Apple
+Silicon. **Mutually exclusive** image↔LLM loading (16 GB constraint).
 
-## Flux de streaming (la pièce maîtresse)
+## Streaming flow (the centerpiece)
 
 ```
 Browser ──POST /api/mission──▶ server.py
@@ -63,16 +63,16 @@ Browser ──POST /api/mission──▶ server.py
                                  │   dept start/done (×N) ───▶ events "dept"
                                  │   synth (×iter) ──────────▶ events "synth"
                                  │   inspect verdict ────────▶ events "inspect"
-                                 ▼ à la fin
+                                 ▼ at the end
                               serialize_dossier + store.save
                                  └─▶ event "done" {mission_id, path}
-Browser ◀──SSE (text/event-stream)──┘  (timeline live, puis rendu dossier+livrable)
+Browser ◀──SSE (text/event-stream)──┘  (live timeline, then dossier+deliverable render)
 ```
 
-## Pourquoi ce découpage
+## Why this split
 
-- **Coût** : raisonnement sur abonnement (gratuit à la marge), local seulement pour le
-  multimodal → tient sur 16 Go.
-- **Sécurité** : un seul point d'entrée réseau, en `127.0.0.1`, durci dès le départ.
-- **Réemploi** : on ne réécrit pas agency-kit ; on l'enveloppe.
-- **Licence** : tout MIT/Apache (voir `docs/LICENSES.md`).
+- **Cost**: reasoning on the subscription (free at the margin), local only for multimodal
+  → fits in 16 GB.
+- **Security**: a single network entry point, on `127.0.0.1`, hardened from the start.
+- **Reuse**: we don't rewrite agency-kit; we wrap it.
+- **License**: everything MIT/Apache (see `docs/LICENSES.md`).

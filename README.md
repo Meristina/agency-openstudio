@@ -1,47 +1,47 @@
 # Agency Studio
 
-> **Statut : scaffold (docs + roadmap).** Aucun code applicatif pour l'instant — ce
-> repo contient la vision, l'architecture et le plan de construction. L'implémentation
-> suivra par vagues (voir [`ROADMAP.md`](./ROADMAP.md)).
+> **Status: scaffold (docs + roadmap).** No application code yet — this repo holds the
+> vision, architecture, and build plan. Implementation will land in waves (see
+> [`ROADMAP.md`](./ROADMAP.md)).
 
-**Agency Studio** est un **studio agentique local-first** : il empile
-[agency-kit](https://github.com/Meristina/agency-kit) (le *cerveau* qui orchestre
-9 départements — route → execute → synthesize → inspect avec veto) au-dessus d'une
-couche **multimodale locale** (génération d'images, voix STT/TTS, RAG sur tes documents).
+**Agency Studio** is a **local-first agentic studio**. It stacks
+[agency-kit](https://github.com/Meristina/agency-kit) (the *brain* that orchestrates
+9 departments — route → execute → synthesize → inspect with veto) on top of a **local
+multimodal layer** (image generation, speech-to-text, text-to-speech, document RAG).
 
-L'idée n'est pas de refaire un énième runner de modèle (LM Studio, Jan, GPT4All,
-Uncensored-Local-Studio le font déjà), mais de poser **l'étage d'orchestration**
-au-dessus d'eux, avec une GUI propre et une posture de sécurité saine.
+The point is not to build yet another model runner (LM Studio, Jan, GPT4All,
+Uncensored-Local-Studio already do that) — it's to add the **orchestration layer** on top,
+with a clean GUI and a sound security posture.
 
-## Principe directeur
+## Guiding principle
 
-- 🧠 **Cerveau = Opus via l'abonnement Claude CLI** (engine `claude-code` déjà câblé
-  côté agency-kit) → raisonnement de qualité, **coût marginal nul**.
-- 🦾 **Bras = modèles locaux** (Stable Diffusion, Whisper, Kokoro, embeddings RAG),
-  ciblés **Apple Silicon / Metal**, chargés **mutuellement exclusifs** (contrainte 16 Go).
-- 🖥️ **Écran = GUI React/Vite** servie en local, timeline de mission en direct (SSE).
-- 🔒 **Sécurité d'abord** : bind `127.0.0.1`, pas de CORS `*`, garde anti path-traversal
-  (l'inverse des défauts relevés dans les runners existants).
-- ⚖️ **Licence MIT-compatible** : on réemploie les patterns MIT/Apache, on **écarte
-  l'AGPL** (Jan, chunkr) pour ne pas contaminer le projet.
+- 🧠 **Brain = Opus via the Claude CLI subscription** (the `claude-code` engine already
+  wired into agency-kit) → strong reasoning at **zero marginal cost**.
+- 🦾 **Hands = local models** (Stable Diffusion, Whisper, Kokoro, RAG embeddings),
+  targeting **Apple Silicon / Metal**, loaded **mutually exclusively** (16 GB constraint).
+- 🖥️ **Screen = a React/Vite GUI** served locally, with a live mission timeline (SSE).
+- 🔒 **Security first**: bind `127.0.0.1`, no `*` CORS, anti path-traversal guard
+  (the inverse of the flaws found in existing runners).
+- ⚖️ **MIT-compatible licensing**: reuse MIT/Apache patterns, **rule out AGPL**
+  (Jan, chunkr) so nothing contaminates the project.
 
-## Ce qui marchera (une fois implémenté)
+## What it will do (once implemented)
 
 ```
-agency studio        # lance le serveur local + ouvre la Mission Console
-→ tape un goal       # "lance une campagne pour X au Maroc"
-→ regarde les départements tourner en direct (route → dépts → synth → inspect)
-→ récupère le dossier + le livrable, avec images générées et résumé lu en voix
+agency studio        # launches the local server + opens the Mission Console
+→ type a goal        # "launch a campaign for X in Morocco"
+→ watch departments run live (route → depts → synth → inspect)
+→ get the dossier + deliverable, with generated images and a spoken summary
 ```
 
 ## Documentation
 
-- 🗺️ [`ROADMAP.md`](./ROADMAP.md) — le plan de construction complet (vagues 0-6).
-- 🏛️ [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — architecture cible + flux de streaming.
-- 🔐 [`docs/SECURITY.md`](./docs/SECURITY.md) — garde de sécurité non négociable.
-- 📜 [`docs/LICENSES.md`](./docs/LICENSES.md) — inventaire des composants tiers et licences.
-- 🤖 [`CLAUDE.md`](./CLAUDE.md) — guidance pour Claude Code dans ce repo.
+- 🗺️ [`ROADMAP.md`](./ROADMAP.md) — the full build plan (waves 0-6).
+- 🏛️ [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — target architecture + streaming flow.
+- 🔐 [`docs/SECURITY.md`](./docs/SECURITY.md) — the non-negotiable security guard.
+- 📜 [`docs/LICENSES.md`](./docs/LICENSES.md) — third-party component inventory and licenses.
+- 🤖 [`CLAUDE.md`](./CLAUDE.md) — guidance for Claude Code in this repo.
 
-## Licence
+## License
 
-MIT — voir [`LICENSE`](./LICENSE).
+MIT — see [`LICENSE`](./LICENSE).

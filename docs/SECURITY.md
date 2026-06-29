@@ -1,40 +1,40 @@
-# Sécurité — Agency Studio
+# Security — Agency Studio
 
-Posture non négociable, appliquée **dès la Vague 0**. Elle prend explicitement le
-contre-pied des défauts relevés dans les runners locaux existants (notamment
-Uncensored-Local-Studio : serveur exposé sur `0.0.0.0` + path traversal).
+Non-negotiable posture, applied **from Wave 0**. It deliberately takes the opposite stance
+of the flaws found in existing local runners (notably Uncensored-Local-Studio: server
+exposed on `0.0.0.0` + path traversal).
 
-## Règles dures
+## Hard rules
 
-| # | Règle | Pourquoi |
+| # | Rule | Why |
 |---|---|---|
-| 1 | **Bind `127.0.0.1` uniquement** (jamais `0.0.0.0`). | Évite l'exposition silencieuse au réseau local. Un studio « privacy » ne doit pas être pilotable depuis une autre machine du LAN. |
-| 2 | **Pas de `Access-Control-Allow-Origin: *`.** Origine locale uniquement. | Empêche un site web tiers d'appeler l'API locale depuis le navigateur. |
-| 3 | **`path_inside()` sur 100 % du service de fichiers statiques.** | Bloque le path traversal (`GET /../../etc/passwd`). Résoudre le chemin et vérifier qu'il reste sous `dist/`. |
-| 4 | **Valider schéma/host des URLs de download.** | Empêche le téléchargement d'URLs arbitraires (SSRF / contenu non maîtrisé). |
-| 5 | **Vérifier les checksums des binaires/modèles téléchargés.** | Garde de chaîne d'approvisionnement avant d'exécuter un binaire local. |
-| 6 | **Aucune télémétrie, aucune clé en clair.** | Cohérent avec l'ethos local-first. |
+| 1 | **Bind `127.0.0.1` only** (never `0.0.0.0`). | Avoids silent LAN exposure. A "privacy" studio must not be drivable from another machine on the network. |
+| 2 | **No `Access-Control-Allow-Origin: *`.** Local origin only. | Prevents a third-party website from calling the local API from the browser. |
+| 3 | **`path_inside()` on 100% of static file serving.** | Blocks path traversal (`GET /../../etc/passwd`). Resolve the path and verify it stays under `dist/`. |
+| 4 | **Validate scheme/host of download URLs.** | Prevents downloading arbitrary URLs (SSRF / untrusted content). |
+| 5 | **Verify checksums of downloaded binaries/models.** | Supply-chain guard before executing a local binary. |
+| 6 | **No telemetry, no secrets in plaintext.** | Consistent with the local-first ethos. |
 
-## Test de non-régression (dès Vague 0)
+## Regression test (from Wave 0)
 
 ```bash
-# Path traversal bloqué
-curl --path-as-is http://127.0.0.1:<port>/../../../../etc/passwd   # → 404 attendu
+# Path traversal blocked
+curl --path-as-is http://127.0.0.1:<port>/../../../../etc/passwd   # → expect 404
 
-# Le serveur n'écoute QUE sur la loopback
+# The server listens ONLY on loopback
 lsof -iTCP -sTCP:LISTEN | grep <port>                              # → 127.0.0.1 only
 ```
 
-Ces deux vérifications font partie de la définition de « done » de la Vague 0 et doivent
-être couvertes par `tests/test_server.py`.
+Both checks are part of Wave 0's definition of done and must be covered by
+`tests/test_server.py`.
 
-## Implémentation de `path_inside()` (référence)
+## `path_inside()` reference implementation
 
 ```python
 from pathlib import Path
 
 def path_inside(child: str | Path, parent: str | Path) -> bool:
-    """True si `child` résolu reste sous `parent` (anti path-traversal)."""
+    """True if resolved `child` stays under `parent` (anti path-traversal)."""
     parent = Path(parent).resolve()
     try:
         Path(child).resolve().relative_to(parent)

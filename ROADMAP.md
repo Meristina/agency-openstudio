@@ -1,128 +1,131 @@
 # Roadmap — Agency Studio
 
-> **Statut : ROADMAP (plan-only).** Aucune implémentation dans ce repo pour l'instant.
-> Vagues **0-1** : constructibles/testables en session Linux (le cœur). Vagues **2-6** :
-> ciblent Apple Silicon (Metal) + téléchargements de modèles → exécution différée sur le Mac.
+> **Status: ROADMAP (plan-only).** No implementation in this repo yet. Waves **0-1**:
+> buildable/testable in a Linux session (the core). Waves **2-6**: target Apple Silicon
+> (Metal) + model downloads → deferred to the Mac.
 
-## Contexte
+## Context
 
-Studio agentique local-first : empiler agency-kit (le *cerveau* : route → execute →
-synthesize → inspect avec veto) au-dessus d'une couche multimodale locale (image / voix /
-RAG) inspirée des runners de modèle (Uncensored-Local-Studio, GPT4All) — sans hériter de
-l'AGPL de Jan, sans dépendre d'une app fermée (LM Studio), coût marginal du raisonnement
-**nul** via l'abonnement Claude CLI.
+Local-first agentic studio: stack agency-kit (the *brain*: route → execute → synthesize →
+inspect with veto) on top of a local multimodal layer (image / voice / RAG) inspired by
+model runners (Uncensored-Local-Studio, GPT4All) — without inheriting Jan's AGPL, without
+depending on a closed app (LM Studio), and with **zero marginal reasoning cost** via the
+Claude CLI subscription.
 
-Cadrage matériel : **Mac Apple Silicon 16 Go**. Le LLM lourd reste sur **Opus via le CLI
-`claude`** (engine `claude-code`) ; le local ne porte **que** le multimodal + RAG,
-chargés **mutuellement exclusifs** (jamais image + LLM en mémoire ensemble).
+Hardware framing: **Apple Silicon Mac, 16 GB**. The heavy LLM stays on **Opus via the
+`claude` CLI** (`claude-code` engine); the local layer carries **only** multimodal + RAG,
+loaded **mutually exclusively** (image and LLM never co-resident in memory).
 
-### Corrections ancrées dans le vrai code d'agency-kit
+### Corrections grounded in agency-kit's actual code
 
-| Hypothèse initiale | Réalité vérifiée | Conséquence |
+| Initial assumption | Verified reality | Consequence |
 |---|---|---|
-| « SSE en parsant les `print(...)` » | Progression = `print(..., flush=True)` dans `run_mission_cli` (cli_engine.py:251-275) — parser stdout serait fragile | **Hook propre** : param `on_event` optionnel ; prints mappent 1:1. Défaut `None` ⇒ comportement actuel préservé. |
-| Réemploi de `serve.cjs`, scripts, composants React d'Uncensored | **N'existent pas** dans agency-kit (pas de `app/`, pas de `package.json`) | Portages **externes** = code neuf durci. |
-| `_call` gère du HTTP | `_call` est **subprocess/argv-only** | Engine `local` HTTP = chemin de dispatch séparé (vague 2+), désactivé sur 16 Go. |
-| Serveur via Flask | agency-kit = **zéro dépendance runtime** | Serveur en **`http.server` stdlib** (ThreadingHTTPServer), SSE natif. |
+| "SSE by parsing the `print(...)`" | Progress = `print(..., flush=True)` in `run_mission_cli` (cli_engine.py:251-275) — parsing stdout would be fragile | **Clean hook**: optional `on_event` param; prints map 1:1. Default `None` ⇒ current behavior preserved. |
+| Reusing `serve.cjs`, scripts, Uncensored's React components | **Do not exist** in agency-kit (no `app/`, no `package.json`) | **External** ports = new hardened code. |
+| `_call` handles HTTP | `_call` is **subprocess/argv-only** | `local` HTTP engine = separate dispatch path (wave 2+), disabled on 16 GB. |
+| Server via Flask | agency-kit = **zero runtime dependencies** | Server in **`http.server` stdlib** (ThreadingHTTPServer), native SSE. |
 
-**Non négociable** : la boucle veto de `run_mission_cli` (MAX_ITERS=3, `_RETRY_VERDICTS`)
-et `_short_verdict` ne changent **pas** de logique (Art. IX). Le hook `on_event` est
-purement observationnel.
+**Non-negotiable**: the veto loop in `run_mission_cli` (MAX_ITERS=3, `_RETRY_VERDICTS`)
+and `_short_verdict` do **not** change behavior (Constitution Art. IX). The `on_event`
+hook is purely observational.
 
-## Architecture (résumé)
+## Architecture (summary)
 
-Voir [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) pour le schéma complet et le flux SSE.
+See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the full diagram and SSE flow.
 
 ```
-GUI React/Vite (app/studio, 127.0.0.1)
+React/Vite GUI (app/studio, 127.0.0.1)
    └─HTTP/SSE→ agency_cli/server.py (http.server stdlib, bind 127.0.0.1)
-                  └─→ NOYAU agency-kit : run_mission_cli(goal, engine, on_event=…)
-                         ├─ outils départements : web search · image/TTS livrable · RAG · MCP
-                         └─ inférence locale (Metal, mut. exclusif) : SD · Whisper · Kokoro · embeddings
+                  └─→ agency-kit CORE: run_mission_cli(goal, engine, on_event=…)
+                         ├─ department tools: web search · image/TTS deliverable · RAG · MCP
+                         └─ local inference (Metal, mutually exclusive): SD · Whisper · Kokoro · embeddings
 ```
 
 ---
 
-## Vagues de construction
+## Build waves
 
-### Vague 0 — Socle serveur + hook d'événements + sécurité *(Linux-OK)*
-1. **Refactor minimal** (`cli_engine.py`) : param `on_event: Callable | None = None` sur
-   `run_mission_cli`. À chaque jalon (un `print` aujourd'hui), appeler aussi `on_event` :
+### Wave 0 — Server foundation + event hook + security *(Linux-OK)*
+1. **Minimal refactor** (`cli_engine.py`): add `on_event: Callable | None = None` to
+   `run_mission_cli`. At each milestone (currently a `print`), also call `on_event`:
    - 251/253 → `{"phase":"route","status":"done","route":[...]}`
    - 257/259 → `{"phase":"dept","dept":dept,"status":"start"|"done"}`
    - 268/270 → `{"phase":"synth","iteration":n,"status":...}`
    - 272/275 → `{"phase":"inspect","iteration":n,"verdict":token}`
-   **Ne pas toucher** la boucle veto ni `_short_verdict`. Défaut `None` ⇒ tests verts.
-   Threader `on_event` dans `runner_bridge.run`.
-2. **`agency_cli/server.py`** : `ThreadingHTTPServer` + `BaseHTTPRequestHandler` (stdlib).
+   **Do not touch** the veto loop or `_short_verdict`. Default `None` ⇒ tests stay green.
+   Thread `on_event` through `runner_bridge.run`.
+2. **`agency_cli/server.py`**: `ThreadingHTTPServer` + `BaseHTTPRequestHandler` (stdlib).
    **bind `127.0.0.1`**. `POST /api/mission` (SSE) · `GET /api/missions` · `/api/mission/{id}`.
-   Static handler GUI avec garde `path_inside()`. CORS local uniquement (pas de `*`).
-3. **Sous-commande `agency studio`** (`cli.py`) : calquer `_cmd_tui` + parser `tui`.
+   Static GUI handler with a `path_inside()` guard. CORS local-only (no `*`).
+3. **`agency studio` subcommand** (`cli.py`): mirror `_cmd_tui` + the `tui` parser.
    `--port` (8765), `--host` (`127.0.0.1`). `ImportError` → `pip install -e ".[studio]"`.
-4. **`pyproject.toml`** : extra `studio`. Serveur = stdlib (rien). Extra réserve les deps des vagues 4+.
-5. **`tests/test_server.py`** : mirror de `test_engine.py` (monkeypatch `_call` + `shutil.which`),
-   asserte le flux SSE (route/dept/synth/inspect/done) + écriture `missions/<id>/`.
-   Sécurité : `GET /../../etc/passwd` → 404.
+4. **`pyproject.toml`**: `studio` extra. Server = stdlib (nothing). The extra reserves the
+   deps for waves 4+.
+5. **`tests/test_server.py`**: mirror of `test_engine.py` (monkeypatch `_call` +
+   `shutil.which`), assert the SSE stream (route/dept/synth/inspect/done) + that
+   `missions/<id>/` is written. Security: `GET /../../etc/passwd` → 404.
 
-### Vague 1 — GUI Mission Console (React + Vite) *(Linux-OK)*
-- **`app/studio/`** : Vite + React 19. Build → `app/studio/dist/`, servi par `server.py`.
-- **Mission Console** : goal → Run → SSE → timeline live (route, dept start/done, synth iter,
-  inspect+verdict) → rendu Markdown dossier + livrable. Historique via `GET /api/missions`.
-- **Export PDF** : `exporter.export_pdf(mission_id)` via `GET /api/mission/{id}/pdf` (extra `[pdf]`).
-- Composants riches (Sidebar, gallery, ModelManager) = **réécrits neufs**.
+### Wave 1 — Mission Console GUI (React + Vite) *(Linux-OK)*
+- **`app/studio/`**: Vite + React 19. Build → `app/studio/dist/`, served by `server.py`.
+- **Mission Console**: goal → Run → SSE → live timeline (route, dept start/done, synth
+  iter, inspect+verdict) → Markdown render of dossier + deliverable. History via
+  `GET /api/missions`.
+- **PDF export**: `exporter.export_pdf(mission_id)` via `GET /api/mission/{id}/pdf` (`[pdf]` extra).
+- Rich components (Sidebar, gallery, ModelManager) = **written fresh**.
 
-### Vague 2 — Inférence locale multimodale, durcie *(Mac/Metal — différé)*
-- **`agency_cli/engines/local_media.py`** : spawn SD/Whisper/Kokoro, **Metal only**,
-  chargement **mutuellement exclusif** image↔LLM.
-- Setup backends Mac arm64 ; modèles **git-ignored** ; valider URLs + **checksums**.
-- Endpoints `POST /api/image` · `/api/tts` · `/api/stt`. GUI : onglets Image/Voix.
-- Engine `local` HTTP optionnel (désactivé 16 Go) : chemin de dispatch séparé.
+### Wave 2 — Local multimodal inference, hardened *(Mac/Metal — deferred)*
+- **`agency_cli/engines/local_media.py`**: spawn SD/Whisper/Kokoro, **Metal only**,
+  **mutually exclusive** image↔LLM loading.
+- Mac arm64 backend setup; models **git-ignored**; validate URLs + **checksums**.
+- Endpoints `POST /api/image` · `/api/tts` · `/api/stt`. GUI: Image/Voice tabs.
+- Optional `local` HTTP engine (disabled on 16 GB): separate dispatch path.
 
-### Vague 3 — Multimodal comme *livrable de département* *(Mac/Metal — différé)*
-- Hook dans `_dept_prompt` (cli_engine.py:182) + post-traitement détectant une demande
-  d'asset (image campagne, narration TTS) → `local_media`. Assets dans `missions/<id>/assets/`.
+### Wave 3 — Multimodal as a *department deliverable* *(Mac/Metal — deferred)*
+- Hook in `_dept_prompt` (cli_engine.py:182) + post-processing that detects an asset
+  request (campaign image, TTS narration) → `local_media`. Assets in `missions/<id>/assets/`.
 
-### Vague 4 — RAG / LocalDocs *(téléchargements modèles — différé)*
-- **Ingestion via `microsoft/markitdown`** (MIT) → Markdown. Dans l'extra `[studio]`.
-- **`agency_cli/rag.py`** : markitdown → chunking → embeddings (nomic-embed via llama.cpp)
-  → **store vectoriel SQLite**. Endpoint `/api/docs` + injection des chunks dans `_dept_prompt`.
-- ❌ Pas `chunkr` (AGPL + Rust/Docker trop lourd).
+### Wave 4 — RAG / LocalDocs *(model downloads — deferred)*
+- **Ingestion via `microsoft/markitdown`** (MIT) → Markdown. In the `[studio]` extra.
+- **`agency_cli/rag.py`**: markitdown → chunking → embeddings (nomic-embed via llama.cpp)
+  → **SQLite vector store**. Endpoint `/api/docs` + inject relevant chunks into `_dept_prompt`.
+- ❌ Not `chunkr` (AGPL + Rust/Docker too heavy).
 
-### Vague 5 — Web search local + MCP *(différé)*
-- **`agency_cli/websearch.py`** (DuckDuckGo, code neuf) : sourcing pour le chemin local
-  optionnel (le chemin Claude a déjà WebSearch). Satisfait Art. I hors-ligne.
-- **`agency_cli/mcp_client.py`** : client MCP, MIT, inspiré de Jan **sans réutiliser son code**.
+### Wave 5 — Local web search + MCP *(deferred)*
+- **`agency_cli/websearch.py`** (DuckDuckGo, fresh code): sourcing for the optional local
+  path (the Claude path already has WebSearch). Satisfies Art. I offline.
+- **`agency_cli/mcp_client.py`**: MCP client, MIT, inspired by Jan **without reusing its code**.
 
-### Vague 6 — Extensions avancées (plug-ins derrière flags, MIT/Apache) *(différé)*
-- `hyper-extract` (Apache-2.0) → `agency_cli/knowledge.py` : graphes de connaissances sur docs + historique.
-- `agency-agents` (MIT) : import **curé** de personas comme doctrine additionnelle (respecter `DEPT_NAMES` + garde de drift payload).
-- `PixelRAG` (Apache-2.0) : RAG visuel **cloud/opt-in** (Qwen3-VL via API).
-- `seedance-2.0` (MIT) : modalité **vidéo cloud** comme tool de département.
-- 📚 `awesome-llm-apps` : catalogue d'inspiration, pas une dépendance.
+### Wave 6 — Advanced extensions (plug-ins behind flags, MIT/Apache) *(deferred)*
+- `hyper-extract` (Apache-2.0) → `agency_cli/knowledge.py`: knowledge graphs over docs + history.
+- `agency-agents` (MIT): **curated** import of personas as additional doctrine (respect
+  `DEPT_NAMES` + the payload drift guard).
+- `PixelRAG` (Apache-2.0): visual RAG **cloud/opt-in** (Qwen3-VL via API).
+- `seedance-2.0` (MIT): **cloud video** modality as a department tool.
+- 📚 `awesome-llm-apps`: inspiration catalog, not a dependency.
 
 ---
 
-## Fichiers (lors de l'implémentation)
+## Files (during implementation)
 
-**À créer** : `agency_cli/server.py` · `app/studio/` · `tests/test_server.py` · (différés)
+**To create**: `agency_cli/server.py` · `app/studio/` · `tests/test_server.py` · (deferred)
 `engines/local_media.py` · `rag.py` · `websearch.py` · `mcp_client.py` · `knowledge.py`.
 
-**À modifier dans agency-kit** : `cli_engine.py` (param `on_event`) · `runner_bridge.py`
-(threader `on_event`) · `cli.py` (`_cmd_studio` + parser) · `pyproject.toml` (extra `[studio]`).
+**To modify in agency-kit**: `cli_engine.py` (`on_event` param) · `runner_bridge.py`
+(thread `on_event`) · `cli.py` (`_cmd_studio` + parser) · `pyproject.toml` (`[studio]` extra).
 
-**À réemployer tel quel** : `runner_bridge.serialize_dossier`/`run`/`MissionResult` ·
+**To reuse as-is**: `runner_bridge.serialize_dossier`/`run`/`MissionResult` ·
 `store.{list_missions,load,save,new_mission_id}` · `departments.{DEPT_NAMES,dependency_layers}` ·
 `exporter.export_pdf`.
 
-## Vérification
+## Verification
 
-**Vagues 0-1 (testable, Linux) :**
-1. `pip install -e ".[studio]"` puis `agency check`.
-2. `pytest tests/ -q` reste **vert** (défaut `on_event=None`) + `tests/test_server.py`.
-3. `agency studio` → goal → timeline SSE en direct → `missions/<id>/{dossier,deliverable}.md`.
-4. Sécurité : `curl --path-as-is http://127.0.0.1:<port>/../../../../etc/passwd` → 404 ;
+**Waves 0-1 (testable now, Linux):**
+1. `pip install -e ".[studio]"` then `agency check`.
+2. `pytest tests/ -q` stays **green** (default `on_event=None`) + `tests/test_server.py`.
+3. `agency studio` → goal → live SSE timeline → `missions/<id>/{dossier,deliverable}.md`.
+4. Security: `curl --path-as-is http://127.0.0.1:<port>/../../../../etc/passwd` → 404 ;
    `lsof -iTCP -sTCP:LISTEN | grep <port>` → **127.0.0.1 only**.
 
-**Vagues 2+ (différé, Mac) :**
-5. `POST /api/image|/api/tts|/api/stt` produisent des assets ; image et LLM jamais chargés ensemble.
-6. RAG : ingérer un doc, lancer une mission, extraits **sourcés** du doc dans un livrable.
+**Waves 2+ (deferred, Mac):**
+5. `POST /api/image|/api/tts|/api/stt` produce assets; image and LLM never loaded together.
+6. RAG: ingest a doc, run a mission, **sourced** excerpts from the doc appear in a deliverable.
