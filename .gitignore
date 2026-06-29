@@ -52,5 +52,6 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Guard-gate runtime marker (per-checkout review state)
+# Guard/healthcheck gate runtime markers (per-checkout review state)
 .claude/.guard-state
+.claude/.healthcheck-state

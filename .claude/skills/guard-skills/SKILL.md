@@ -15,6 +15,12 @@ This skill is invoked automatically by the **Stop-hook gate**
 (`.claude/hooks/guard-gate.sh`) whenever there are uncommitted code or doc
 changes that have not yet passed the gate. It can also be run manually.
 
+It is **stage 1 of a two-stage Stop gate**. Once it passes (you record it with
+`guard-gate.sh --mark`), **stage 2** (`.claude/hooks/healthcheck-gate.sh`)
+chains in for the same change set and runs the **`agency-healthcheck`** skill —
+the agency-kit 9-department wiring audit — recorded with
+`healthcheck-gate.sh --mark`.
+
 ## The three guards it dispatches to
 
 | Changed file kind | Guard skill | Jurisdiction |
