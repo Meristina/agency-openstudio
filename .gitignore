@@ -1,0 +1,52 @@
+# ── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Node / frontend (app/studio) ──────────────────────────────────────────
+**/node_modules/
+app/studio/dist/
+*.local
+
+# ── Local AI models & runtimes (never commit weights/binaries) ────────────
+app/models/
+app/llm-models/
+app/speech-models/
+app/tts-models/
+app/openvino-models/
+app/backend/
+app/tts-runtime/
+app/tools/
+
+# ── Generated mission/run artifacts ───────────────────────────────────────
+app/outputs/
+app/cache/
+missions/
+chat-history/
+transcriptions/
+
+# ── Partial downloads & archives ──────────────────────────────────────────
+*.part
+*.tmp
+*.zip
+*.tar.gz
+*.tar.xz
+
+# ── Logs ──────────────────────────────────────────────────────────────────
+*.log
+
+# ── OS / editor ───────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

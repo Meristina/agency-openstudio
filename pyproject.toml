@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agency-studio"
+version = "0.0.0"
+description = "Local-first agentic studio: agency-kit orchestration + local multimodal layer (image / voice / RAG) with a web GUI."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["agentic", "local-llm", "multimodal", "stable-diffusion", "rag", "agency-kit"]
+
+# Core has ZERO runtime dependencies (stdlib http.server, mirrors agency-kit's ethos).
+dependencies = []
+
+[project.optional-dependencies]
+# Placeholders — populated when the matching waves are implemented (see ROADMAP.md).
+# Wave 4 (RAG): markitdown for document ingestion + an embeddings lib.
+studio = [
+    # "markitdown",      # Wave 4 — MIT, document → markdown ingestion
+    # "<embeddings-lib>", # Wave 4 — small local embedding model
+]
+# PDF export (reused from agency-kit's exporter).
+pdf = [
+    # "weasyprint",      # Wave 1 — PDF export of dossiers
+]
+dev = [
+    "pytest",
+]
+
+# NOTE: no [project.scripts] / [tool.setuptools] packages yet — this repo is
+# docs + config only (scaffold). They will be added with Wave 0 implementation.
