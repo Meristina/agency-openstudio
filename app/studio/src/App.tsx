@@ -23,6 +23,11 @@ function summarize(e: MissionEvent): string {
       return `done — ${e.verdict ?? "delivered"} (${e.mission_id ?? "?"})`;
     case "error":
       return `error — ${e.message}`;
+    default: {
+      // Exhaustiveness guard: a new MissionEvent.phase becomes a compile error here.
+      const _exhaustive: never = e;
+      return String(_exhaustive);
+    }
   }
 }
 

@@ -10,9 +10,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 multimodal layer** (image generation, speech-to-text, text-to-speech, document RAG) and
 a clean web GUI.
 
-> **Current status: SCAFFOLD.** This repo currently contains **only documentation and
-> config** — no application code yet. The build happens in waves; see `ROADMAP.md`.
-> Do **not** invent implementation that the roadmap defers. Start with Wave 0.
+> **Current status: Wave 0 implemented** (commit 954c070). The stdlib HTTP/SSE server
+> (`agency_studio/server.py`), the `agency-studio` CLI (`agency_studio/cli.py`), the React
+> Mission Console (`app/studio/`), `tests/`, and `pyproject.toml` exist. The build happens
+> in waves; see `ROADMAP.md`. Do **not** invent implementation that the roadmap defers
+> (Waves 2-6). Build on Wave 0; Wave 1 GUI polish continues next.
 
 ## Design principles (do not violate)
 

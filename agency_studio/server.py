@@ -87,7 +87,7 @@ def _is_loopback_origin(origin: str) -> bool:
         parsed = urlparse(origin)
     except ValueError:
         return False
-    return parsed.scheme in ("http", "https") and parsed.hostname in ("127.0.0.1", "localhost", "::1")
+    return parsed.scheme in ("http", "https") and parsed.hostname in _LOOPBACK_HOSTS
 
 
 class StudioHandler(BaseHTTPRequestHandler):
@@ -154,6 +154,18 @@ class StudioHandler(BaseHTTPRequestHandler):
 
     # ── API: run a mission, stream SSE ────────────────────────────────────────
     def _handle_run_mission(self) -> None:
+        request = self._parse_mission_request()
+        if request is None:
+            return  # a 400 was already sent
+        goal, engine = request
+        self._begin_sse()
+        result_box = self._stream_mission(goal, engine)
+        if result_box is not None:  # None ⇒ client disconnected mid-stream
+            self._send_terminal_frame(result_box)
+
+    def _parse_mission_request(self) -> "tuple[str, str] | None":
+        """Read + validate the JSON body. Returns ``(goal, engine)``, or ``None``
+        after sending the matching 400 (bad JSON / missing goal)."""
         try:
             length = int(self.headers.get("Content-Length", 0))
         except ValueError:
@@ -162,15 +174,19 @@ class StudioHandler(BaseHTTPRequestHandler):
         try:
             payload = json.loads(raw or b"{}")
         except json.JSONDecodeError:
-            return self._send_error_json(400, "body must be JSON")
+            self._send_error_json(400, "body must be JSON")
+            return None
         goal = (payload.get("goal") or "").strip()
         if not goal:
-            return self._send_error_json(400, "missing 'goal'")
-        engine = payload.get("engine") or "claude-code"
+            self._send_error_json(400, "missing 'goal'")
+            return None
+        return goal, payload.get("engine") or "claude-code"
 
-        # SSE handshake. The Mission Console consumes this via fetch() streaming
-        # (it is a POST, so EventSource can't be used and won't auto-reconnect);
-        # the stream therefore ends at connection close — hence Connection: close.
+    def _begin_sse(self) -> None:
+        """Emit the SSE response headers. The Mission Console consumes this via
+        fetch() streaming (it is a POST, so EventSource can't be used and won't
+        auto-reconnect); the stream ends at connection close — hence
+        ``Connection: close``."""
         self.close_connection = True
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -180,19 +196,24 @@ class StudioHandler(BaseHTTPRequestHandler):
         self._cors()
         self.end_headers()
 
+    def _stream_mission(self, goal: str, engine: str) -> "dict | None":
+        """Run the mission on a worker thread and stream its progress events.
+
+        Returns the result box (carrying ``result`` or ``error``) once the worker
+        signals completion, or ``None`` if the client disconnected mid-stream.
+        """
         events: "queue.Queue[dict | None]" = queue.Queue()
         result_box: dict = {}
 
         def _worker() -> None:
             from agency_cli import runner_bridge
             try:
-                result = runner_bridge.run(
+                result_box["result"] = runner_bridge.run(
                     goal,
                     project_root=self.server.project_root,  # type: ignore[attr-defined]
                     engine=engine,
                     on_event=events.put,
                 )
-                result_box["result"] = result
             except Exception as exc:  # surfaced to the client as an SSE error event
                 result_box["error"] = str(exc)
             finally:
@@ -206,22 +227,27 @@ class StudioHandler(BaseHTTPRequestHandler):
             if event is None:
                 break
             if not self._write_sse(event):
-                return  # client disconnected mid-stream
+                return None  # client disconnected mid-stream
+        return result_box
 
+    def _send_terminal_frame(self, result_box: dict) -> None:
+        """Emit the final SSE frame: an ``error`` frame, or a ``done`` frame with
+        the saved mission's id / verdict / path / residual risk."""
         if "error" in result_box:
             self._write_sse({"phase": "error", "message": result_box["error"]})
             return
         result = result_box.get("result")
-        if result is not None:
-            dossier = result.dossier
-            verdicts = dossier.get("verdicts") or []
-            self._write_sse({
-                "phase": "done",
-                "mission_id": dossier.get("mission_id"),
-                "verdict": verdicts[-1].get("verdict") if verdicts else None,
-                "path": str(result.path),
-                "residual_risk": dossier.get("residual_risk"),
-            })
+        if result is None:
+            return
+        dossier = result.dossier
+        verdicts = dossier.get("verdicts") or []
+        self._write_sse({
+            "phase": "done",
+            "mission_id": dossier.get("mission_id"),
+            "verdict": verdicts[-1].get("verdict") if verdicts else None,
+            "path": str(result.path),
+            "residual_risk": dossier.get("residual_risk"),
+        })
 
     def _write_sse(self, event: dict) -> bool:
         """Write one SSE ``data:`` frame. Returns False if the client has gone."""

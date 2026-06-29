@@ -1,8 +1,9 @@
 # Agency Studio
 
-> **Status: scaffold (docs + roadmap).** No application code yet — this repo holds the
-> vision, architecture, and build plan. Implementation will land in waves (see
-> [`ROADMAP.md`](./ROADMAP.md)).
+> **Status: Wave 0 implemented.** The stdlib HTTP/SSE server (`agency_studio/server.py`),
+> the `on_event` hook, and the React Mission Console (`app/studio/`) are built and tested.
+> Waves **2-6** (local multimodal on Metal, RAG, web search, MCP) remain deferred — see
+> [`ROADMAP.md`](./ROADMAP.md).
 
 **Agency Studio** is a **local-first agentic studio**. It stacks
 [agency-kit](https://github.com/Meristina/agency-kit) (the *brain* that orchestrates
@@ -28,7 +29,7 @@ with a clean GUI and a sound security posture.
 ## What it will do (once implemented)
 
 ```
-agency studio        # launches the local server + opens the Mission Console
+agency-studio        # launches the local server + opens the Mission Console
 → type a goal        # "launch a campaign for X in Morocco"
 → watch departments run live (route → depts → synth → inspect)
 → get the dossier + deliverable, with generated images and a spoken summary

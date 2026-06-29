@@ -1,6 +1,7 @@
 # Architecture — Agency Studio
 
-> Target state. None of these files exist yet (repo is a scaffold). See `ROADMAP.md`
+> Target state. Wave 0 (the stdlib server, `on_event` hook, and React Mission Console) is
+> implemented; the local-inference layer (Waves 2-6) is still deferred. See `ROADMAP.md`
 > for the build order.
 
 ## Stacked view
@@ -14,7 +15,7 @@ top. Three layers:
 │  + Image gallery · TTS player · Model Manager · Docs/RAG            │
 └───────────────────────────────┬────────────────────────────────────┘
                                 ▼  HTTP / SSE
-┌─ agency_cli/server.py — http.server stdlib, bind 127.0.0.1 ────────┐
+┌─ agency_studio/server.py — http.server stdlib, bind 127.0.0.1 ─────┐
 │  POST /api/mission (SSE) · GET /api/missions · /api/mission/{id}    │
 │  /api/image · /api/tts · /api/stt · /api/docs · /api/models         │
 └───────────────────────────────┬────────────────────────────────────┘
@@ -39,13 +40,13 @@ The core stays agency-kit, **logic unchanged**:
 - `runner_bridge.serialize_dossier` / `run` persist the mission; `store` lists/loads it.
 
 **The only extension**: an **observational** `on_event` callback on `run_mission_cli`, to
-stream progress to the GUI. The current `print(..., flush=True)` calls
-(cli_engine.py:251-275) map 1:1 to events. Default `None` ⇒ behavior identical to today.
-The veto loop and `_short_verdict` do **not** change.
+stream progress to the GUI. It is already implemented in agency-kit — `_emit(on_event, …)`
+fires at each milestone (route / dept / synth / inspect). Default `None` ⇒ behavior
+identical to today. The veto loop and `_short_verdict` do **not** change.
 
 ## Layer 2 — Server (new, stdlib)
 
-`agency_cli/server.py` = `ThreadingHTTPServer` (Python stdlib, **zero dependencies**).
+`agency_studio/server.py` = `ThreadingHTTPServer` (Python stdlib, **zero dependencies**).
 Strict **`127.0.0.1`** bind. Serves the API + the built GUI (`app/studio/dist/`) with a
 `path_inside()` guard on the static handler.
 
@@ -65,7 +66,7 @@ Browser ──POST /api/mission──▶ server.py
                                  │   inspect verdict ────────▶ events "inspect"
                                  ▼ at the end
                               serialize_dossier + store.save
-                                 └─▶ event "done" {mission_id, path}
+                                 └─▶ event "done" {mission_id, verdict, path, residual_risk}
 Browser ◀──SSE (text/event-stream)──┘  (live timeline, then dossier+deliverable render)
 ```
 

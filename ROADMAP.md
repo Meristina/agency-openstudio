@@ -1,8 +1,8 @@
 # Roadmap — Agency Studio
 
-> **Status: ROADMAP (plan-only).** No implementation in this repo yet. Waves **0-1**:
-> buildable/testable in a Linux session (the core). Waves **2-6**: target Apple Silicon
-> (Metal) + model downloads → deferred to the Mac.
+> **Status: Wave 0 implemented; Wave 1 GUI in progress.** The stdlib server, `on_event`
+> hook, and React Mission Console are built and tested in a Linux session (the core).
+> Waves **2-6**: target Apple Silicon (Metal) + model downloads → deferred to the Mac.
 
 ## Context
 
@@ -20,7 +20,7 @@ loaded **mutually exclusively** (image and LLM never co-resident in memory).
 
 | Initial assumption | Verified reality | Consequence |
 |---|---|---|
-| "SSE by parsing the `print(...)`" | Progress = `print(..., flush=True)` in `run_mission_cli` (cli_engine.py:251-275) — parsing stdout would be fragile | **Clean hook**: optional `on_event` param; prints map 1:1. Default `None` ⇒ current behavior preserved. |
+| "SSE by parsing the `print(...)`" | Parsing stdout would be fragile | **Clean hook (shipped)**: `run_mission_cli` takes an optional `on_event` param and fires `_emit(on_event, …)` at each milestone. Default `None` ⇒ current behavior preserved. |
 | Reusing `serve.cjs`, scripts, Uncensored's React components | **Do not exist** in agency-kit (no `app/`, no `package.json`) | **External** ports = new hardened code. |
 | `_call` handles HTTP | `_call` is **subprocess/argv-only** | `local` HTTP engine = separate dispatch path (wave 2+), disabled on 16 GB. |
 | Server via Flask | agency-kit = **zero runtime dependencies** | Server in **`http.server` stdlib** (ThreadingHTTPServer), native SSE. |
@@ -35,7 +35,7 @@ See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the full diagram and SS
 
 ```
 React/Vite GUI (app/studio, 127.0.0.1)
-   └─HTTP/SSE→ agency_cli/server.py (http.server stdlib, bind 127.0.0.1)
+   └─HTTP/SSE→ agency_studio/server.py (http.server stdlib, bind 127.0.0.1)
                   └─→ agency-kit CORE: run_mission_cli(goal, engine, on_event=…)
                          ├─ department tools: web search · image/TTS deliverable · RAG · MCP
                          └─ local inference (Metal, mutually exclusive): SD · Whisper · Kokoro · embeddings
@@ -45,20 +45,24 @@ React/Vite GUI (app/studio, 127.0.0.1)
 
 ## Build waves
 
-### Wave 0 — Server foundation + event hook + security *(Linux-OK)*
-1. **Minimal refactor** (`cli_engine.py`): add `on_event: Callable | None = None` to
-   `run_mission_cli`. At each milestone (currently a `print`), also call `on_event`:
-   - 251/253 → `{"phase":"route","status":"done","route":[...]}`
-   - 257/259 → `{"phase":"dept","dept":dept,"status":"start"|"done"}`
-   - 268/270 → `{"phase":"synth","iteration":n,"status":...}`
-   - 272/275 → `{"phase":"inspect","iteration":n,"verdict":token}`
-   **Do not touch** the veto loop or `_short_verdict`. Default `None` ⇒ tests stay green.
-   Thread `on_event` through `runner_bridge.run`.
-2. **`agency_cli/server.py`**: `ThreadingHTTPServer` + `BaseHTTPRequestHandler` (stdlib).
+### Wave 0 — Server foundation + event hook + security *(Linux-OK)* — **implemented**
+1. **Minimal refactor** (`cli_engine.py`, **shipped in agency-kit**): `run_mission_cli`
+   takes `on_event: Callable | None = None` and fires `_emit(on_event, …)` at each
+   milestone, mapping 1:1 to events:
+   - route done → `{"phase":"route","status":"done","route":[...]}`
+   - dept start/done → `{"phase":"dept","dept":dept,"status":"start"|"done"}`
+   - synth start/done → `{"phase":"synth","iteration":n,"status":...}`
+   - inspect → `{"phase":"inspect","iteration":n,"verdict":token}`
+   The veto loop and `_short_verdict` are **untouched**. Default `None` ⇒ tests stay green.
+   `on_event` is threaded through `runner_bridge.run`.
+2. **`agency_studio/server.py`**: `ThreadingHTTPServer` + `BaseHTTPRequestHandler` (stdlib).
    **bind `127.0.0.1`**. `POST /api/mission` (SSE) · `GET /api/missions` · `/api/mission/{id}`.
    Static GUI handler with a `path_inside()` guard. CORS local-only (no `*`).
-3. **`agency studio` subcommand** (`cli.py`): mirror `_cmd_tui` + the `tui` parser.
-   `--port` (8765), `--host` (`127.0.0.1`). `ImportError` → `pip install -e ".[studio]"`.
+3. **`agency-studio` entry point**: a standalone `agency_studio` package with its own
+   `build_parser()`/`main()` (`agency_studio/cli.py`), registered as the `agency-studio`
+   console script in `pyproject.toml`. It **imports** agency-kit (it does not modify
+   agency-kit's `cli.py`). `--port` (8765), `--host` (`127.0.0.1`). `ImportError` →
+   `pip install -e ".[studio]"`.
 4. **`pyproject.toml`**: `studio` extra. Server = stdlib (nothing). The extra reserves the
    deps for waves 4+.
 5. **`tests/test_server.py`**: mirror of `test_engine.py` (monkeypatch `_call` +
@@ -74,29 +78,29 @@ React/Vite GUI (app/studio, 127.0.0.1)
 - Rich components (Sidebar, gallery, ModelManager) = **written fresh**.
 
 ### Wave 2 — Local multimodal inference, hardened *(Mac/Metal — deferred)*
-- **`agency_cli/engines/local_media.py`**: spawn SD/Whisper/Kokoro, **Metal only**,
+- **`agency_studio/engines/local_media.py`**: spawn SD/Whisper/Kokoro, **Metal only**,
   **mutually exclusive** image↔LLM loading.
 - Mac arm64 backend setup; models **git-ignored**; validate URLs + **checksums**.
 - Endpoints `POST /api/image` · `/api/tts` · `/api/stt`. GUI: Image/Voice tabs.
 - Optional `local` HTTP engine (disabled on 16 GB): separate dispatch path.
 
 ### Wave 3 — Multimodal as a *department deliverable* *(Mac/Metal — deferred)*
-- Hook in `_dept_prompt` (cli_engine.py:182) + post-processing that detects an asset
+- Hook in agency-kit's `_dept_prompt` + post-processing that detects an asset
   request (campaign image, TTS narration) → `local_media`. Assets in `missions/<id>/assets/`.
 
 ### Wave 4 — RAG / LocalDocs *(model downloads — deferred)*
 - **Ingestion via `microsoft/markitdown`** (MIT) → Markdown. In the `[studio]` extra.
-- **`agency_cli/rag.py`**: markitdown → chunking → embeddings (nomic-embed via llama.cpp)
+- **`agency_studio/rag.py`**: markitdown → chunking → embeddings (nomic-embed via llama.cpp)
   → **SQLite vector store**. Endpoint `/api/docs` + inject relevant chunks into `_dept_prompt`.
 - ❌ Not `chunkr` (AGPL + Rust/Docker too heavy).
 
 ### Wave 5 — Local web search + MCP *(deferred)*
-- **`agency_cli/websearch.py`** (DuckDuckGo, fresh code): sourcing for the optional local
+- **`agency_studio/websearch.py`** (DuckDuckGo, fresh code): sourcing for the optional local
   path (the Claude path already has WebSearch). Satisfies Art. I offline.
-- **`agency_cli/mcp_client.py`**: MCP client, MIT, inspired by Jan **without reusing its code**.
+- **`agency_studio/mcp_client.py`**: MCP client, MIT, inspired by Jan **without reusing its code**.
 
 ### Wave 6 — Advanced extensions (plug-ins behind flags, MIT/Apache) *(deferred)*
-- `hyper-extract` (Apache-2.0) → `agency_cli/knowledge.py`: knowledge graphs over docs + history.
+- `hyper-extract` (Apache-2.0) → `agency_studio/knowledge.py`: knowledge graphs over docs + history.
 - `agency-agents` (MIT): **curated** import of personas as additional doctrine (respect
   `DEPT_NAMES` + the payload drift guard).
 - `PixelRAG` (Apache-2.0): visual RAG **cloud/opt-in** (Qwen3-VL via API).
@@ -107,11 +111,18 @@ React/Vite GUI (app/studio, 127.0.0.1)
 
 ## Files (during implementation)
 
-**To create**: `agency_cli/server.py` · `app/studio/` · `tests/test_server.py` · (deferred)
-`engines/local_media.py` · `rag.py` · `websearch.py` · `mcp_client.py` · `knowledge.py`.
+**Built (Wave 0)**: `agency_studio/server.py` · `agency_studio/cli.py` · `app/studio/` ·
+`tests/` · `pyproject.toml` (`agency-studio` script + `[studio]` extra).
+**Deferred** (will live under `agency_studio/`): `engines/local_media.py` · `rag.py` ·
+`websearch.py` · `mcp_client.py` · `knowledge.py`.
 
-**To modify in agency-kit**: `cli_engine.py` (`on_event` param) · `runner_bridge.py`
-(thread `on_event`) · `cli.py` (`_cmd_studio` + parser) · `pyproject.toml` (`[studio]` extra).
+**As-built launcher**: `agency_studio` is a **standalone package** with its own
+`build_parser()`/`main()` and a separate `agency-studio` console script. It **imports**
+agency-kit (`cli_engine`/`runner_bridge`/`store`/…); agency-kit's `cli.py` is **not**
+modified — there is no `_cmd_studio` in agency-kit.
+
+**Reused from agency-kit (already shipped)**: `cli_engine.run_mission_cli` (`on_event`
+param via `_emit`) · `runner_bridge.run` (threads `on_event`).
 
 **To reuse as-is**: `runner_bridge.serialize_dossier`/`run`/`MissionResult` ·
 `store.{list_missions,load,save,new_mission_id}` · `departments.{DEPT_NAMES,dependency_layers}` ·
@@ -122,7 +133,7 @@ React/Vite GUI (app/studio, 127.0.0.1)
 **Waves 0-1 (testable now, Linux):**
 1. `pip install -e ".[studio]"` then `agency check`.
 2. `pytest tests/ -q` stays **green** (default `on_event=None`) + `tests/test_server.py`.
-3. `agency studio` → goal → live SSE timeline → `missions/<id>/{dossier,deliverable}.md`.
+3. `agency-studio` → goal → live SSE timeline → `missions/<id>/{dossier,deliverable}.md`.
 4. Security: `curl --path-as-is http://127.0.0.1:<port>/../../../../etc/passwd` → 404 ;
    `lsof -iTCP -sTCP:LISTEN | grep <port>` → **127.0.0.1 only**.
 
