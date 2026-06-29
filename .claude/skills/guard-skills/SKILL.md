@@ -15,11 +15,17 @@ This skill is invoked automatically by the **Stop-hook gate**
 (`.claude/hooks/guard-gate.sh`) whenever there are uncommitted code or doc
 changes that have not yet passed the gate. It can also be run manually.
 
-It is **stage 1 of a two-stage Stop gate**. Once it passes (you record it with
+It is **stage 1 of a three-stage Stop gate**. Once it passes (you record it with
 `guard-gate.sh --mark`), **stage 2** (`.claude/hooks/healthcheck-gate.sh`)
 chains in for the same change set and runs the **`agency-healthcheck`** skill —
 the agency-kit 9-department wiring audit — recorded with
 `healthcheck-gate.sh --mark`.
+
+**Stage 3** (`.claude/hooks/ultra-gate.sh`) is the expensive full
+**`/ultrahealthcheck`** multi-agent audit. It is OFF by default and only fires
+when warranted — **release mode** (`ultra-gate.sh --arm`) or a **large batch**
+(> `AGENCY_ULTRA_FILE_THRESHOLD`, default 8, guardable files) — so routine
+bricks are never slowed. Recorded with `ultra-gate.sh --mark`.
 
 ## The three guards it dispatches to
 
