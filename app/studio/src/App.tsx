@@ -3,9 +3,11 @@
 // clicking one loads its dossier into the same detail pane.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { getMission, listMissions, runMission } from "./api";
 import Timeline from "./components/Timeline";
 import MissionDetail from "./components/MissionDetail";
+import { summaryVerdictClass } from "./types";
 import type { Dossier, MissionEvent, MissionSummary } from "./types";
 
 export default function App() {
@@ -17,7 +19,18 @@ export default function App() {
   const [detail, setDetail] = useState<Dossier | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Live "working" feedback: tick an elapsed-seconds counter for the duration of
+  // a run. The final value persists after completion (until the next run starts).
+  useEffect(() => {
+    if (!running) return;
+    const start = Date.now();
+    setElapsed(0);
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [running]);
 
   const refreshMissions = useCallback(async () => {
     try {
@@ -77,6 +90,17 @@ export default function App() {
 
   const onCancel = useCallback(() => abortRef.current?.abort(), []);
 
+  // ⌘/Ctrl+Enter submits from the goal box (a plain Enter stays a newline).
+  const onGoalKeyDown = useCallback(
+    (ev: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
+        ev.preventDefault();
+        void onRun();
+      }
+    },
+    [onRun],
+  );
+
   return (
     <div className="app">
       <header className="topbar">
@@ -92,6 +116,7 @@ export default function App() {
             placeholder="Describe the mission goal…"
             value={goal}
             onChange={(ev) => setGoal(ev.target.value)}
+            onKeyDown={onGoalKeyDown}
             disabled={running}
             rows={3}
           />
@@ -104,10 +129,19 @@ export default function App() {
                 Cancel
               </button>
             )}
+            <span className="hint">⌘/Ctrl+Enter to run</span>
           </div>
           {error && <p className="error">{error}</p>}
 
-          <h3>Live timeline</h3>
+          <div className="row between">
+            <h3>Live timeline</h3>
+            {(running || elapsed > 0) && (
+              <span className={`elapsed ${running ? "live" : ""}`}>
+                {running && <span className="pulse" />}
+                {elapsed}s
+              </span>
+            )}
+          </div>
           <Timeline events={events} />
         </section>
 
@@ -126,7 +160,12 @@ export default function App() {
                   className={`mission-item ${selectedId === m.mission_id ? "selected" : ""}`}
                   onClick={() => void openMission(m.mission_id)}
                 >
-                  <code>{m.mission_id}</code>
+                  <span className="mission-item-head">
+                    <code>{m.mission_id}</code>
+                    {m.verdict && (
+                      <span className={`badge ${summaryVerdictClass(m.verdict)}`}>{m.verdict}</span>
+                    )}
+                  </span>
                   {m.goal ? <span className="goal-text">{m.goal}</span> : null}
                 </button>
               </li>
