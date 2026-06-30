@@ -10,11 +10,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 multimodal layer** (image generation, speech-to-text, text-to-speech, document RAG) and
 a clean web GUI.
 
-> **Current status: Wave 0 implemented** (commit 954c070). The stdlib HTTP/SSE server
+> **Current status: Waves 0-1 shipped (core).** The stdlib HTTP/SSE server
 > (`agency_studio/server.py`), the `agency-studio` CLI (`agency_studio/cli.py`), the React
-> Mission Console (`app/studio/`), `tests/`, and `pyproject.toml` exist. The build happens
-> in waves; see `ROADMAP.md`. Do **not** invent implementation that the roadmap defers
-> (Waves 2-6). Build on Wave 0; Wave 1 GUI polish continues next.
+> Mission Console (`app/studio/`: live SSE timeline, project-scoped history, PDF export,
+> full "Stop mission"), `tests/`, and `pyproject.toml` are built, reviewed, and tested.
+> The only Wave-1 components left — **gallery** and **ModelManager** — are deferred
+> *with* the multimodal layer they front (nothing to show until Wave 2-3). The build
+> happens in waves; see `ROADMAP.md`. Do **not** invent implementation that the roadmap
+> defers (Waves 2-6); those target the Apple Silicon Mac (Metal) + model downloads.
 
 ## Design principles (do not violate)
 
