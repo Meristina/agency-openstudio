@@ -8,9 +8,15 @@
 > `ModelManager`, integrity-checked `models` resolution, the `/api/image|/api/tts|/api/stt`
 > + `/api/models` endpoints with `/media/` asset serving, and the GUI's Image/Voice tabs +
 > gallery + warm-model chip (the former deferred gallery/ModelManager surface).
-> Waves **3-6** (multimodal-as-deliverable, RAG, web search, MCP, extensions) remain
-> deferred. Setup for Wave 2: Python 3.10+ venv + `[media]` extra + system `ffmpeg` (STT);
-> image defaults to a non-gated 8-bit FLUX.1-schnell mirror (no HF login).
+> **Wave 3 — multimodal as a department deliverable — is now IN PROGRESS** (offline
+> backend steps), tracked in `docs/WAVE3-PLAN.md` (which supersedes the naive sketch
+> below): steps 1-4 are landed and reviewed — `/api/tts` voice allowlist (step 1),
+> the `assets.py` marker parser (step 2), agency-kit's additive `asset_clause` engine
+> hook (step 3), and the best-effort `render_assets` bridge hook + `## Assets` (step 4);
+> steps 5-6 (server wiring + SSE `asset` phase, GUI gallery + PDF) remain. Waves **4-6**
+> (RAG, web search, MCP, extensions) remain deferred. Setup for Wave 2: Python 3.10+ venv
+> + `[media]` extra + system `ffmpeg` (STT); image defaults to a non-gated 8-bit
+> FLUX.1-schnell mirror (no HF login).
 
 ## Context
 
@@ -184,9 +190,17 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
 - **Deferred (by design)**: the optional `local` HTTP **LLM** engine stays off on 16 GB
   (image and a local LLM would be co-resident) — only multimodal runs locally here.
 
-### Wave 3 — Multimodal as a *department deliverable* *(Mac/Metal — deferred)*
-- Hook in agency-kit's `_dept_prompt` + post-processing that detects an asset
-  request (campaign image, TTS narration) → `local_media`. Assets in `missions/<id>/assets/`.
+### Wave 3 — Multimodal as a *department deliverable* *(Mac/Metal — IN PROGRESS)*
+> The naive sketch below is **superseded by `docs/WAVE3-PLAN.md`** (after an adversarial
+> reflection pass): assets live under `studio_assets/` (not `missions/<id>/assets/`, which
+> would orphan them from `/media`), and the clause is injected via a new additive
+> `asset_clause` param (studio-side-only prompt injection into `_dept_prompt` is impossible).
+- Original sketch: hook agency-kit's `_dept_prompt` + post-processing that detects an asset
+  request (campaign image, TTS narration) → `local_media`.
+- **Status (per WAVE3-PLAN build order):** ✅ step 1 `/api/tts` voice allowlist · ✅ step 2
+  `assets.py` marker parser · ✅ step 3 additive `asset_clause` engine hook · ✅ step 4
+  best-effort `render_assets` bridge hook + `## Assets` · ⏳ step 5 server wiring + SSE
+  `asset` phase + `should_cancel` in the render loop · ⏳ step 6 GUI gallery + PDF fix.
 
 ### Wave 4 — RAG / LocalDocs *(model downloads — deferred)*
 - **Ingestion via `microsoft/markitdown`** (MIT) → Markdown. In the `[studio]` extra.
