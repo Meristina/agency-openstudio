@@ -104,10 +104,11 @@ export async function runMission(
 
 // ── Wave 2 — local multimodal ────────────────────────────────────────────────
 
-/** Generate an image from a prompt (POST /api/image). Optional steps/seed/size. */
+/** Generate an image from a prompt (POST /api/image). Optional steps/seed/size and
+ * an optional image-model id; omitting `model` lets the server use its default. */
 export async function generateImage(
   prompt: string,
-  opts: { steps?: number; seed?: number; width?: number; height?: number } = {},
+  opts: { steps?: number; seed?: number; width?: number; height?: number; model?: string } = {},
 ): Promise<ImageResult> {
   const res = await fetch("/api/image", {
     method: "POST",

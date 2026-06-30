@@ -93,8 +93,88 @@ STT_HF_REPO = "mlx-community/whisper-large-v3-turbo"  # MLX-converted Whisper tu
 # par with full precision (4-bit deviates); Apache-2.0; verified loading + generating
 # on the target Mac in Wave 2.4.
 IMAGE_MODEL_REPO = "dhairyashil/FLUX.1-schnell-mflux-8bit"
-IMAGE_MODEL_BASE = "schnell"  # architecture mflux maps the repo onto (ModelConfig.schnell())
-IMAGE_MODEL_DISPLAY = "FLUX.1-schnell (8-bit)"  # shown in the GUI model panel
+
+
+# ── selectable image-model registry ──────────────────────────────────────────
+# The user picks one image model per generation. Each entry is a *backend-agnostic*
+# descriptor: the GUI-facing metadata (id/label/note/default) plus a ``backend``
+# discriminator and the parameters that backend needs to load the model. Today every
+# entry is ``backend="mflux"`` (the mflux module + class + ModelConfig factory +
+# optional model_path override + default step count), but the discriminator keeps the
+# registry pluggable: a future non-mflux entry (e.g. a "boogu" backend) just sets a
+# different ``backend`` and carries its own loader params — ModelManager dispatches on
+# the discriminator and never has to be rewritten. All three models below are
+# mflux-native, non-gated, Apache-2.0, and 16 GB-friendly; verified live on the Mac.
+
+@dataclass(frozen=True)
+class ImageModel:
+    """One selectable image model. ``backend`` discriminates the loader family; the
+    mflux fields (``module``/``class_name``/``config_factory``/``model_path``) are read
+    only by the mflux loader. A non-mflux backend would leave those empty and carry its
+    own fields."""
+    id: str
+    label: str            # GUI display name
+    note: str             # short one-line descriptor for the GUI
+    backend: str          # loader discriminator: "mflux" today (future: "boogu", …)
+    default: bool = False
+    # -- mflux backend params --
+    module: str = ""               # import module for the mflux class
+    class_name: str = ""           # mflux class name in that module
+    config_factory: str = ""       # ModelConfig factory method, e.g. "schnell"
+    model_path: "str | None" = None  # repo override, or None → mflux's default repo
+    steps_default: int = 4         # default num_inference_steps for this model
+    steps_max: int = 8             # upper bound the API accepts for this model (compute guard)
+
+
+DEFAULT_IMAGE_MODEL = "flux-schnell"
+
+# Insertion order IS the registry order the API exposes (Py 3.7+ dicts preserve it).
+IMAGE_MODELS: "dict[str, ImageModel]" = {
+    "flux-schnell": ImageModel(
+        id="flux-schnell", label="FLUX.1-schnell", note="Photoreal · 2–4 step",
+        backend="mflux", default=True,
+        module="mflux.models.flux.variants.txt2img.flux", class_name="Flux1",
+        config_factory="schnell",
+        model_path=IMAGE_MODEL_REPO,  # schnell's official repo is GATED → use the mirror
+        steps_default=4, steps_max=8,  # schnell is distilled for 1-4 steps
+    ),
+    "z-image-turbo": ImageModel(
+        id="z-image-turbo", label="Z-Image-Turbo", note="Fast · great text · 8-step",
+        backend="mflux",
+        module="mflux.models.z_image.variants.z_image", class_name="ZImage",
+        config_factory="z_image_turbo",
+        model_path=None,  # default Tongyi-MAI/Z-Image-Turbo is non-gated
+        steps_default=8, steps_max=16,  # distilled to 8; allow headroom for tuning
+    ),
+    "flux2-klein-4b": ImageModel(
+        id="flux2-klein-4b", label="FLUX.2 Klein 4B", note="Modern · Apache-2.0",
+        backend="mflux",
+        module="mflux.models.flux2.variants.txt2img.flux2_klein", class_name="Flux2Klein",
+        config_factory="flux2_klein_4b",
+        model_path=None,  # default black-forest-labs/FLUX.2-klein-4B is non-gated
+        steps_default=4, steps_max=50,  # non-distilled "modern" model — allow quality steps
+    ),
+}
+
+
+def image_model(model_id: str) -> ImageModel:
+    """Resolve an image-model id to its registry entry. Raises ``ValueError`` on an
+    unknown id (the server validates before the manager runs; the manager re-validates
+    so a direct call can't load an unregistered model)."""
+    try:
+        return IMAGE_MODELS[model_id]
+    except KeyError:
+        raise ValueError(
+            f"unknown image model {model_id!r} (known: {sorted(IMAGE_MODELS)})"
+        ) from None
+
+
+def image_models_payload() -> "list[dict]":
+    """The ordered ``image_models`` list for GET /api/models (registry order)."""
+    return [
+        {"id": m.id, "label": m.label, "note": m.note, "default": m.default}
+        for m in IMAGE_MODELS.values()
+    ]
 
 
 class IntegrityError(RuntimeError):

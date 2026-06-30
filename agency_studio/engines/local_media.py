@@ -27,6 +27,7 @@ the threaded HTTP server so two requests never stomp on the same device.
 from __future__ import annotations
 
 import gc
+import importlib
 import random
 import threading
 import time
@@ -56,6 +57,7 @@ class ImageResult:
     prompt: str
     seed: int
     seconds: float
+    model: str
 
 
 @dataclass(frozen=True)
@@ -83,40 +85,64 @@ class SpeechResult:
 # All are module-level so tests monkeypatch them with stubs — the suite never
 # touches real MLX, real weights, or the network.
 
-def _import_flux():
-    """Return mflux's ``Flux1`` class. mflux reorganised its import path across
-    versions, so try the current location then the older top-level export."""
+def _import_mflux_class(entry: "models.ImageModel"):
+    """Import the mflux generator class named by a registry entry
+    (``entry.module`` → ``entry.class_name``), e.g. ``Flux1`` / ``ZImage`` /
+    ``Flux2Klein``. A missing module/attr means the [media] extra (or this mflux
+    version) can't serve the model → MediaUnavailable (the server maps it to 501)."""
     try:
-        from mflux.models.flux.variants.txt2img.flux import Flux1  # mflux >= 0.6 layout
-        return Flux1
-    except ImportError:
-        pass
-    try:
-        from mflux import Flux1  # older top-level export
-        return Flux1
-    except ImportError as exc:
+        module = importlib.import_module(entry.module)
+        return getattr(module, entry.class_name)
+    except (ImportError, AttributeError) as exc:
         raise MediaUnavailable(f"image generation needs mflux — {_INSTALL_HINT}") from exc
 
 
-def _probe_image() -> None:
-    _import_flux()
+def _mflux_probe(entry: "models.ImageModel") -> None:
+    _import_mflux_class(entry)  # cheap: import the class, load no weights
 
 
-def _load_image_backend():
-    """Load FLUX.1-schnell from the non-gated, already-8-bit mflux build
-    (models.IMAGE_MODEL_REPO). The weights are pre-quantized, so no quantize= arg —
-    mflux loads them onto the schnell architecture via ModelConfig + model_path.
-    Verified on the target Mac in Wave 2.4."""
-    Flux1 = _import_flux()
+def _mflux_load(entry: "models.ImageModel"):
+    """Load an mflux model from its registry entry: import the class, build its
+    ModelConfig via the named factory (e.g. ``ModelConfig.schnell()``), and construct
+    it with the entry's ``model_path`` override (or None → mflux's default non-gated
+    repo). Pre-quantized repos take no quantize= arg. Verified on the target Mac."""
+    cls = _import_mflux_class(entry)
     from mflux.models.common.config import ModelConfig
-    base_config = getattr(ModelConfig, models.IMAGE_MODEL_BASE)()  # e.g. ModelConfig.schnell()
-    return Flux1(model_config=base_config, model_path=models.IMAGE_MODEL_REPO)
+    config = getattr(ModelConfig, entry.config_factory)()
+    return cls(model_config=config, model_path=entry.model_path)
+
+
+# Image-backend dispatch table keyed by the registry's ``backend`` discriminator. Adding
+# a non-mflux backend (e.g. "boogu") is a new (probe, load) pair here + entries in the
+# registry — ModelManager and the routes stay untouched.
+_IMAGE_BACKENDS: "dict[str, tuple[Callable, Callable]]" = {
+    "mflux": (_mflux_probe, _mflux_load),
+}
+
+
+def _image_backend(entry: "models.ImageModel") -> "tuple[Callable, Callable]":
+    try:
+        return _IMAGE_BACKENDS[entry.backend]
+    except KeyError:
+        raise MediaUnavailable(
+            f"unknown image backend {entry.backend!r} — {_INSTALL_HINT}"
+        ) from None
+
+
+def _probe_image(entry: "models.ImageModel") -> None:
+    """Cheap availability probe for the model's backend (run BEFORE eviction)."""
+    _image_backend(entry)[0](entry)
+
+
+def _load_image_backend(entry: "models.ImageModel"):
+    """Heavy load of the selected image model via its backend's loader."""
+    return _image_backend(entry)[1](entry)
 
 
 def _run_image_backend(model, *, prompt, steps, seed, width, height, out_path) -> None:
-    # mflux's Flux1.generate_image takes the per-generation settings as direct
-    # keyword arguments (verified against the installed mflux on the target Mac in
-    # Phase 2.4 — there is no Config object in this version).
+    # The three mflux generators share generate_image(seed, prompt,
+    # num_inference_steps, width, height) — verified live on the target Mac — so one
+    # run adapter serves every mflux image model.
     image = model.generate_image(
         seed=seed, prompt=prompt,
         num_inference_steps=steps, width=width, height=height,
@@ -204,33 +230,42 @@ class ModelManager:
     def __init__(self, assets_dir: "str | Path"):
         self._assets = Path(assets_dir)
         self._lock = threading.Lock()
-        self._resident_kind: Optional[str] = None
+        self._resident: Optional[str] = None
         self._model = None
 
     # -- model residency (caller holds self._lock) -----------------------------
-    def _ensure(self, kind: str, probe: Callable[[], None], loader: Callable[[], object]) -> object:
-        if self._resident_kind == kind and self._model is not None:
+    def _ensure(self, key: str, probe: Callable[[], None], loader: Callable[[], object]) -> object:
+        """Make the model identified by ``key`` warm and return it. ``key`` is a model
+        id ('flux-schnell', 'z-image-turbo', …) or a modality ('stt'/'tts'). Switching
+        keys (image↔voice OR image↔image) evicts the previous model first; the same key
+        is a warm hit."""
+        if self._resident == key and self._model is not None:
             return self._model  # warm hit
         # Probe the new back-end's availability FIRST (cheap import, no weights). If
         # the extra is missing this raises MediaUnavailable here — before we evict —
         # so a request for an uninstalled modality never destroys a working warm model.
         probe()
         if self._model is not None:
-            self._evict()  # keep image and voice models never co-resident (16 GB)
+            self._evict()  # at most one model resident (16 GB): evict on any switch
         self._model = loader()
-        self._resident_kind = kind
+        self._resident = key
         return self._model
 
     def _evict(self) -> None:
         self._model = None
-        self._resident_kind = None
+        self._resident = None
         _free_metal_cache()
 
     @property
+    def resident(self) -> Optional[str]:
+        """The currently-warm model key: an image-model id ('flux-schnell', …), or
+        ``'stt'`` / ``'tts'``, or ``None``. Drives the GUI's model panel + /api/models."""
+        return self._resident
+
+    # Back-compat alias: earlier code/tests referred to the warm slot as resident_kind.
+    @property
     def resident_kind(self) -> Optional[str]:
-        """Which model is currently warm (``'image'`` / ``'stt'`` / ``'tts'`` / None).
-        Exposed for the GUI's ModelManager panel and for tests."""
-        return self._resident_kind
+        return self._resident
 
     def _asset_path(self, sub: str, ext: str) -> Path:
         directory = self._assets / sub
@@ -239,26 +274,39 @@ class ModelManager:
 
     # -- operations -------------------------------------------------------------
     def generate_image(
-        self, prompt: str, *, steps: int = 4, seed: Optional[int] = None,
+        self, prompt: str, *, model: str = models.DEFAULT_IMAGE_MODEL,
+        steps: Optional[int] = None, seed: Optional[int] = None,
         width: int = 1024, height: int = 1024,
     ) -> ImageResult:
-        """Generate one image from ``prompt`` and write it under assets/images/.
+        """Generate one image from ``prompt`` with the selected ``model`` and write it
+        under assets/images/.
 
-        ``steps`` defaults to 4: FLUX.1-schnell is distilled for 1-4 steps, and 4
-        gives the best quality of that range while staying fast on Apple Silicon.
+        ``model`` is a registry id (default ``flux-schnell``); an unknown id raises
+        ``ValueError``. ``steps`` defaults to the model's own ``steps_default`` (e.g. 4
+        for the FLUX models, 8 for Z-Image-Turbo). The model is keyed by its id, so a
+        switch to a different image model evicts the previous one (image↔image is
+        mutually exclusive, like image↔voice) while a repeat of the same id reuses the
+        warm model.
         """
         if not prompt.strip():
             raise ValueError("prompt must not be empty")
+        entry = models.image_model(model)  # ValueError on unknown id (re-validated here)
+        steps = entry.steps_default if steps is None else steps
         seed = random.randint(0, 2**31 - 1) if seed is None else seed
         out = self._asset_path("images", "png")
         started = time.monotonic()
         with self._lock:
-            model = self._ensure("image", _probe_image, _load_image_backend)
+            backend = self._ensure(
+                entry.id, lambda: _probe_image(entry), lambda: _load_image_backend(entry),
+            )
             _run_image_backend(
-                model, prompt=prompt, steps=steps, seed=seed,
+                backend, prompt=prompt, steps=steps, seed=seed,
                 width=width, height=height, out_path=out,
             )
-        return ImageResult(path=out, prompt=prompt, seed=seed, seconds=round(time.monotonic() - started, 2))
+        return ImageResult(
+            path=out, prompt=prompt, seed=seed,
+            seconds=round(time.monotonic() - started, 2), model=entry.id,
+        )
 
     def transcribe(self, audio_path: "str | Path") -> TranscriptResult:
         """Transcribe an existing audio file to text (speech-to-text)."""

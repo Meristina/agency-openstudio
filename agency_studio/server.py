@@ -53,10 +53,10 @@ _READ_CHUNK = 1 << 16  # 64 KiB
 # bounded, but the COMPUTE it triggers is not — an unclamped width/height/steps could
 # allocate a huge tensor that OOMs the 16 GB Mac while holding the shared media lock,
 # wedging every media route. So dimensions + step count are range-checked; a value
-# outside the envelope is a 400, never silently accepted.
+# outside the envelope is a 400, never silently accepted. The per-model step ceiling
+# lives on each registry entry (ImageModel.steps_max); dimensions are bounded here.
 _IMAGE_MIN_DIM = 256
 _IMAGE_MAX_DIM = 1536
-_IMAGE_MAX_STEPS = 8  # FLUX.1-schnell is distilled for 1-4 steps; 8 is ample headroom
 
 # Wall-clock bound on reading a request body. Without it a client that declares a
 # Content-Length but withholds the bytes (slowloris) would pin a handler thread
@@ -662,18 +662,25 @@ class StudioHandler(BaseHTTPRequestHandler):
         # any exception from the manager call below is necessarily a back-end failure
         # (→ 500), not a mislabeled client error — and clamped dims/steps mean a
         # request can't trigger an unbounded-compute OOM that wedges the media lock.
+        from agency_studio.engines import models as media_models
         try:
-            steps = _require_int_in_range(payload.get("steps", 4), 1, _IMAGE_MAX_STEPS, "steps")
+            # Resolve the model first (unknown id → 400) so `steps` is bounded by THAT
+            # model's own ceiling — not a one-size cap that would clamp the slower,
+            # higher-quality models. width/height stay globally bounded (compute guard).
+            model = payload.get("model") or media_models.DEFAULT_IMAGE_MODEL
+            entry = media_models.image_model(model)  # raises ValueError on unknown id
+            raw_steps = payload.get("steps")
+            steps = _require_int_in_range(raw_steps, 1, entry.steps_max, "steps") \
+                if raw_steps is not None else None
             width = _require_int_in_range(payload.get("width", 1024), _IMAGE_MIN_DIM, _IMAGE_MAX_DIM, "width")
             height = _require_int_in_range(payload.get("height", 1024), _IMAGE_MIN_DIM, _IMAGE_MAX_DIM, "height")
             raw_seed = payload.get("seed")
             seed = int(raw_seed) if raw_seed is not None else None
         except (ValueError, TypeError) as exc:
             return self._send_error_json(400, str(exc))
+        kwargs = {"steps": steps, "seed": seed, "width": width, "height": height, "model": model}
         try:
-            result = self._media_manager().generate_image(
-                prompt, steps=steps, seed=seed, width=width, height=height,
-            )
+            result = self._media_manager().generate_image(prompt, **kwargs)
             url = self._media_url(result.path)  # inside the guard: a mapping error is a 500, not a dropped socket
         except ImportError as exc:  # MediaUnavailable — [media] extra not installed
             return self._send_error_json(501, str(exc))
@@ -683,7 +690,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._send_error_json(500, "image generation failed")
         self._send_json({
             "url": url, "prompt": result.prompt,
-            "seed": result.seed, "seconds": result.seconds,
+            "seed": result.seed, "seconds": result.seconds, "model": result.model,
         })
 
     def _handle_synthesize(self) -> None:
@@ -741,9 +748,9 @@ class StudioHandler(BaseHTTPRequestHandler):
         with self.server.media_lock:  # type: ignore[attr-defined]
             mgr = self.server.media  # type: ignore[attr-defined]  # None until first media op
         self._send_json({
-            "resident": mgr.resident_kind if mgr is not None else None,
+            "resident": mgr.resident if mgr is not None else None,
+            "image_models": media_models.image_models_payload(),
             "models": {
-                "image": media_models.IMAGE_MODEL_DISPLAY,
                 "stt": media_models.STT_HF_REPO,
                 "tts": "kokoro-v1.0",
             },

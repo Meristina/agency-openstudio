@@ -154,13 +154,20 @@ class _FakeModel:
 
 def _stub_backends(monkeypatch):
     """Replace every heavy adapter with a counting stub. Returns a dict of counters
-    so a test can assert how many times each model was loaded (warm reuse = no reload)."""
-    counters = {"image_load": 0, "stt_load": 0, "tts_load": 0,
-                "image_run": 0, "stt_run": 0, "tts_run": 0, "freed": 0}
+    so a test can assert how many times each model was loaded (warm reuse = no reload).
 
-    def _load_image():
+    The image probe/loader now receive the selected registry entry, so the stubs are
+    parametrized by model id: ANY of the three image models loads through the same
+    stub, and ``counters['loaded_models']`` records the ids loaded in order (so an
+    image↔image switch — eviction + reload — is observable)."""
+    counters = {"image_load": 0, "stt_load": 0, "tts_load": 0,
+                "image_run": 0, "stt_run": 0, "tts_run": 0, "freed": 0,
+                "loaded_models": []}
+
+    def _load_image(entry):
         counters["image_load"] += 1
-        return _FakeModel("image")
+        counters["loaded_models"].append(entry.id)
+        return _FakeModel(entry.id)
 
     def _run_image(model, *, prompt, steps, seed, width, height, out_path):
         counters["image_run"] += 1
@@ -189,8 +196,9 @@ def _stub_backends(monkeypatch):
     monkeypatch.setattr(local_media, "_load_tts_backend", _load_tts)
     monkeypatch.setattr(local_media, "_run_tts_backend", _run_tts)
     # Probes are cheap availability checks — stub them to succeed so the suite never
-    # tries a real import (a test for the failing-probe path stubs one to raise).
-    monkeypatch.setattr(local_media, "_probe_image", lambda: None)
+    # tries a real import (a test for the failing-probe path stubs one to raise). The
+    # image probe takes the selected entry (and accepts any of the three models).
+    monkeypatch.setattr(local_media, "_probe_image", lambda entry: None)
     monkeypatch.setattr(local_media, "_probe_stt", lambda: None)
     monkeypatch.setattr(local_media, "_probe_tts", lambda: None)
     monkeypatch.setattr(local_media, "_free_metal_cache", lambda: counters.__setitem__("freed", counters["freed"] + 1))
@@ -205,7 +213,66 @@ def test_generate_image_writes_asset_and_result(tmp_path, monkeypatch):
     assert result.path.parent == tmp_path / "images"
     assert result.seed == 7
     assert result.prompt == "a luxury food photograph"
-    assert mgr.resident_kind == "image"
+    # Default model is flux-schnell, and the warm key is the model id (not "image").
+    assert result.model == "flux-schnell"
+    assert mgr.resident == "flux-schnell"
+    assert mgr.resident_kind == "flux-schnell"  # back-compat alias
+
+
+def test_generate_image_defaults_to_flux_schnell(tmp_path, monkeypatch):
+    counters = _stub_backends(monkeypatch)
+    mgr = local_media.ModelManager(tmp_path)
+    result = mgr.generate_image("no model arg")
+    assert result.model == models.DEFAULT_IMAGE_MODEL == "flux-schnell"
+    assert counters["loaded_models"] == ["flux-schnell"]
+
+
+def test_generate_image_explicit_model_selection(tmp_path, monkeypatch):
+    counters = _stub_backends(monkeypatch)
+    mgr = local_media.ModelManager(tmp_path)
+    result = mgr.generate_image("great text", model="z-image-turbo")
+    assert result.model == "z-image-turbo"
+    assert mgr.resident == "z-image-turbo"
+    assert counters["loaded_models"] == ["z-image-turbo"]
+
+
+def test_generate_image_unknown_model_raises_valueerror(tmp_path, monkeypatch):
+    counters = _stub_backends(monkeypatch)
+    mgr = local_media.ModelManager(tmp_path)
+    with pytest.raises(ValueError):
+        mgr.generate_image("x", model="not-a-real-model")
+    assert counters["image_load"] == 0  # rejected before any load
+
+
+def test_switching_image_model_evicts_and_reloads(tmp_path, monkeypatch):
+    """image↔image is mutually exclusive too: a different model id evicts the warm one
+    and loads the new one; repeating the SAME id is a warm hit (no reload, no evict)."""
+    counters = _stub_backends(monkeypatch)
+    mgr = local_media.ModelManager(tmp_path)
+    mgr.generate_image("one", model="flux-schnell")
+    mgr.generate_image("two", model="flux-schnell")     # same id → warm reuse
+    assert counters["image_load"] == 1
+    assert counters["freed"] == 0
+    mgr.generate_image("three", model="flux2-klein-4b")  # switch → evict + reload
+    assert counters["freed"] == 1
+    assert counters["image_load"] == 2
+    assert counters["loaded_models"] == ["flux-schnell", "flux2-klein-4b"]
+    assert mgr.resident == "flux2-klein-4b"
+
+
+def test_steps_default_per_model(tmp_path, monkeypatch):
+    """When steps is omitted the model's own steps_default is used (8 for Z-Image)."""
+    seen = {}
+
+    def _run_image(model, *, prompt, steps, seed, width, height, out_path):
+        seen["steps"] = steps
+        out_path.write_bytes(b"\x89PNG\r\n")
+
+    _stub_backends(monkeypatch)
+    monkeypatch.setattr(local_media, "_run_image_backend", _run_image)
+    mgr = local_media.ModelManager(tmp_path)
+    mgr.generate_image("x", model="z-image-turbo")
+    assert seen["steps"] == 8  # z-image-turbo's steps_default
 
 
 def test_empty_prompt_rejected(tmp_path, monkeypatch):
@@ -229,9 +296,9 @@ def test_switching_modality_evicts_previous_model(tmp_path, monkeypatch):
     counters = _stub_backends(monkeypatch)
     mgr = local_media.ModelManager(tmp_path)
     mgr.generate_image("draw this")
-    assert mgr.resident_kind == "image"
+    assert mgr.resident == "flux-schnell"
     mgr.synthesize("say this")
-    assert mgr.resident_kind == "tts"
+    assert mgr.resident == "tts"
     assert counters["freed"] == 1        # the image model was evicted on switch
     assert counters["tts_load"] == 1
 
@@ -269,7 +336,7 @@ def test_missing_extra_raises_media_unavailable(tmp_path, monkeypatch):
     surfaces it unchanged (the server turns it into a 501)."""
     _stub_backends(monkeypatch)
 
-    def _no_lib():
+    def _no_lib(entry):
         raise local_media.MediaUnavailable("image generation needs mflux — install ...")
 
     monkeypatch.setattr(local_media, "_probe_image", _no_lib)
@@ -290,14 +357,14 @@ def test_failed_probe_does_not_evict_warm_model(tmp_path, monkeypatch):
     counters = _stub_backends(monkeypatch)
     mgr = local_media.ModelManager(tmp_path)
     mgr.generate_image("warm it up")          # image now warm
-    assert mgr.resident_kind == "image"
+    assert mgr.resident == "flux-schnell"
 
     monkeypatch.setattr(local_media, "_probe_tts",
                         lambda: (_ for _ in ()).throw(local_media.MediaUnavailable("no kokoro")))
     with pytest.raises(local_media.MediaUnavailable):
         mgr.synthesize("won't load")
 
-    assert mgr.resident_kind == "image"        # warm image model preserved
+    assert mgr.resident == "flux-schnell"      # warm image model preserved
     assert counters["freed"] == 0              # nothing was evicted
     mgr.generate_image("still warm")
     assert counters["image_load"] == 1         # reused, never reloaded

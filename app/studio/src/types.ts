@@ -75,6 +75,8 @@ export interface ImageResult {
   prompt: string;
   seed: number;
   seconds: number;
+  /** The image-model id the server actually used for this generation. */
+  model: string;
 }
 
 /** Result of POST /api/tts — generated speech served under /media. */
@@ -90,9 +92,19 @@ export interface TranscriptResult {
   seconds: number;
 }
 
-/** GET /api/models — which model is currently warm + the configured model ids. */
+/** One selectable image model in the registry (GET /api/models → image_models). */
+export interface ImageModelInfo {
+  id: string;
+  label: string;
+  note: string;
+  default?: boolean;
+}
+
+/** GET /api/models — which model is currently warm, the selectable image-model
+ * registry, and the configured stt/tts model ids. */
 export interface ModelsStatus {
   resident: string | null;
+  image_models: ImageModelInfo[];
   models: Record<string, string>;
 }
 
