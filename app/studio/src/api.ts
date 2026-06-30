@@ -19,6 +19,21 @@ export async function getMission(id: string): Promise<Dossier> {
 }
 
 /**
+ * Cancel an in-flight mission by its run id (the `run` SSE frame). Sets the run's
+ * cancel flag server-side, which kills the in-flight engine subprocess before any
+ * persistence. Resolves true on 202; false for any other status. The request is
+ * time-bounded (so a wedged connection can't strand the Stop click) — a timeout or
+ * network error rejects, and the caller falls back to aborting the fetch.
+ */
+export async function cancelMission(runId: string): Promise<boolean> {
+  const res = await fetch(`/api/mission/${encodeURIComponent(runId)}/cancel`, {
+    method: "POST",
+    signal: AbortSignal.timeout(4000),
+  });
+  return res.status === 202;
+}
+
+/**
  * Run a mission and stream its progress.
  *
  * The endpoint is a POST returning `text/event-stream`, so EventSource can't be

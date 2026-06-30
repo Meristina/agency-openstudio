@@ -63,4 +63,23 @@ describe("groupTimeline", () => {
     expect(m.terminal).toEqual({ kind: "error", message: "engine crashed" });
     expect(runStatus(m)).toBe("error");
   });
+
+  it("folds the run-id frame as a control handle, not a visible step", () => {
+    const m = groupTimeline([
+      { phase: "run", run_id: "a".repeat(32) },
+      { phase: "route", status: "done", route: ["solve"] },
+    ]);
+    // The run frame contributes no step; only the route shows.
+    expect(m).toEqual({ route: ["solve"], depts: [], synth: [], inspect: [], terminal: null });
+  });
+
+  it("captures a cancelled terminal", () => {
+    const m = groupTimeline([
+      { phase: "run", run_id: "b".repeat(32) },
+      { phase: "route", status: "done", route: ["solve"] },
+      { phase: "cancelled" },
+    ]);
+    expect(m.terminal).toEqual({ kind: "cancelled" });
+    expect(runStatus(m)).toBe("cancelled");
+  });
 });

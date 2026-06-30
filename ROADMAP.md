@@ -114,10 +114,21 @@ React/Vite GUI (app/studio, 127.0.0.1)
   mid-call. Trade-off (by design): a Stop landing in the *final* synth→inspect window
   now discards that nearly-finished run instead of persisting it — the deliberate
   cost of an immediate, no-trace cancel.
-  Remaining future work: an **explicit cancel endpoint with a run-id** (a registry
-  of in-flight missions + `POST /api/mission/{run_id}/cancel`) so the GUI can cancel
-  without relying on the connection drop, and the matching frontend wiring (including
-  refreshing the now-too-pessimistic "may still finish" Stop notice).
+- ✅ **v3 — explicit cancel endpoint with a run-id** *(shipped)*: each run is
+  registered under an ephemeral `run_id` (uuid4) in an in-memory registry on the
+  server, announced as the first SSE frame `{"phase":"run","run_id":…}`.
+  `POST /api/mission/{run_id}/cancel` sets that run's `cancel_event` (202) — an
+  unknown/finished/malformed id is a 404 — so the GUI can stop a run **without
+  relying on the connection drop**. When a cancel lands while the client is still
+  connected, the stream ends with a `{"phase":"cancelled"}` terminal frame. The
+  Mission Console's "Stop mission" now calls the endpoint (falling back to aborting
+  the fetch if the run-id hasn't arrived yet or the call fails — the heartbeat path
+  then cancels the same way), and the notice is honest: *stopped — cancelled before
+  saving*. With the immediate kill + no-persist, the only window that could still
+  persist is the microsecond after the final step returns.
+  Remaining future work: none for Stop — the loop is closed. (A natural next
+  extension, if ever needed: surface in-flight runs in the GUI so a run can be
+  cancelled from another tab/device.)
 
 ### Wave 2 — Local multimodal inference, hardened *(Mac/Metal — deferred)*
 - **`agency_studio/engines/local_media.py`**: spawn SD/Whisper/Kokoro, **Metal only**,

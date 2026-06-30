@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getMission, listMissions, runMission } from "./api";
+import { cancelMission, getMission, listMissions, runMission } from "./api";
 import type { MissionEvent } from "./types";
 
 const realFetch = global.fetch;
@@ -84,5 +84,23 @@ describe("listMissions / getMission", () => {
   it("getMission throws on a non-ok response", async () => {
     stubFetch({ ok: false, status: 404 });
     await expect(getMission("nope")).rejects.toThrow(/404/);
+  });
+});
+
+describe("cancelMission", () => {
+  it("POSTs to the cancel endpoint and returns true on 202", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ status: 202 });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const runId = "a".repeat(32);
+    expect(await cancelMission(runId)).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/mission/${runId}/cancel`,
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("returns false when the run is unknown/finished (404)", async () => {
+    global.fetch = vi.fn().mockResolvedValue({ status: 404 }) as unknown as typeof fetch;
+    expect(await cancelMission("b".repeat(32))).toBe(false);
   });
 });

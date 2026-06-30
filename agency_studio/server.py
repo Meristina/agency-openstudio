@@ -27,6 +27,7 @@ import queue
 import re
 import socket
 import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -60,6 +61,13 @@ _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 # store.load(), which builds a filesystem path from the id — so the GET-mission
 # route cannot be turned into a path-traversal read.
 _MISSION_ID_RE = re.compile(r"\A[A-Za-z0-9_-]+\Z")
+
+# Shape of an ephemeral run id (uuid4().hex, 32 lowercase hex chars) — the in-memory
+# handle for an in-flight mission, announced as the first SSE frame. A run id is only
+# ever a dict key in the run registry, never a filesystem path, so the cancel route
+# needs no separate validation: any unknown/malformed id simply misses the registry
+# and 404s. This pattern documents the emitted shape (asserted in tests).
+_RUN_ID_RE = re.compile(r"\A[a-f0-9]{32}\Z")
 
 # Content types for the few static extensions the GUI build emits.
 _CONTENT_TYPES = {
@@ -243,6 +251,9 @@ class StudioHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/mission":
             return self._handle_run_mission()
+        if path.startswith("/api/mission/") and path.endswith("/cancel"):
+            run_id = path[len("/api/mission/"):-len("/cancel")]
+            return self._handle_cancel_mission(run_id)
         # Unknown POST: the body is never read, so close to avoid a keep-alive desync.
         self._reject(404, "not found")
 
@@ -320,9 +331,51 @@ class StudioHandler(BaseHTTPRequestHandler):
             return  # a 400 was already sent
         goal, engine = request
         self._begin_sse()
-        result_box = self._stream_mission(goal, engine)
+        # Register an ephemeral run id BEFORE streaming, and announce it as the first
+        # frame, so the GUI can stop this exact run via POST /api/mission/{id}/cancel
+        # without relying on a connection drop. Always unregistered on the way out.
+        run_id = uuid.uuid4().hex
+        cancel_event = threading.Event()
+        self._register_run(run_id, cancel_event)
+        try:
+            self._write_sse({"phase": "run", "run_id": run_id})
+            result_box = self._stream_mission(goal, engine, cancel_event)
+        finally:
+            # Deregister the instant the run is over — BEFORE writing the terminal
+            # frame — so a cancel arriving during that (socket-write) window gets a
+            # clean 404, not a misleading 202 'cancelling' for an already-finished run.
+            self._unregister_run(run_id)
         if result_box is not None:  # None ⇒ client disconnected mid-stream
             self._send_terminal_frame(result_box)
+
+    def _register_run(self, run_id: str, cancel_event: threading.Event) -> None:
+        server = self.server  # type: ignore[attr-defined]
+        with server.runs_lock:
+            server.runs[run_id] = cancel_event
+
+    def _unregister_run(self, run_id: str) -> None:
+        server = self.server  # type: ignore[attr-defined]
+        with server.runs_lock:
+            server.runs.pop(run_id, None)
+
+    def _handle_cancel_mission(self, run_id: str) -> None:
+        """Cancel an in-flight mission by its run id (POST /api/mission/{id}/cancel).
+
+        Sets the run's cancel_event and answers 202. The worker polls that event
+        (via ``should_cancel``) and stops the mission — killing any in-flight engine
+        subprocess — before any persistence, so a cancelled run leaves no trace. An
+        unknown or already-finished run is a 404 (a run is unregistered the moment it
+        ends, so any malformed/stale id simply misses the registry). Idempotent: a
+        second cancel of the same run is just another 404."""
+        if self._read_body() is None:
+            return  # malformed/oversized body: _read_body already answered + closed
+        server = self.server  # type: ignore[attr-defined]
+        with server.runs_lock:
+            cancel_event = server.runs.get(run_id)
+        if cancel_event is None:
+            return self._send_error_json(404, "unknown run")
+        cancel_event.set()
+        self._send_json({"status": "cancelling", "run_id": run_id}, status=202)
 
     def _parse_mission_request(self) -> "tuple[str, str] | None":
         """Read + validate the JSON body. Returns ``(goal, engine)``, or ``None``
@@ -357,24 +410,24 @@ class StudioHandler(BaseHTTPRequestHandler):
         self._cors()
         self.end_headers()
 
-    def _stream_mission(self, goal: str, engine: str) -> "dict | None":
+    def _stream_mission(
+        self, goal: str, engine: str, cancel_event: threading.Event
+    ) -> "dict | None":
         """Run the mission on a worker thread and stream its progress events.
 
-        Returns the result box (carrying ``result`` or ``error``) once the worker
-        signals completion, or ``None`` if the client disconnected mid-stream.
+        Returns the result box (carrying ``result``, ``error``, or ``cancelled``)
+        once the worker signals completion, or ``None`` if the client disconnected
+        mid-stream.
 
-        A client disconnect (the GUI's "Stop mission" aborts the fetch) requests a
-        cancel: we set ``cancel_event``, which the worker polls via ``should_cancel``
-        both at phase boundaries AND inside the engine's in-flight subprocess call —
-        so the running child is killed promptly and the mission raises
-        ``MissionCancelled`` before any persistence. The disconnect is detected by a
-        failed write: a real event frame when one is pending, or — during a long,
-        event-silent call — a periodic heartbeat (``_write_heartbeat``), so a Stop
-        lands without waiting for the next emitted event.
+        ``cancel_event`` is shared with the run registry: it is set either by the
+        explicit cancel endpoint (the GUI's "Stop mission") or by a detected
+        disconnect (a failed event/heartbeat write). The worker polls it via
+        ``should_cancel`` both at phase boundaries AND inside the engine's in-flight
+        subprocess call — so the running child is killed promptly and the mission
+        raises ``MissionCancelled`` before any persistence.
         """
         events: "queue.Queue[dict | None]" = queue.Queue()
         result_box: dict = {}
-        cancel_event = threading.Event()
         project_root = self.server.project_root  # type: ignore[attr-defined]
 
         def _worker() -> None:
@@ -392,10 +445,11 @@ class StudioHandler(BaseHTTPRequestHandler):
                     should_cancel=cancel_event.is_set,
                 )
             except MissionCancelled:
-                # Cooperative stop: nothing was persisted. Caught only to keep the
-                # daemon thread from printing a spurious traceback — by this point
-                # the drain loop has already returned None to the gone client.
-                pass
+                # Stopped before any persistence. Recorded so that — when the client
+                # is still connected (an explicit endpoint cancel) — the drain loop
+                # can emit a `cancelled` terminal frame; on a disconnect the drain
+                # has already returned None and no frame is sent.
+                result_box["cancelled"] = True
             except Exception as exc:  # surfaced to the client as an SSE error event
                 result_box["error"] = str(exc)
             finally:
@@ -440,10 +494,14 @@ class StudioHandler(BaseHTTPRequestHandler):
             return False
 
     def _send_terminal_frame(self, result_box: dict) -> None:
-        """Emit the final SSE frame: an ``error`` frame, or a ``done`` frame with
-        the saved mission's id / verdict / path / residual risk."""
+        """Emit the final SSE frame: an ``error`` frame, a ``cancelled`` frame (an
+        explicit endpoint stop landed while the client was still connected), or a
+        ``done`` frame with the saved mission's id / verdict / path / residual risk."""
         if "error" in result_box:
             self._write_sse({"phase": "error", "message": result_box["error"]})
+            return
+        if result_box.get("cancelled"):
+            self._write_sse({"phase": "cancelled"})
             return
         result = result_box.get("result")
         if result is None:
@@ -548,6 +606,12 @@ def make_server(
     # otherwise drift if the server's CWD ever changed).
     httpd.project_root = str(Path(project_root).resolve())  # type: ignore[attr-defined]
     httpd.static_root = Path(static_root) if static_root else None  # type: ignore[attr-defined]
+    # Registry of in-flight missions: run_id → cancel_event. The explicit cancel
+    # endpoint looks a run up here and sets its event; the SSE handler registers on
+    # start and removes on finish. A lock guards it because ThreadingHTTPServer runs
+    # each request (run + cancel) on its own thread.
+    httpd.runs = {}  # type: ignore[attr-defined]
+    httpd.runs_lock = threading.Lock()  # type: ignore[attr-defined]
     return httpd
 
 

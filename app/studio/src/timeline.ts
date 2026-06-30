@@ -21,7 +21,8 @@ export interface InspectStep {
 
 export type Terminal =
   | { kind: "done"; verdict: string | null; missionId: string | null; path: string; residualRisk: string | null }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string }
+  | { kind: "cancelled" };
 
 export interface TimelineModel {
   route: string[] | null;
@@ -37,6 +38,10 @@ export function groupTimeline(events: MissionEvent[]): TimelineModel {
 
   for (const e of events) {
     switch (e.phase) {
+      case "run":
+        // The run-id frame is a control handle (used for the cancel endpoint), not
+        // a visible timeline step — fold nothing.
+        break;
       case "route":
         model.route = e.route;
         break;
@@ -70,6 +75,9 @@ export function groupTimeline(events: MissionEvent[]): TimelineModel {
       case "error":
         model.terminal = { kind: "error", message: e.message };
         break;
+      case "cancelled":
+        model.terminal = { kind: "cancelled" };
+        break;
       default: {
         // Exhaustiveness guard: a new MissionEvent.phase becomes a compile error here.
         const _exhaustive: never = e;
@@ -82,8 +90,9 @@ export function groupTimeline(events: MissionEvent[]): TimelineModel {
 }
 
 /** Coarse run state derived from the events, for the header/status line. */
-export function runStatus(model: TimelineModel): "idle" | "running" | "done" | "error" {
+export function runStatus(model: TimelineModel): "idle" | "running" | "done" | "error" | "cancelled" {
   if (model.terminal?.kind === "error") return "error";
+  if (model.terminal?.kind === "cancelled") return "cancelled";
   if (model.terminal?.kind === "done") return "done";
   if (model.route || model.depts.length) return "running";
   return "idle";

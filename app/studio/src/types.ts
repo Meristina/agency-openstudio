@@ -3,6 +3,13 @@
 // `error`). Keep these in lockstep with the server: every `phase` the GUI can
 // receive is a member of MissionEvent.
 
+/** First frame of a run: the ephemeral run id, used to cancel via the explicit
+ * POST /api/mission/{run_id}/cancel endpoint. */
+export interface RunEvent {
+  phase: "run";
+  run_id: string;
+}
+
 export interface RouteEvent {
   phase: "route";
   status: "done";
@@ -44,13 +51,21 @@ export interface ErrorEvent {
   message: string;
 }
 
+/** Terminal frame the server appends when an explicit cancel stopped the run
+ * while the client was still connected (nothing was persisted). */
+export interface CancelledEvent {
+  phase: "cancelled";
+}
+
 export type MissionEvent =
+  | RunEvent
   | RouteEvent
   | DeptEvent
   | SynthEvent
   | InspectEvent
   | DoneEvent
-  | ErrorEvent;
+  | ErrorEvent
+  | CancelledEvent;
 
 /** A saved mission as returned by `GET /api/missions` (store.list_missions). */
 export interface MissionSummary {

@@ -4,11 +4,16 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { getMission, listMissions, runMission } from "./api";
+import { cancelMission, getMission, listMissions, runMission } from "./api";
 import Timeline from "./components/Timeline";
 import MissionDetail from "./components/MissionDetail";
 import { summaryVerdictClass } from "./types";
 import type { Dossier, MissionEvent, MissionSummary } from "./types";
+
+// Single source for the clean-cancel message (a `cancelled` terminal frame means the
+// run was stopped before any persistence). The abort-fallback and raced-finish cases
+// are genuinely different outcomes and carry their own honest wording.
+const STOPPED_NOTICE = "Mission stopped — cancelled before it was saved.";
 
 export default function App() {
   const [missions, setMissions] = useState<MissionSummary[]>([]);
@@ -22,6 +27,8 @@ export default function App() {
   const [elapsed, setElapsed] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const runIdRef = useRef<string | null>(null);
+  const stopRequestedRef = useRef(false);
 
   // Live "working" feedback: tick an elapsed-seconds counter for the duration of
   // a run. The final value persists after completion (until the next run starts).
@@ -72,38 +79,65 @@ export default function App() {
     setSelectedId(null);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    runIdRef.current = null;
+    stopRequestedRef.current = false;
     let completedId: string | null = null;
+    let cancelled = false;
     try {
       await runMission(
         trimmed,
         (e) => {
           setEvents((prev) => [...prev, e]);
+          if (e.phase === "run") runIdRef.current = e.run_id;
           if (e.phase === "done" && e.mission_id) completedId = e.mission_id;
+          if (e.phase === "cancelled") cancelled = true;
         },
         { signal: ctrl.signal },
       );
+      // The stream ended on a terminal frame. Always refresh first so a mission that
+      // won the cancel race (finished before the stop landed) still shows in History.
       await refreshMissions();
-      if (completedId) await openMission(completedId);
+      if (cancelled) {
+        setNotice(STOPPED_NOTICE);
+      } else if (completedId) {
+        // A `done` despite a stop request means the run finished before the cancel
+        // took effect — it was saved, so say so honestly rather than claim a stop.
+        if (stopRequestedRef.current) {
+          setNotice("Stop arrived too late — the mission finished and was saved.");
+        }
+        await openMission(completedId);
+      }
     } catch (e) {
-      // Aborting the fetch asks the server to cancel cooperatively at the next
-      // phase boundary — best-effort, not a kill. A stop that lands during the
-      // final synth→inspect step still completes and is saved, so we can't promise
-      // "nothing was saved"; tell the user to Refresh and check History.
       if (ctrl.signal.aborted) {
-        setNotice("Stop requested. The mission halts at the next safe checkpoint; if it had already reached its final step it may still finish and appear in History — use Refresh to check.");
+        // Stop fell back to aborting the fetch (no run id yet, or the cancel call
+        // failed). The server kills the in-flight subprocess before persistence, but
+        // a run that had just finished may already be saved — refresh so History
+        // reflects whichever actually happened, and don't over-promise "not saved".
+        await refreshMissions();
+        setNotice("Mission stopped. If it had already finished, it now appears in History.");
       } else {
         setError(e instanceof Error ? e.message : String(e));
       }
     } finally {
       setRunning(false);
       abortRef.current = null;
+      runIdRef.current = null;
+      stopRequestedRef.current = false;
     }
   }, [goal, running, refreshMissions, openMission]);
 
-  // "Stop mission" aborts the fetch; the dropped connection signals the server to
-  // cancel cooperatively at the next phase boundary (best-effort — a stop inside
-  // the final synth→inspect step still completes and persists).
-  const onStopMission = useCallback(() => abortRef.current?.abort(), []);
+  // "Stop mission" cancels this exact run via the explicit endpoint (the server then
+  // kills the in-flight engine subprocess before persistence). `cancelMission` is
+  // time-bounded, so a wedged request can't strand the click; on no run id yet, a
+  // failure, or a timeout it falls back to aborting the fetch — the server detects the
+  // dropped connection and cancels the same way.
+  const onStopMission = useCallback(async () => {
+    stopRequestedRef.current = true;
+    setNotice("Stopping…");
+    const runId = runIdRef.current;
+    if (runId && (await cancelMission(runId).catch(() => false))) return;
+    abortRef.current?.abort();
+  }, []);
 
   // ⌘/Ctrl+Enter submits from the goal box (a plain Enter stays a newline).
   const onGoalKeyDown = useCallback(
