@@ -85,6 +85,18 @@ class SpeechResult:
 # All are module-level so tests monkeypatch them with stubs — the suite never
 # touches real MLX, real weights, or the network.
 
+def _pinned_repo(repo: "str | None", revision: "str | None") -> "str | None":
+    """Resolve a HF ``repo`` to a local snapshot dir pinned to an immutable commit SHA, so
+    a backend that takes a repo id (mflux ``model_path``, mlx_whisper ``path_or_hf_repo``)
+    loads the exact reviewed weights even if the repo later moves/force-pushes. A falsy
+    ``revision`` (or ``repo``) returns the input unchanged — no pin, current behaviour.
+    Uses huggingface_hub (already pulled in by the media backends)."""
+    if not repo or not revision:
+        return repo
+    from huggingface_hub import snapshot_download
+    return snapshot_download(repo, revision=revision)
+
+
 def _resolve_mflux(entry: "models.ImageModel"):
     """Resolve the (class, ModelConfig factory) an mflux entry names — exactly the
     symbols ``_mflux_load`` needs — importing NO weights. A missing/renamed module,
@@ -111,7 +123,8 @@ def _mflux_load(entry: "models.ImageModel"):
     repo) and ``quantize`` (None for an already-pre-quantized mirror like flux-schnell;
     8 for the full-precision default repos so a 6B/4B model fits the 16 GB Mac)."""
     cls, config_factory = _resolve_mflux(entry)
-    return cls(model_config=config_factory(), model_path=entry.model_path, quantize=entry.quantize)
+    model_path = _pinned_repo(entry.model_path, entry.revision)  # pin the mirror; None → mflux default
+    return cls(model_config=config_factory(), model_path=model_path, quantize=entry.quantize)
 
 
 def _mflux_run(model, entry, *, prompt, steps, seed, width, height, out_path) -> None:
@@ -150,8 +163,8 @@ def _boogu_load(entry: "models.ImageModel"):
     """Resolve both weight repos to local dirs and build the Boogu pipeline."""
     from boogu_image_mlx.pipeline_mlx import BooguImagePipeline
     from huggingface_hub import snapshot_download
-    base = snapshot_download(entry.base_repo)
-    qwen = snapshot_download(entry.qwen_repo)
+    base = snapshot_download(entry.base_repo, revision=entry.base_revision)
+    qwen = snapshot_download(entry.qwen_repo, revision=entry.qwen_revision)
     return BooguImagePipeline.from_pretrained(base, qwen)
 
 
@@ -215,14 +228,16 @@ def _probe_stt() -> None:
 
 
 def _load_stt_backend():
-    """STT 'model' is the ``mlx_whisper`` module itself; the turbo weights are
-    fetched + cached by HF on first ``transcribe`` (content-addressed, no manifest)."""
+    """STT 'model' is the ``mlx_whisper`` module itself; the turbo weights are fetched +
+    cached by HF on first ``transcribe``, pinned to ``STT_HF_REVISION`` (see
+    ``_run_stt_backend``) so the resolved commit can't silently move."""
     import mlx_whisper
     return mlx_whisper
 
 
 def _run_stt_backend(mlx_whisper, *, audio_path) -> str:
-    result = mlx_whisper.transcribe(str(audio_path), path_or_hf_repo=models.STT_HF_REPO)
+    repo = _pinned_repo(models.STT_HF_REPO, models.STT_HF_REVISION)  # pin the turbo weights
+    result = mlx_whisper.transcribe(str(audio_path), path_or_hf_repo=repo)
     return (result.get("text") or "").strip()
 
 

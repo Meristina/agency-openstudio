@@ -82,9 +82,15 @@ KOKORO_VOICES = ModelFile(
     sha256="bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
 )
 
-# Hugging Face repo ids for the hub-managed back-ends (no manifest needed — HF's
-# cache is content-addressed). Centralised here so the model choice lives in one place.
+# Hugging Face repo ids for the hub-managed back-ends, each PINNED to an immutable
+# commit SHA (the `*_REVISION` / `*_revision` fields below). HF content-addressing only
+# guarantees the bytes match the repo's CURRENT blob — not that the repo still points at
+# the known-good weights reviewed on the target Mac. Pinning a 40-hex commit SHA (itself
+# content-addressed) gives those hub weights the same supply-chain guarantee the Kokoro
+# SHA-256 manifest gives the direct-URL files (docs/SECURITY.md #4/#5), so a force-push
+# or a compromised mirror can't silently swap in different weights on the next download.
 STT_HF_REPO = "mlx-community/whisper-large-v3-turbo"  # MLX-converted Whisper turbo
+STT_HF_REVISION = "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb"
 
 # Image: a non-gated, pre-quantized (8-bit) mflux build of FLUX.1-schnell. The
 # official black-forest-labs/FLUX.1-schnell repo is GATED (license + login), so we
@@ -123,12 +129,15 @@ class ImageModel:
     class_name: str = ""           # mflux class name in that module
     config_factory: str = ""       # ModelConfig factory method, e.g. "schnell"
     model_path: "str | None" = None  # repo override, or None → mflux's default repo
+    revision: "str | None" = None  # immutable commit SHA pinning model_path (None = unpinned)
     quantize: "int | None" = None  # bits to quantize on load (None = repo's native/pre-quantized)
     steps_default: int = 4         # default num_inference_steps for this model
     steps_max: int = 8             # upper bound the API accepts for this model (compute guard)
     # -- boogu backend params (None for mflux entries) --
     base_repo: "str | None" = None  # the Boogu image weights repo (HF)
     qwen_repo: "str | None" = None  # the Qwen3-VL conditioner repo (HF)
+    base_revision: "str | None" = None  # immutable commit SHA pinning base_repo
+    qwen_revision: "str | None" = None  # immutable commit SHA pinning qwen_repo
 
 
 DEFAULT_IMAGE_MODEL = "flux-schnell"
@@ -141,6 +150,7 @@ IMAGE_MODELS: "dict[str, ImageModel]" = {
         module="mflux.models.flux.variants.txt2img.flux", class_name="Flux1",
         config_factory="schnell",
         model_path=IMAGE_MODEL_REPO,  # schnell's official repo is GATED → use the mirror
+        revision="84ce28edf39a0c68b96d95c255620fbb7b8507be",  # pin the third-party mirror
         quantize=None,  # the mirror is already 8-bit — no re-quantization
         steps_default=4, steps_max=8,  # schnell is distilled for 1-4 steps
     ),
@@ -169,6 +179,8 @@ IMAGE_MODELS: "dict[str, ImageModel]" = {
         backend="boogu",
         base_repo="mlx-community/Boogu-Image-0.1-Base-4bit",
         qwen_repo="mlx-community/Qwen3-VL-8B-Instruct-4bit",
+        base_revision="ce80bab5737cf123a4a60a427a1944559b094d5c",
+        qwen_revision="defcdea7cc7a4b0858fea563cbbce171d328e457",
         steps_default=16, steps_max=50,
     ),
 }

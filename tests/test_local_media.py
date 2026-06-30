@@ -7,6 +7,7 @@ URL/checksum guards run end-to-end without MLX, without weights, and without net
 """
 
 import hashlib
+import re
 
 import pytest
 
@@ -465,3 +466,38 @@ def test_out_dir_none_keeps_default_location(tmp_path, monkeypatch):
     mgr = local_media.ModelManager(tmp_path)
     result = mgr.generate_image("a banner")
     assert result.path.parent == tmp_path / "images"
+
+
+# ── hub-weight revision pinning (supply-chain hardening) ──────────────────────
+
+def test_pinned_repo_resolves_via_snapshot_download_with_revision(monkeypatch):
+    # With a revision, the repo id is resolved to a local snapshot dir pinned to that
+    # immutable commit SHA; without one, the repo id passes through untouched (no fetch).
+    import sys
+    import types
+
+    calls = []
+    fake_hub = types.SimpleNamespace(
+        snapshot_download=lambda repo, revision=None: (
+            calls.append((repo, revision)) or f"/cache/{repo}@{revision}"
+        )
+    )
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+
+    assert local_media._pinned_repo("org/repo", "deadbeef") == "/cache/org/repo@deadbeef"
+    assert calls == [("org/repo", "deadbeef")]
+
+    calls.clear()
+    assert local_media._pinned_repo("org/repo", None) == "org/repo"  # unpinned → unchanged
+    assert local_media._pinned_repo(None, "deadbeef") is None  # no repo → no fetch
+    assert calls == [], "no snapshot_download when there's nothing to pin"
+
+
+def test_hub_weights_are_pinned_to_immutable_commit_shas():
+    # Every hub-managed repo carries a 40-hex commit SHA, so a force-push / compromised
+    # mirror can't silently swap weights on the next download (docs/SECURITY.md #4/#5).
+    sha = re.compile(r"^[0-9a-f]{40}$")
+    assert sha.match(models.STT_HF_REVISION)
+    assert sha.match(models.IMAGE_MODELS["flux-schnell"].revision)
+    boogu = models.IMAGE_MODELS["boogu-base"]
+    assert sha.match(boogu.base_revision) and sha.match(boogu.qwen_revision)

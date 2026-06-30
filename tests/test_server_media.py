@@ -9,12 +9,36 @@ without MLX, real weights, or the network.
 
 import http.client
 import json
+import socket
 import threading
 
 import pytest
 
 from agency_studio import server
 from agency_studio.engines import local_media
+
+
+def _raw_request(host, port, request_bytes):
+    """Send a hand-crafted HTTP request and return the raw response bytes — for the
+    body-framing cases (oversized/withheld/chunked) http.client can't express."""
+    with socket.create_connection((host, port), timeout=5) as sock:
+        sock.sendall(request_bytes)
+        sock.settimeout(5)
+        chunks = []
+        try:
+            while True:
+                buf = sock.recv(4096)
+                if not buf:
+                    break
+                chunks.append(buf)
+        except socket.timeout:
+            pass
+    return b"".join(chunks)
+
+
+def _uploads(tmp_path):
+    """The STT upload spool — must hold no leftover file after a rejected/aborted body."""
+    return list((tmp_path / "studio_assets" / "uploads").glob("*"))
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -252,6 +276,59 @@ def test_post_stt_empty_body_400(monkeypatch, tmp_path):
             headers={"Content-Type": "audio/wav"},
         )
         assert status == 400
+    finally:
+        httpd.shutdown()
+
+
+# ── /api/stt body hardening: the largest untrusted-body path (_stream_body_to_file) ──
+# Mirrors the mission-route 413/411/408 trio, plus asserting no upload is left on disk.
+
+def test_stt_oversized_content_length_is_413_no_file_left(monkeypatch, tmp_path):
+    _stub_media(monkeypatch)
+    httpd, host, port = _start(tmp_path)
+    try:
+        raw = _raw_request(
+            host, port,
+            b"POST /api/stt HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+            b"Content-Type: audio/wav\r\nContent-Length: 999999999\r\n\r\n",
+        )
+        assert raw.startswith(b"HTTP/1.1 413")
+        assert b"Connection: close" in raw
+        assert _uploads(tmp_path) == [], "an oversized body is rejected before any file is opened"
+    finally:
+        httpd.shutdown()
+
+
+def test_stt_chunked_body_is_rejected_411(monkeypatch, tmp_path):
+    _stub_media(monkeypatch)
+    httpd, host, port = _start(tmp_path)
+    try:
+        raw = _raw_request(
+            host, port,
+            b"POST /api/stt HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+            b"Content-Type: audio/wav\r\nTransfer-Encoding: chunked\r\n\r\n"
+            b"4\r\nRIFF\r\n0\r\n\r\n",
+        )
+        assert raw.startswith(b"HTTP/1.1 411")
+        assert _uploads(tmp_path) == []
+    finally:
+        httpd.shutdown()
+
+
+def test_stt_withheld_body_times_out_408_partial_unlinked(monkeypatch, tmp_path):
+    # A declared-but-withheld body (slowloris) must not pin the handler; the bounded read
+    # returns 408 AND removes the partial upload it had started writing.
+    _stub_media(monkeypatch)
+    monkeypatch.setattr(server, "_BODY_READ_TIMEOUT", 0.3)
+    httpd, host, port = _start(tmp_path)
+    try:
+        raw = _raw_request(
+            host, port,
+            b"POST /api/stt HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+            b"Content-Type: audio/wav\r\nContent-Length: 5000\r\n\r\n",  # promises 5000, sends none
+        )
+        assert raw.startswith(b"HTTP/1.1 408")
+        assert _uploads(tmp_path) == [], "the partial upload must be unlinked on timeout"
     finally:
         httpd.shutdown()
 

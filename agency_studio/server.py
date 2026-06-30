@@ -71,6 +71,14 @@ _BODY_READ_TIMEOUT = 15.0  # seconds
 # failure we set cancel_event so the engine kills the in-flight subprocess promptly.
 _HEARTBEAT_SECONDS = 1.0
 
+# Send deadline for the SSE streaming phase. `_read_body` restores settimeout(None)
+# after the bounded body read, so without this every wfile.write during the stream is
+# fully blocking — a client that opens the connection but stops reading (a full TCP
+# receive window) would pin the handler thread AND let the worker's event queue grow
+# unbounded, while also starving the in-flight kill (a stuck write never sets
+# cancel_event). A bounded send timeout turns that stall into a detected "client gone".
+_STREAM_SEND_TIMEOUT = 30.0
+
 # Loopback hosts the studio is allowed to bind — enforced at the bind point.
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
@@ -231,6 +239,24 @@ def _is_loopback_origin(origin: str) -> bool:
     return parsed.scheme in ("http", "https") and parsed.hostname in _LOOPBACK_HOSTS
 
 
+def _is_loopback_host(host: str) -> bool:
+    """True only when the ``Host`` header names a loopback host (port ignored).
+
+    Pairs with the loopback bind + Origin allowlist to close DNS-rebinding: a remote
+    page on evil.com that rebinds its A record to 127.0.0.1 is treated by the browser
+    as *same-origin* with the studio (so CORS never applies and no preflight is sent),
+    but its request still carries ``Host: evil.com`` — so rejecting a non-loopback Host
+    blocks it even though the loopback bind accepted the connection.
+    """
+    if not host:
+        return False
+    try:
+        hostname = urlparse("//" + host).hostname  # //host[:port] → hostname, port dropped
+    except ValueError:
+        return False
+    return hostname in _LOOPBACK_HOSTS
+
+
 class StudioHandler(BaseHTTPRequestHandler):
     server_version = "AgencyStudio/0.0.0"
     protocol_version = "HTTP/1.1"
@@ -275,6 +301,14 @@ class StudioHandler(BaseHTTPRequestHandler):
         socket must not be reused (``_send_bytes`` emits ``Connection: close``)."""
         self.close_connection = True
         self._send_error_json(status, message)
+
+    def _host_allowed(self) -> bool:
+        """Reject (403) any request whose Host header isn't loopback — the DNS-rebinding
+        guard, enforced before any route runs. Returns False (and answers) when blocked."""
+        if _is_loopback_host(self.headers.get("Host", "")):
+            return True
+        self._reject(403, "forbidden host")
+        return False
 
     def _read_body(self) -> "bytes | None":
         """Read the request body, bounded in size and time. Returns the body bytes,
@@ -365,6 +399,8 @@ class StudioHandler(BaseHTTPRequestHandler):
 
     # ── routing ─────────────────────────────────────────────────────────────
     def do_OPTIONS(self) -> None:  # noqa: N802 (stdlib naming)
+        if not self._host_allowed():
+            return
         self.send_response(204)
         self._cors()
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -373,6 +409,8 @@ class StudioHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self._host_allowed():
+            return
         path = urlparse(self.path).path
         if path == "/api/missions":
             return self._handle_list_missions()
@@ -388,6 +426,8 @@ class StudioHandler(BaseHTTPRequestHandler):
         return self._handle_static(path)
 
     def do_POST(self) -> None:  # noqa: N802
+        if not self._host_allowed():
+            return
         path = urlparse(self.path).path
         if path == "/api/mission":
             return self._handle_run_mission()
@@ -605,6 +645,11 @@ class StudioHandler(BaseHTTPRequestHandler):
 
         threading.Thread(target=_worker, daemon=True).start()
 
+        # Bound every streaming write: _read_body left settimeout(None), so without this
+        # a non-draining client makes wfile.write block forever. A timed-out write is
+        # treated as a gone client (sets cancel_event below), the same as a broken pipe.
+        self.connection.settimeout(_STREAM_SEND_TIMEOUT)
+
         # Drain progress events until the worker signals completion. The get() is
         # bounded so a long, event-silent engine call can't hide a disconnect: on
         # each idle tick we send a heartbeat, and a failed write (client gone) sets
@@ -638,7 +683,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             self.wfile.write(b": heartbeat\n\n")
             self.wfile.flush()
             return True
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, socket.timeout):
             return False
 
     def _send_terminal_frame(self, result_box: dict) -> None:
@@ -677,7 +722,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             self.wfile.write(frame)
             self.wfile.flush()
             return True
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, socket.timeout):
             return False
 
     # ── API: local multimodal (Wave 2 — image / TTS / STT) ────────────────────
