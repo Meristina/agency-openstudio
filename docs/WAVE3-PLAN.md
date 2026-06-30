@@ -1,8 +1,8 @@
 # Wave 3 — Multimodal as a department deliverable · Implementation Plan
 
-> Status: **PLAN (not yet built)**. Produced after a read-only investigation pass +
-> an adversarial multi-agent reflection gate. This plan supersedes the naive sketch
-> in `ROADMAP.md §Wave 3` with the corrections that pass surfaced.
+> Status: **SHIPPED** (all six build-order steps landed). Produced after a read-only
+> investigation pass + an adversarial multi-agent reflection gate. This plan supersedes
+> the naive sketch in `ROADMAP.md §Wave 3` with the corrections that pass surfaced.
 
 ## Goal (ROADMAP, verbatim)
 
@@ -221,4 +221,7 @@ Parse rules (all enforced in `assets.py`):
 3. `asset_clause` param in `cli_engine.py` + byte-identical test.
 4. `render_assets` hook + `## Assets` in `runner_bridge.py` + tests.
 5. Server wiring + `should_cancel` in the asset loop + SSE `asset` phase.
-6. GUI gallery + PDF base_url/data-URI fix.
+6. **DONE** — GUI asset timeline (`asset` SSE phase folded into `timeline.ts`) +
+   per-mission gallery (`AssetGallery.tsx`, from `dossier.assets`) + the PDF orphan fix
+   (`exporter._localize_assets` resolves `/media/<rel>` → on-disk file:// URIs, audio →
+   caption; `export_pdf` gains an optional `assets_root`). **Wave 3 complete.**

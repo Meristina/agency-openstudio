@@ -8,13 +8,14 @@
 > `ModelManager`, integrity-checked `models` resolution, the `/api/image|/api/tts|/api/stt`
 > + `/api/models` endpoints with `/media/` asset serving, and the GUI's Image/Voice tabs +
 > gallery + warm-model chip (the former deferred gallery/ModelManager surface).
-> **Wave 3 — multimodal as a department deliverable — is now IN PROGRESS** (offline
-> backend steps), tracked in `docs/WAVE3-PLAN.md` (which supersedes the naive sketch
-> below): steps 1-5 are landed and reviewed — `/api/tts` voice allowlist (step 1),
-> the `assets.py` marker parser (step 2), agency-kit's additive `asset_clause` engine
-> hook (step 3), the best-effort `render_assets` bridge hook + `## Assets` (step 4), and
-> `assets.render`/`rewrite_delivered` + server wiring with the SSE `asset` phase (step 5);
-> step 6 (GUI gallery + PDF base_url/data-URI fix) remains. Waves **4-6**
+> **Wave 3 — multimodal as a department deliverable — is now SHIPPED**, tracked in
+> `docs/WAVE3-PLAN.md` (which supersedes the naive sketch below): `/api/tts` voice
+> allowlist (step 1), the `assets.py` marker parser (step 2), agency-kit's additive
+> `asset_clause` engine hook (step 3), the best-effort `render_assets` bridge hook +
+> `## Assets` (step 4), `assets.render`/`rewrite_delivered` + server wiring with the SSE
+> `asset` phase (step 5), and the GUI asset timeline + per-mission gallery + the PDF
+> `/media`→on-disk fix (step 6). Like Wave 2, its offline suite runs anywhere; the live
+> render path needs the Apple Silicon Mac. Waves **4-6**
 > (RAG, web search, MCP, extensions) remain deferred. Setup for Wave 2: Python 3.10+ venv
 > + `[media]` extra + system `ffmpeg` (STT); image defaults to a non-gated 8-bit
 > FLUX.1-schnell mirror (no HF login).
@@ -191,7 +192,7 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
 - **Deferred (by design)**: the optional `local` HTTP **LLM** engine stays off on 16 GB
   (image and a local LLM would be co-resident) — only multimodal runs locally here.
 
-### Wave 3 — Multimodal as a *department deliverable* *(Mac/Metal — IN PROGRESS)*
+### Wave 3 — Multimodal as a *department deliverable* *(Mac/Metal — SHIPPED)*
 > The naive sketch below is **superseded by `docs/WAVE3-PLAN.md`** (after an adversarial
 > reflection pass): assets live under `studio_assets/` (not `missions/<id>/assets/`, which
 > would orphan them from `/media`), and the clause is injected via a new additive
@@ -202,7 +203,8 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
   `assets.py` marker parser · ✅ step 3 additive `asset_clause` engine hook · ✅ step 4
   best-effort `render_assets` bridge hook + `## Assets` · ✅ step 5 `assets.render`/
   `rewrite_delivered` + server wiring + SSE `asset` phase + `should_cancel` in the render
-  loop · ⏳ step 6 GUI gallery + PDF fix.
+  loop · ✅ step 6 GUI asset timeline + per-mission gallery (`AssetGallery`) + PDF
+  `/media`→on-disk localization (`exporter._localize_assets`). **Wave 3 complete.**
 
 ### Wave 4 — RAG / LocalDocs *(model downloads — deferred)*
 - **Ingestion via `microsoft/markitdown`** (MIT) → Markdown. In the `[studio]` extra.
