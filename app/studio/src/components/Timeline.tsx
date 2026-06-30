@@ -95,6 +95,13 @@ export default function Timeline({ events }: { events: MissionEvent[] }) {
           <p className="error">{model.terminal.message}</p>
         </section>
       )}
+
+      {model.terminal?.kind === "cancelled" && (
+        <section className="phase terminal">
+          <h4>Stopped</h4>
+          <p className="muted">Mission cancelled — it was stopped before saving.</p>
+        </section>
+      )}
     </div>
   );
 }

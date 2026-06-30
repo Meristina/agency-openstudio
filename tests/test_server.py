@@ -11,6 +11,7 @@ import http.client
 import json
 import socket
 import threading
+import time
 
 import pytest
 
@@ -126,9 +127,11 @@ def test_post_mission_streams_full_sse_timeline(monkeypatch, tmp_path):
         httpd.shutdown()
 
     phases = [e["phase"] for e in events]
-    # route → dept(s) → synth → inspect → done, in order.
-    assert phases[0] == "route"
-    assert events[0]["route"] == ["solve", "product"]
+    # run → route → dept(s) → synth → inspect → done, in order.
+    assert phases[0] == "run"
+    assert server._RUN_ID_RE.match(events[0]["run_id"]), "first frame announces the run id"
+    route_event = next(e for e in events if e["phase"] == "route")
+    assert route_event["route"] == ["solve", "product"]
     assert {"phase": "dept", "dept": "solve", "status": "start"} in events
     assert {"phase": "dept", "dept": "product", "status": "done"} in events
     assert any(e["phase"] == "synth" for e in events)
@@ -226,6 +229,74 @@ def test_write_heartbeat_reports_gone_on_broken_pipe():
     handler = server.StudioHandler.__new__(server.StudioHandler)
     handler.wfile = _BrokenWfile()
     assert handler._write_heartbeat() is False, "a broken pipe must read as gone"
+
+
+# ── explicit cancel endpoint (run-id) ───────────────────────────────────────────
+
+def test_cancel_endpoint_sets_event_then_404s_unknown_and_malformed(tmp_path):
+    # POST /api/mission/{run_id}/cancel sets that run's cancel_event (202); an
+    # unknown or malformed run id is a 404 and never mutates the registry.
+    httpd, host, port = _start(tmp_path)
+    cancel_event = threading.Event()
+    run_id = "a" * 32
+    httpd.runs[run_id] = cancel_event  # inject a fake in-flight run
+    try:
+        resp, body = _post(host, port, f"/api/mission/{run_id}/cancel")
+        assert resp.status == 202
+        assert json.loads(body) == {"status": "cancelling", "run_id": run_id}
+        assert cancel_event.is_set(), "cancel must set the registered run's event"
+
+        unknown, _ = _post(host, port, "/api/mission/" + ("b" * 32) + "/cancel")
+        assert unknown.status == 404  # unknown run
+
+        malformed, _ = _post(host, port, "/api/mission/not-a-valid-run/cancel")
+        assert malformed.status == 404  # malformed id, never a registry key
+    finally:
+        httpd.shutdown()
+
+
+def test_endpoint_cancel_stops_an_in_flight_mission_and_emits_cancelled(monkeypatch, tmp_path):
+    # End-to-end: a streaming mission, cancelled via the explicit endpoint from a
+    # second connection, must end with a `cancelled` terminal frame (not `done`).
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_cli import runner_bridge
+    from agency_cli.engines.cli_engine import MissionCancelled
+
+    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None):
+        on_event({"phase": "route", "status": "done", "route": ["solve"]})
+        for _ in range(500):  # ~5s ceiling: a stuck cancel fails the test, never hangs CI
+            if should_cancel():
+                raise MissionCancelled()
+            time.sleep(0.01)
+        return runner_bridge.MissionResult(path=tmp_path, dossier={"verdicts": [], "mission_id": "x"})
+
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
+    httpd, host, port = _start(tmp_path)
+
+    def _cancel_when_registered():
+        for _ in range(500):
+            with httpd.runs_lock:
+                ids = list(httpd.runs)
+            if ids:
+                c = http.client.HTTPConnection(host, port)
+                c.request("POST", f"/api/mission/{ids[0]}/cancel")
+                c.getresponse().read()
+                return
+            time.sleep(0.01)
+
+    try:
+        threading.Thread(target=_cancel_when_registered, daemon=True).start()
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=json.dumps({"goal": "g"}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    phases = [e["phase"] for e in events]
+    assert phases[0] == "run", "the run id is announced first"
+    assert phases[-1] == "cancelled", "an endpoint cancel ends the stream with a cancelled frame"
+    assert "done" not in phases, "a cancelled mission must not also report done"
 
 
 def test_post_mission_missing_goal_is_400(tmp_path):
@@ -444,6 +515,13 @@ def test_options_preflight_grants_loopback_cors(tmp_path):
 def _get(host, port, path):
     conn = http.client.HTTPConnection(host, port)
     conn.request("GET", path)
+    resp = conn.getresponse()
+    return resp, resp.read()
+
+
+def _post(host, port, path, body=None):
+    conn = http.client.HTTPConnection(host, port)
+    conn.request("POST", path, body=body)
     resp = conn.getresponse()
     return resp, resp.read()
 
