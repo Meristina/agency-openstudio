@@ -241,18 +241,37 @@ class StudioHandler(BaseHTTPRequestHandler):
     # ── API: list / get saved missions ───────────────────────────────────────
     def _handle_list_missions(self) -> None:
         from agency_kit import store
-        self._send_json({"missions": store.list_missions()})
+        # Scope history to THIS project (the server's --path), not the global store —
+        # so the GUI doesn't list every mission ever run on the machine.
+        project_root = self.server.project_root  # type: ignore[attr-defined]
+        self._send_json({"missions": store.list_missions(project_root=project_root)})
+
+    def _load_scoped_dossier(self, mission_id: str) -> "dict | None":
+        """Load a saved dossier and confirm it belongs to THIS project (the server's
+        --path). Sends a 404 and returns None for a missing/unreadable/corrupt
+        dossier or a mission from another project; otherwise returns the dossier.
+        Shared by GET-by-id and PDF so both scope identically — a foreign mission is
+        never disclosed, and a corrupt dossier.json is a clean 404, not a dropped
+        connection (do_GET has no top-level handler)."""
+        from agency_kit import store
+        try:
+            dossier = store.load(mission_id)
+        except (OSError, ValueError):  # missing/unreadable file, or invalid JSON
+            self._send_error_json(404, f"mission '{mission_id}' not found")
+            return None
+        if not store.mission_in_project(dossier, self.server.project_root):  # type: ignore[attr-defined]
+            self._send_error_json(404, f"mission '{mission_id}' not found")
+            return None
+        return dossier
 
     def _handle_get_mission(self, mission_id: str) -> None:
-        from agency_kit import store
         # Reject traversal / malformed ids before they reach the filesystem.
         mission_id = _safe_mission_id(mission_id)
         if mission_id is None:
             return self._send_error_json(404, "mission not found")
-        try:
-            self._send_json(store.load(mission_id))
-        except FileNotFoundError:
-            self._send_error_json(404, f"mission '{mission_id}' not found")
+        dossier = self._load_scoped_dossier(mission_id)
+        if dossier is not None:
+            self._send_json(dossier)
 
     def _handle_mission_pdf(self, mission_id: str) -> None:
         """Export a mission's deliverable to PDF and stream it back.
@@ -263,6 +282,10 @@ class StudioHandler(BaseHTTPRequestHandler):
         mission_id = _safe_mission_id(mission_id)
         if mission_id is None:
             return self._send_error_json(404, "mission not found")
+        # Scope before rendering: don't export another project's deliverable into a
+        # shareable PDF (same confinement + corrupt-dossier handling as GET-by-id).
+        if self._load_scoped_dossier(mission_id) is None:
+            return
         from agency_cli import exporter
         try:
             pdf_path = exporter.export_pdf(mission_id)
@@ -464,7 +487,10 @@ def make_server(
         candidate = Path(project_root).resolve() / "app" / "studio" / "dist"
         static_root = candidate if candidate.is_dir() else None
     httpd = _QuietThreadingHTTPServer((host, port), StudioHandler)
-    httpd.project_root = str(project_root)          # type: ignore[attr-defined]
+    # Resolve once at startup so history scoping is bound to a fixed directory, not
+    # re-derived from the process CWD on each request (a default --path "." would
+    # otherwise drift if the server's CWD ever changed).
+    httpd.project_root = str(Path(project_root).resolve())  # type: ignore[attr-defined]
     httpd.static_root = Path(static_root) if static_root else None  # type: ignore[attr-defined]
     return httpd
 

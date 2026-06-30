@@ -250,6 +250,69 @@ def test_missions_list_and_get_roundtrip(monkeypatch, tmp_path):
         httpd.shutdown()
 
 
+def test_history_is_scoped_to_the_server_project(monkeypatch, tmp_path):
+    # The GUI must list only THIS project's missions, not every mission in the
+    # global ~/.agency store (the server is launched with --path).
+    monkeypatch.setenv("HOME", str(tmp_path))
+    proj_a = tmp_path / "projA"
+    proj_b = tmp_path / "projB"
+    _save_dossier("001-in-a", proj_a, goal="mission in A")
+    _save_dossier("002-in-b", proj_b, goal="mission in B")
+
+    httpd, host, port = _start(proj_a)
+    try:
+        _resp, body = _get(host, port, "/api/missions")
+        goals = [m["goal"] for m in json.loads(body)["missions"]]
+        assert "mission in A" in goals
+        assert "mission in B" not in goals  # other project's mission is not listed
+    finally:
+        httpd.shutdown()
+
+
+def test_get_mission_from_another_project_is_404(monkeypatch, tmp_path):
+    # A confined server (--path projA) must not disclose projB's dossier by id.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _save_dossier("20260101-000000-foreign", tmp_path / "projB",
+                  goal="confidential", delivered="secret deliverable")
+    httpd, host, port = _start(tmp_path / "projA")
+    try:
+        resp, body = _get(host, port, "/api/mission/20260101-000000-foreign")
+        assert resp.status == 404
+        assert b"confidential" not in body and b"secret" not in body
+    finally:
+        httpd.shutdown()
+
+
+def test_get_legacy_unstamped_mission_is_served(monkeypatch, tmp_path):
+    # A mission with no project_root stamp (pre-feature) stays openable by id.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_kit import store
+    store.save({"mission_id": "20260101-000000-legacy", "goal": "old mission",
+                "verdicts": [], "delivered": "x"})  # no project_root
+    httpd, host, port = _start(tmp_path / "projA")
+    try:
+        resp, body = _get(host, port, "/api/mission/20260101-000000-legacy")
+        assert resp.status == 200
+        assert json.loads(body)["goal"] == "old mission"
+    finally:
+        httpd.shutdown()
+
+
+def test_get_corrupt_dossier_is_404_not_crash(monkeypatch, tmp_path):
+    # A truncated/invalid dossier.json must yield a clean 404, not an uncaught
+    # JSONDecodeError that drops the connection (do_GET has no top-level handler).
+    monkeypatch.setenv("HOME", str(tmp_path))
+    mdir = tmp_path / ".agency" / "missions" / "20260101-000000-corrupt"
+    mdir.mkdir(parents=True)
+    (mdir / "dossier.json").write_text("{ not valid json", encoding="utf-8")
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, _ = _get(host, port, "/api/mission/20260101-000000-corrupt")
+        assert resp.status == 404
+    finally:
+        httpd.shutdown()
+
+
 def test_get_mission_rejects_path_traversal(monkeypatch, tmp_path):
     # A traversal id must be rejected before it can reach store.load(), which
     # builds a filesystem path from the id (docs/SECURITY.md).
@@ -319,7 +382,20 @@ def _get(host, port, path):
     return resp, resp.read()
 
 
+def _save_dossier(mission_id, project_root, *, goal="demo", delivered="x"):
+    """Save a dossier into the (HOME-isolated) global store, stamped with the
+    canonical project_root, so the server's project-scope gate admits it."""
+    from agency_kit import store
+    store.save({
+        "mission_id": mission_id, "goal": goal,
+        "project_root": store.canonical_project_root(project_root),
+        "verdicts": [], "delivered": delivered,
+    })
+
+
 def test_mission_pdf_streams_the_exported_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _save_dossier("20260630-101010-demo", tmp_path)
     pdf = tmp_path / "deliverable.pdf"
     pdf.write_bytes(b"%PDF-1.7\nfake pdf bytes\n%%EOF")
     monkeypatch.setattr("agency_cli.exporter.export_pdf", lambda _mid: pdf)
@@ -335,6 +411,9 @@ def test_mission_pdf_streams_the_exported_file(monkeypatch, tmp_path):
 
 
 def test_mission_pdf_missing_extra_is_501(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _save_dossier("20260630-101010-demo", tmp_path)
+
     def _no_extra(_mid):
         raise ImportError('WeasyPrint not installed. Run:  pip install -e ".[pdf]"')
 
@@ -348,7 +427,22 @@ def test_mission_pdf_missing_extra_is_501(monkeypatch, tmp_path):
         httpd.shutdown()
 
 
+def test_mission_pdf_unknown_mission_is_404(monkeypatch, tmp_path):
+    # No saved dossier → the scope gate returns 404 before any export attempt.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, _ = _get(host, port, "/api/mission/20260630-101010-demo/pdf")
+        assert resp.status == 404
+    finally:
+        httpd.shutdown()
+
+
 def test_mission_pdf_no_deliverable_is_404(monkeypatch, tmp_path):
+    # Dossier exists (passes the scope gate) but has no deliverable.md, so
+    # export_pdf raises and the OSError→404 branch must answer cleanly.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _save_dossier("20260630-101010-demo", tmp_path)
     monkeypatch.setattr(
         "agency_cli.exporter.export_pdf",
         lambda _mid: (_ for _ in ()).throw(FileNotFoundError("no deliverable")),
@@ -379,6 +473,9 @@ def test_mission_pdf_rejects_path_traversal(monkeypatch, tmp_path):
 def test_mission_pdf_render_error_is_500(monkeypatch, tmp_path):
     # A render failure AFTER the [pdf] extra is present (not ImportError/OSError)
     # must surface as a clean 500, not a dropped connection.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _save_dossier("20260630-101010-demo", tmp_path)
+
     def _boom(_mid):
         raise RuntimeError("WeasyPrint failed to render")
 
@@ -388,6 +485,24 @@ def test_mission_pdf_render_error_is_500(monkeypatch, tmp_path):
         resp, body = _get(host, port, "/api/mission/20260630-101010-demo/pdf")
         assert resp.status == 500
         assert "PDF export failed" in json.loads(body)["error"]
+    finally:
+        httpd.shutdown()
+
+
+def test_mission_pdf_from_another_project_is_404(monkeypatch, tmp_path):
+    # Scoping the LIST isn't enough: the PDF export of a foreign mission must also
+    # be refused (it produces a shareable artifact), and export must not even run.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _save_dossier("20260101-000000-foreign", tmp_path / "projB")
+
+    def _must_not_export(_mid):
+        raise AssertionError("export_pdf must not run for a foreign mission")
+
+    monkeypatch.setattr("agency_cli.exporter.export_pdf", _must_not_export)
+    httpd, host, port = _start(tmp_path / "projA")  # server confined to projA
+    try:
+        resp, _ = _get(host, port, "/api/mission/20260101-000000-foreign/pdf")
+        assert resp.status == 404
     finally:
         httpd.shutdown()
 
