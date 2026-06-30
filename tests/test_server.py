@@ -276,3 +276,69 @@ def test_cors_echoes_loopback_origin_never_wildcard(tmp_path):
         assert resp2.getheader("Access-Control-Allow-Origin") is None
     finally:
         httpd.shutdown()
+
+
+# ── PDF export: GET /api/mission/{id}/pdf ───────────────────────────────────────
+
+def _get(host, port, path):
+    conn = http.client.HTTPConnection(host, port)
+    conn.request("GET", path)
+    resp = conn.getresponse()
+    return resp, resp.read()
+
+
+def test_mission_pdf_streams_the_exported_file(monkeypatch, tmp_path):
+    pdf = tmp_path / "deliverable.pdf"
+    pdf.write_bytes(b"%PDF-1.7\nfake pdf bytes\n%%EOF")
+    monkeypatch.setattr("agency_cli.exporter.export_pdf", lambda _mid: pdf)
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _get(host, port, "/api/mission/20260630-101010-demo/pdf")
+        assert resp.status == 200
+        assert resp.getheader("Content-Type") == "application/pdf"
+        assert "attachment" in (resp.getheader("Content-Disposition") or "")
+        assert body.startswith(b"%PDF")
+    finally:
+        httpd.shutdown()
+
+
+def test_mission_pdf_missing_extra_is_501(monkeypatch, tmp_path):
+    def _no_extra(_mid):
+        raise ImportError('WeasyPrint not installed. Run:  pip install -e ".[pdf]"')
+
+    monkeypatch.setattr("agency_cli.exporter.export_pdf", _no_extra)
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _get(host, port, "/api/mission/20260630-101010-demo/pdf")
+        assert resp.status == 501
+        assert "pip install" in json.loads(body)["error"]
+    finally:
+        httpd.shutdown()
+
+
+def test_mission_pdf_no_deliverable_is_404(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "agency_cli.exporter.export_pdf",
+        lambda _mid: (_ for _ in ()).throw(FileNotFoundError("no deliverable")),
+    )
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, _ = _get(host, port, "/api/mission/20260630-101010-demo/pdf")
+        assert resp.status == 404
+    finally:
+        httpd.shutdown()
+
+
+def test_mission_pdf_rejects_path_traversal(monkeypatch, tmp_path):
+    # The id is validated before export_pdf runs — a traversal id never exports.
+    def _must_not_export(_mid):
+        raise AssertionError("export_pdf must not run for a traversal id")
+
+    monkeypatch.setattr("agency_cli.exporter.export_pdf", _must_not_export)
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _get(host, port, "/api/mission/../../../../etc/passwd/pdf")
+        assert resp.status == 404
+        assert b"root:" not in body
+    finally:
+        httpd.shutdown()

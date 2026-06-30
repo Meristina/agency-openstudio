@@ -16,7 +16,7 @@ top. Three layers:
 └───────────────────────────────┬────────────────────────────────────┘
                                 ▼  HTTP / SSE
 ┌─ agency_studio/server.py — http.server stdlib, bind 127.0.0.1 ─────┐
-│  POST /api/mission (SSE) · GET /api/missions · /api/mission/{id}    │
+│  POST /api/mission · GET /api/missions · /api/mission/{id} (+ /pdf) │
 │  /api/image · /api/tts · /api/stt · /api/docs · /api/models         │
 └───────────────────────────────┬────────────────────────────────────┘
                                 ▼

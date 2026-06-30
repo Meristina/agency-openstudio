@@ -16,6 +16,7 @@ Endpoints:
   POST /api/mission           run a mission, stream SSE progress
   GET  /api/missions          list saved missions (JSON)
   GET  /api/mission/{id}      load one saved dossier (JSON)
+  GET  /api/mission/{id}/pdf  export the deliverable as PDF ([pdf] extra)
   GET  /  /<static>           serve the built GUI (app/studio/dist)
 """
 
@@ -101,14 +102,24 @@ class StudioHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
 
-    def _send_json(self, obj, status: int = 200) -> None:
-        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+    def _send_bytes(
+        self, body: bytes, content_type: str, status: int = 200,
+        extra_headers: "dict[str, str] | None" = None,
+    ) -> None:
+        """Send a complete byte body with Content-Length + CORS. The single way
+        non-streaming responses are written (JSON, static files, PDF)."""
         self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self._cors()
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_json(self, obj, status: int = 200) -> None:
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self._send_bytes(body, "application/json; charset=utf-8", status)
 
     def _send_error_json(self, status: int, message: str) -> None:
         self._send_json({"error": message}, status=status)
@@ -127,7 +138,10 @@ class StudioHandler(BaseHTTPRequestHandler):
         if path == "/api/missions":
             return self._handle_list_missions()
         if path.startswith("/api/mission/"):
-            return self._handle_get_mission(path[len("/api/mission/"):])
+            rest = path[len("/api/mission/"):]
+            if rest.endswith("/pdf"):
+                return self._handle_mission_pdf(rest[: -len("/pdf")])
+            return self._handle_get_mission(rest)
         return self._handle_static(path)
 
     def do_POST(self) -> None:  # noqa: N802
@@ -151,6 +165,28 @@ class StudioHandler(BaseHTTPRequestHandler):
             self._send_json(store.load(mission_id))
         except FileNotFoundError:
             self._send_error_json(404, f"mission '{mission_id}' not found")
+
+    def _handle_mission_pdf(self, mission_id: str) -> None:
+        """Export a mission's deliverable to PDF and stream it back.
+
+        Uses agency-kit's ``exporter.export_pdf`` (the ``[pdf]`` extra). A missing
+        extra yields 501 (with install guidance) rather than a 500 traceback.
+        """
+        mission_id = urlparse(mission_id).path.strip("/")
+        if not _MISSION_ID_RE.match(mission_id):
+            return self._send_error_json(404, "mission not found")
+        from agency_cli import exporter
+        try:
+            pdf_path = exporter.export_pdf(mission_id)
+        except ImportError as exc:  # [pdf] extra not installed
+            return self._send_error_json(501, str(exc))
+        except FileNotFoundError:
+            return self._send_error_json(404, f"no deliverable for mission '{mission_id}'")
+        body = Path(pdf_path).read_bytes()
+        self._send_bytes(
+            body, "application/pdf",
+            extra_headers={"Content-Disposition": f'attachment; filename="{mission_id}.pdf"'},
+        )
 
     # ── API: run a mission, stream SSE ────────────────────────────────────────
     def _handle_run_mission(self) -> None:
@@ -275,12 +311,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             if not target.is_file():
                 return self._send_error_json(404, "not found")
         body = target.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", _CONTENT_TYPES.get(target.suffix.lower(), "application/octet-stream"))
-        self.send_header("Content-Length", str(len(body)))
-        self._cors()
-        self.end_headers()
-        self.wfile.write(body)
+        content_type = _CONTENT_TYPES.get(target.suffix.lower(), "application/octet-stream")
+        self._send_bytes(body, content_type)
 
     # Quieter logging — one line per request is enough for a local tool.
     def log_message(self, fmt: str, *args) -> None:  # noqa: A002

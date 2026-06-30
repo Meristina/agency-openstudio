@@ -30,9 +30,12 @@ studio = [
     # "markitdown",      # Wave 4 — MIT, document → markdown ingestion
     # "<embeddings-lib>", # Wave 4 — small local embedding model
 ]
-# PDF export (reused from agency-kit's exporter).
+# PDF export of a mission deliverable (agency-kit's exporter.export_pdf), exposed
+# at GET /api/mission/{id}/pdf. Both imported lazily inside export_pdf, so the
+# server runs fine without them — the endpoint returns 501 until installed.
 pdf = [
-    # "weasyprint",      # Wave 1 — PDF export of dossiers
+    "weasyprint",        # HTML → PDF renderer (pure Python)
+    "markdown",          # deliverable.md → HTML before WeasyPrint
 ]
 dev = [
     "pytest",

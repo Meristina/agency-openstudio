@@ -32,6 +32,11 @@ export default function MissionDetail({ dossier, loading }: { dossier: Dossier |
         <div className="detail-meta">
           {dossier.mission_id && <code>{dossier.mission_id}</code>}
           {verdict && <span className={`badge ${verdictClass(verdict)}`}>{verdict}</span>}
+          {dossier.mission_id && (
+            <a className="pdf-link" href={`/api/mission/${encodeURIComponent(dossier.mission_id)}/pdf`}>
+              Export PDF
+            </a>
+          )}
         </div>
         {dossier.route && dossier.route.length > 0 && (
           <div className="chips">
