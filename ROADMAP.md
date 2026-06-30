@@ -1,11 +1,16 @@
 # Roadmap — Agency Studio
 
-> **Status: Waves 0-1 shipped (core).** The stdlib server + `on_event`/`should_cancel`
-> hooks and the React Mission Console (live SSE timeline, project-scoped history, PDF
-> export, full "Stop mission") are built, reviewed, and tested in a Linux session.
-> The only Wave-1 items left — the **gallery** and **ModelManager** components — are
-> deferred *with* the multimodal layer they front (nothing to show until Wave 2-3).
-> Waves **2-6**: target Apple Silicon (Metal) + model downloads → deferred to the Mac.
+> **Status: Waves 0-2 shipped.** Core (0-1): the stdlib server + `on_event`/
+> `should_cancel` hooks and the React Mission Console (live SSE timeline, project-scoped
+> history, PDF export, full "Stop mission"). **Wave 2 — local multimodal (image / STT /
+> TTS) on Apple Silicon (Metal)** is built, reviewed, and **validated live on the target
+> Mac (M4, 16 GB)** end-to-end through the HTTP server: the `local_media` warm
+> `ModelManager`, integrity-checked `models` resolution, the `/api/image|/api/tts|/api/stt`
+> + `/api/models` endpoints with `/media/` asset serving, and the GUI's Image/Voice tabs +
+> gallery + warm-model chip (the former deferred gallery/ModelManager surface).
+> Waves **3-6** (multimodal-as-deliverable, RAG, web search, MCP, extensions) remain
+> deferred. Setup for Wave 2: Python 3.10+ venv + `[media]` extra + system `ffmpeg` (STT);
+> image defaults to a non-gated 8-bit FLUX.1-schnell mirror (no HF login).
 
 ## Context
 
@@ -41,7 +46,7 @@ React/Vite GUI (app/studio, 127.0.0.1)
    └─HTTP/SSE→ agency_studio/server.py (http.server stdlib, bind 127.0.0.1)
                   └─→ agency-kit CORE: run_mission_cli(goal, engine, on_event=…)
                          ├─ department tools: web search · image/TTS deliverable · RAG · MCP
-                         └─ local inference (Metal, mutually exclusive): SD · Whisper · Kokoro · embeddings
+                         └─ local inference (Metal, mutually exclusive): FLUX · Whisper · Kokoro · embeddings
 ```
 
 ---
@@ -79,8 +84,8 @@ React/Vite GUI (app/studio, 127.0.0.1)
   `GET /api/missions`.
 - **PDF export**: `exporter.export_pdf(mission_id)` via `GET /api/mission/{id}/pdf` (`[pdf]` extra). ✅
 - Rich components: the **History sidebar** is built ✅. The **gallery** (generated
-  assets) and **ModelManager** (local SD/Whisper/Kokoro) are **deferred with the
-  multimodal layer** — they have nothing to front until Wave 2-3 (Mac/Metal).
+  assets) and a **warm-model status chip** (the lightweight ModelManager surface) shipped
+  in **Wave 2** ✅ alongside the FLUX/Whisper/Kokoro layer they front.
 
 **Post-review refinements (shipped):**
 - **GUI polish**: cited sources rendered as safe (`noopener noreferrer`) links,
@@ -135,12 +140,38 @@ React/Vite GUI (app/studio, 127.0.0.1)
   extension, if ever needed: surface in-flight runs in the GUI so a run can be
   cancelled from another tab/device.)
 
-### Wave 2 — Local multimodal inference, hardened *(Mac/Metal — deferred)*
-- **`agency_studio/engines/local_media.py`**: spawn SD/Whisper/Kokoro, **Metal only**,
-  **mutually exclusive** image↔LLM loading.
-- Mac arm64 backend setup; models **git-ignored**; validate URLs + **checksums**.
-- Endpoints `POST /api/image` · `/api/tts` · `/api/stt`. GUI: Image/Voice tabs.
-- Optional `local` HTTP engine (disabled on 16 GB): separate dispatch path.
+### Wave 2 — Local multimodal inference, hardened *(Mac/Metal)* — **shipped**
+Built, reviewed (high-effort `/code-review` per brick), and **validated live on the
+target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
+
+- ✅ **`agency_studio/engines/local_media.py`** — warm single-resident `ModelManager`.
+  The heavy LLM runs remotely (Claude CLI), so it never occupies local RAM; only the
+  multimodal models compete, and they stay **warm** for fast repeats. At most one model
+  is resident — switching modality (image ↔ voice) **evicts** the previous and frees the
+  Metal buffer cache. A cheap import **probe before eviction** means a request for an
+  uninstalled modality never destroys a working warm model. A lock serialises Metal use.
+  - **image** — FLUX.1-schnell via **mflux** (MIT); **STT** — Whisper large-v3-turbo via
+    **mlx-whisper** (MIT); **TTS** — Kokoro-82M via **kokoro-onnx** (MIT). All lazy-imported
+    behind the `[media]` extra; `MediaUnavailable` (an `ImportError`) → clean **501**.
+- ✅ **`agency_studio/engines/models.py`** — integrity-checked model resolution. Hub
+  models (mflux/whisper) ride HF's content-addressed cache; the two direct Kokoro files
+  are pinned by URL (https + host **allowlist**, re-validated on **every redirect hop**)
+  and **SHA-256**, verified on **every load** (cache hits included). Weights live in the
+  OS cache (~18 GB), never in the repo.
+- ✅ **Endpoints** `POST /api/image` · `/api/tts` · `/api/stt` · `GET /api/models`, with
+  generated assets served read-only under `/media/` (`path_inside()`-guarded). Image
+  params are range-checked (no unbounded-compute OOM); STT streams the upload to disk in
+  bounded chunks; back-end/model-fetch failures are 5xx, input errors 400.
+- ✅ **GUI** — Image/Voice **tabs**, a session **gallery**, and a warm-model **status
+  chip** (the former deferred Wave-1 gallery/ModelManager surface). Full ARIA tab
+  pattern; views stay mounted so a tab switch never tears down a running mission.
+- **Model access**: the official `black-forest-labs/FLUX.1-schnell` HF repo is **gated**
+  (license + login). The default is therefore a **non-gated, pre-quantized 8-bit mflux
+  mirror** (`dhairyashil/FLUX.1-schnell-mflux-8bit`, Apache-2.0 — the repo mflux's own
+  docs point to). 8-bit keeps quality visibly on par with full precision; 4-bit deviates.
+- **System dependency**: STT needs **`ffmpeg`** on PATH (`mlx-whisper` shells out to it).
+- **Deferred (by design)**: the optional `local` HTTP **LLM** engine stays off on 16 GB
+  (image and a local LLM would be co-resident) — only multimodal runs locally here.
 
 ### Wave 3 — Multimodal as a *department deliverable* *(Mac/Metal — deferred)*
 - Hook in agency-kit's `_dept_prompt` + post-processing that detects an asset
@@ -169,10 +200,14 @@ React/Vite GUI (app/studio, 127.0.0.1)
 
 ## Files (during implementation)
 
-**Built (Wave 0)**: `agency_studio/server.py` · `agency_studio/cli.py` · `app/studio/` ·
-`tests/` · `pyproject.toml` (`agency-studio` script + `[studio]` extra).
-**Deferred** (will live under `agency_studio/`): `engines/local_media.py` · `rag.py` ·
-`websearch.py` · `mcp_client.py` · `knowledge.py`.
+**Built (Wave 0-1)**: `agency_studio/server.py` · `agency_studio/cli.py` · `app/studio/` ·
+`tests/` · `pyproject.toml` (`agency-studio` script + extras).
+**Built (Wave 2)**: `agency_studio/engines/local_media.py` · `engines/models.py` ·
+the media endpoints + `/media/` serving in `server.py` · the Image/Voice tabs, gallery,
+and model-status chip in `app/studio/src/` · `[media]` extra · `tests/test_local_media.py`
++ `tests/test_server_media.py`.
+**Deferred** (will live under `agency_studio/`): `rag.py` · `websearch.py` ·
+`mcp_client.py` · `knowledge.py`.
 
 **As-built launcher**: `agency_studio` is a **standalone package** with its own
 `build_parser()`/`main()` and a separate `agency-studio` console script. It **imports**
@@ -195,6 +230,14 @@ param via `_emit`) · `runner_bridge.run` (threads `on_event`).
 4. Security: `curl --path-as-is http://127.0.0.1:<port>/../../../../etc/passwd` → 404 ;
    `lsof -iTCP -sTCP:LISTEN | grep <port>` → **127.0.0.1 only**.
 
-**Waves 2+ (deferred, Mac):**
-5. `POST /api/image|/api/tts|/api/stt` produce assets; image and LLM never loaded together.
-6. RAG: ingest a doc, run a mission, **sourced** excerpts from the doc appear in a deliverable.
+**Wave 2 (shipped — offline tests anywhere; live runs need the Mac):**
+5. Offline: `pytest tests/ -q` covers `local_media` (mutual exclusion, warm reuse,
+   URL/checksum guards) + the media endpoints (501-when-absent, 400/500 mapping,
+   `/media` traversal → 404), all with backends + network stubbed.
+6. Live (Mac): `python3.12 -m venv` + `pip install -e ".[media]"` + `brew install ffmpeg`,
+   then `agency-studio` and exercise `POST /api/image|/api/tts|/api/stt` — validated
+   end-to-end (a TTS clip transcribed back verbatim; real FLUX images served via
+   `/media`). Image and a local LLM are never co-resident (the local LLM engine stays off).
+
+**Waves 3+ (deferred, Mac):**
+7. RAG: ingest a doc, run a mission, **sourced** excerpts from the doc appear in a deliverable.

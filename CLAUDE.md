@@ -10,26 +10,41 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 multimodal layer** (image generation, speech-to-text, text-to-speech, document RAG) and
 a clean web GUI.
 
-> **Current status: Waves 0-1 shipped (core).** The stdlib HTTP/SSE server
+> **Current status: Waves 0-2 shipped.** Core (Wave 0-1): the stdlib HTTP/SSE server
 > (`agency_studio/server.py`), the `agency-studio` CLI (`agency_studio/cli.py`), the React
 > Mission Console (`app/studio/`: live SSE timeline, project-scoped history, PDF export,
-> full "Stop mission"), `tests/`, and `pyproject.toml` are built, reviewed, and tested.
-> The only Wave-1 components left — **gallery** and **ModelManager** — are deferred
-> *with* the multimodal layer they front (nothing to show until Wave 2-3). The build
-> happens in waves; see `ROADMAP.md`. Do **not** invent implementation that the roadmap
-> defers (Waves 2-6); those target the Apple Silicon Mac (Metal) + model downloads.
+> full "Stop mission"), `tests/`, and `pyproject.toml`. **Wave 2 — local multimodal
+> (image / STT / TTS) on Apple Silicon (Metal)** — is now built, reviewed, and
+> **validated live on the target Mac (M4, 16 GB)**: `agency_studio/engines/local_media.py`
+> (warm single-resident `ModelManager`) + `models.py` (integrity-checked model
+> resolution), the `POST /api/image|/api/tts|/api/stt` + `GET /api/models` endpoints with
+> `/media/` asset serving, and the GUI's **Image/Voice tabs, gallery, and warm-model
+> status chip** (the former deferred Wave-1 gallery/ModelManager surface). Models load
+> **mutually exclusive** and stay **warm** for fast repeat calls.
+> **Waves 3-6 remain deferred** (multimodal-as-department-deliverable, RAG, web search,
+> MCP, advanced extensions); see `ROADMAP.md`. Do **not** invent implementation that the
+> roadmap defers.
+>
+> **Running Wave 2 (target Mac):** a **Python 3.10+ venv** with the `[media]` extra
+> (`pip install -e ".[media]"`), plus **`ffmpeg`** on PATH for speech-to-text
+> (`brew install ffmpeg`). The image model defaults to a **non-gated, pre-quantized
+> 8-bit FLUX.1-schnell mirror** (`engines/models.py` `IMAGE_MODEL_REPO`) so no Hugging
+> Face login is needed; weights (~18 GB total) download once into the OS cache.
 
 ## Design principles (do not violate)
 
 - **Brain = Claude CLI subscription.** Heavy reasoning (commander, departments,
   synthesis, inspector) runs on Opus via the `claude` CLI (agency-kit's `claude-code`
   engine). Zero marginal cost. The local layer never carries heavy reasoning.
-- **Local = multimodal only, Apple Silicon / Metal.** Stable Diffusion, Whisper,
-  Kokoro, RAG embeddings — loaded **mutually exclusive** (image and LLM never co-resident)
-  because the target machine is a **16 GB Mac**.
+- **Local = multimodal only, Apple Silicon / Metal.** FLUX (image), Whisper (STT),
+  Kokoro (TTS), RAG embeddings — loaded **mutually exclusive** (image and a local LLM
+  never co-resident) because the target machine is a **16 GB Mac**.
 - **Zero runtime dependencies for the core.** The HTTP server is Python `http.server`
-  stdlib (mirrors agency-kit's stdlib-only ethos). Extras (`[studio]`, `[pdf]`) cover
-  RAG/build/export only.
+  stdlib (mirrors agency-kit's stdlib-only ethos). Extras cover opt-in features only and
+  are **lazily imported** so the core boots without them: `[media]` (Wave 2 — mflux /
+  mlx-whisper / kokoro-onnx), `[pdf]` (export), `[studio]` (Wave 4 RAG). A multimodal
+  request with `[media]` absent returns a clean **501 + install hint** (the same pattern
+  as `[pdf]`).
 - **Security is non-negotiable, from Wave 0.** Bind `127.0.0.1` (never `0.0.0.0`), no
   `Access-Control-Allow-Origin: *`, `path_inside()` guard on every static file handler,
   validate download URLs and verify binary checksums. See `docs/SECURITY.md`.
@@ -63,9 +78,11 @@ Agency Studio does **not** reimplement agency-kit's mission loop. It wraps it:
 ## Build order
 
 Follow `ROADMAP.md` exactly. Waves **0-1** (stdlib server + event hook + React/Vite
-Mission Console) are buildable and testable on Linux. Waves **2-6** (SD/Whisper/Kokoro
-on Metal, RAG with model downloads, web search, MCP, advanced extensions) target the
-Apple Silicon Mac and are deferred.
+Mission Console) are buildable and testable on Linux. **Wave 2** (FLUX/Whisper/Kokoro on
+Metal) is **shipped** — its unit/HTTP tests run offline anywhere (backends + network
+stubbed), but the live model runs require the Apple Silicon Mac. Waves **3-6** (multimodal
+as a department deliverable, RAG with model downloads, web search, MCP, advanced
+extensions) remain deferred.
 
 ## Conventions
 
