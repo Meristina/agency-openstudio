@@ -40,6 +40,24 @@ DEFAULT_PORT = 8765
 # lying/oversized Content-Length that would otherwise block it on rfile.read().
 _MAX_BODY_BYTES = 1 << 20  # 1 MiB
 
+# Upper bound on an uploaded audio body for speech-to-text (POST /api/stt). Audio
+# clips are larger than a JSON mission request, so STT gets its own (still bounded)
+# ceiling rather than relaxing _MAX_BODY_BYTES for every route. The body is streamed
+# straight to disk in _READ_CHUNK pieces (never held whole in RAM).
+_MAX_AUDIO_BYTES = 32 << 20  # 32 MiB
+
+# Chunk size for streaming a large request body to disk (STT upload).
+_READ_CHUNK = 1 << 16  # 64 KiB
+
+# Bounds on image-generation parameters (POST /api/image). The request BYTE size is
+# bounded, but the COMPUTE it triggers is not — an unclamped width/height/steps could
+# allocate a huge tensor that OOMs the 16 GB Mac while holding the shared media lock,
+# wedging every media route. So dimensions + step count are range-checked; a value
+# outside the envelope is a 400, never silently accepted.
+_IMAGE_MIN_DIM = 256
+_IMAGE_MAX_DIM = 1536
+_IMAGE_MAX_STEPS = 8  # FLUX.1-schnell is distilled for 1-4 steps; 8 is ample headroom
+
 # Wall-clock bound on reading a request body. Without it a client that declares a
 # Content-Length but withholds the bytes (slowloris) would pin a handler thread
 # forever — ThreadingHTTPServer spawns one unbounded thread per connection.
@@ -84,6 +102,12 @@ _CONTENT_TYPES = {
     ".webp": "image/webp",
     ".gif": "image/gif",
     ".avif": "image/avif",
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".ogg": "audio/ogg",
+    ".webm": "audio/webm",
+    ".flac": "audio/flac",
     ".woff": "font/woff",
     ".woff2": "font/woff2",
     ".ttf": "font/ttf",
@@ -108,6 +132,16 @@ def path_inside(root: Path, requested: str) -> Path | None:
     if candidate == root or root in candidate.parents:
         return candidate
     return None
+
+
+def _require_int_in_range(value: object, lo: int, hi: int, name: str) -> int:
+    """Coerce ``value`` to int and require ``lo <= n <= hi``. Raises ``ValueError``
+    (or ``TypeError`` on a non-numeric value) — the caller maps that to a 400. Used
+    to bound image-generation params so a request can't trigger unbounded compute."""
+    n = int(value)
+    if not (lo <= n <= hi):
+        raise ValueError(f"'{name}' must be between {lo} and {hi}")
+    return n
 
 
 def _safe_mission_id(raw: str) -> "str | None":
@@ -190,7 +224,8 @@ class StudioHandler(BaseHTTPRequestHandler):
 
         Defends the handler thread two ways: ``_MAX_BODY_BYTES`` caps a lying-large
         Content-Length, and ``_BODY_READ_TIMEOUT`` stops a withheld/slow body
-        (slowloris) from blocking ``rfile.read`` forever.
+        (slowloris) from blocking ``rfile.read`` forever. (A large audio upload does
+        NOT use this — POST /api/stt streams to disk via ``_stream_body_to_file``.)
         """
         # http.server does not decode chunked bodies; an unread chunk-framed body
         # would desync the socket, so reject Transfer-Encoding outright.
@@ -227,6 +262,48 @@ class StudioHandler(BaseHTTPRequestHandler):
             return None
         return body
 
+    def _stream_body_to_file(self, dest: Path, max_bytes: int) -> "int | None":
+        """Stream the request body to ``dest`` in bounded chunks, never holding it whole
+        in RAM (used for the STT audio upload). Same guards as ``_read_body`` —
+        reject chunked / malformed / oversized, and time-bound the read — but writes
+        straight to disk. Returns the number of bytes written, or ``None`` after
+        sending the matching error + closing (and removing any partial file)."""
+        if self.headers.get("Transfer-Encoding"):
+            self._reject(411, "Transfer-Encoding unsupported — send Content-Length")
+            return None
+        raw_len = self.headers.get("Content-Length")
+        if raw_len is None:
+            return 0
+        try:
+            length = int(raw_len)
+        except ValueError:
+            length = -1
+        if length < 0:
+            self._reject(400, "invalid Content-Length")
+            return None
+        if length > max_bytes:
+            self._reject(413, "request body too large")
+            return None
+        if length == 0:
+            return 0
+        self.connection.settimeout(_BODY_READ_TIMEOUT)
+        remaining = length
+        try:
+            with open(dest, "wb") as out:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(_READ_CHUNK, remaining))
+                    if not chunk:
+                        break  # client closed early; transcription will reject a truncated clip
+                    out.write(chunk)
+                    remaining -= len(chunk)
+        except (TimeoutError, socket.timeout):
+            dest.unlink(missing_ok=True)
+            self._reject(408, "request body read timed out")
+            return None
+        finally:
+            self.connection.settimeout(None)
+        return length - remaining
+
     # ── routing ─────────────────────────────────────────────────────────────
     def do_OPTIONS(self) -> None:  # noqa: N802 (stdlib naming)
         self.send_response(204)
@@ -240,17 +317,27 @@ class StudioHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/missions":
             return self._handle_list_missions()
+        if path == "/api/models":
+            return self._handle_models_status()
         if path.startswith("/api/mission/"):
             rest = path[len("/api/mission/"):]
             if rest.endswith("/pdf"):
                 return self._handle_mission_pdf(rest[: -len("/pdf")])
             return self._handle_get_mission(rest)
+        if path.startswith("/media/"):
+            return self._handle_media_asset(path)
         return self._handle_static(path)
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         if path == "/api/mission":
             return self._handle_run_mission()
+        if path == "/api/image":
+            return self._handle_generate_image()
+        if path == "/api/tts":
+            return self._handle_synthesize()
+        if path == "/api/stt":
+            return self._handle_transcribe()
         if path.startswith("/api/mission/") and path.endswith("/cancel"):
             run_id = path[len("/api/mission/"):-len("/cancel")]
             return self._handle_cancel_mission(run_id)
@@ -379,17 +466,12 @@ class StudioHandler(BaseHTTPRequestHandler):
 
     def _parse_mission_request(self) -> "tuple[str, str] | None":
         """Read + validate the JSON body. Returns ``(goal, engine)``, or ``None``
-        after sending the matching error: a 400 for bad JSON / missing goal, or the
-        error ``_read_body`` already sent (400/408/411/413) for a malformed, withheld,
-        chunked, or oversized body."""
-        raw = self._read_body()
-        if raw is None:
-            return None  # _read_body already sent the error and closed the connection
-        try:
-            payload = json.loads(raw or b"{}")
-        except json.JSONDecodeError:
-            self._send_error_json(400, "body must be JSON")
-            return None
+        after sending the matching error: a 400 for bad JSON / a non-object body /
+        missing goal, or the error ``_read_body`` already sent (400/408/411/413) for a
+        malformed, withheld, chunked, or oversized body."""
+        payload = self._read_json_body()
+        if payload is None:
+            return None  # _read_json_body already sent the error (and closed if needed)
         goal = (payload.get("goal") or "").strip()
         if not goal:
             self._send_error_json(400, "missing 'goal'")
@@ -526,6 +608,163 @@ class StudioHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             return False
 
+    # ── API: local multimodal (Wave 2 — image / TTS / STT) ────────────────────
+    # Audio Content-Type → file extension for an STT upload (ffmpeg, under mlx-
+    # whisper, keys decode off the extension). Default .wav for an unknown type.
+    _AUDIO_EXT = {
+        "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/wave": ".wav",
+        "audio/mpeg": ".mp3", "audio/mp3": ".mp3",
+        "audio/mp4": ".m4a", "audio/x-m4a": ".m4a",
+        "audio/ogg": ".ogg", "audio/webm": ".webm", "audio/flac": ".flac",
+    }
+
+    def _media_manager(self):
+        """Lazily build + cache the one ModelManager for this server. Created on the
+        first multimodal request (not at startup) so the [media] extra is only needed
+        when a media route is actually used — the core server boots without it."""
+        server = self.server  # type: ignore[attr-defined]
+        with server.media_lock:
+            if server.media is None:
+                from agency_studio.engines.local_media import ModelManager
+                server.media = ModelManager(server.assets_root)
+            return server.media
+
+    def _read_json_body(self) -> "dict | None":
+        """Read + parse a small JSON object body. Returns the dict, or ``None`` after
+        sending the matching error (the one ``_read_body`` already sent, or a 400)."""
+        raw = self._read_body()
+        if raw is None:
+            return None  # _read_body already sent + closed
+        try:
+            payload = json.loads(raw or b"{}")
+        except json.JSONDecodeError:
+            self._send_error_json(400, "body must be JSON")
+            return None
+        if not isinstance(payload, dict):
+            self._send_error_json(400, "body must be a JSON object")
+            return None
+        return payload
+
+    def _media_url(self, path: "str | Path") -> str:
+        """Map a generated asset's filesystem path to its public ``/media/...`` URL
+        (relative to the server's assets root)."""
+        rel = Path(path).resolve().relative_to(self.server.assets_root)  # type: ignore[attr-defined]
+        return "/media/" + rel.as_posix()
+
+    def _handle_generate_image(self) -> None:
+        payload = self._read_json_body()
+        if payload is None:
+            return
+        prompt = (payload.get("prompt") or "").strip()
+        if not prompt:
+            return self._send_error_json(400, "missing 'prompt'")
+        # Validate client params up front (→ 400). With inputs already bounded here,
+        # any exception from the manager call below is necessarily a back-end failure
+        # (→ 500), not a mislabeled client error — and clamped dims/steps mean a
+        # request can't trigger an unbounded-compute OOM that wedges the media lock.
+        try:
+            steps = _require_int_in_range(payload.get("steps", 4), 1, _IMAGE_MAX_STEPS, "steps")
+            width = _require_int_in_range(payload.get("width", 1024), _IMAGE_MIN_DIM, _IMAGE_MAX_DIM, "width")
+            height = _require_int_in_range(payload.get("height", 1024), _IMAGE_MIN_DIM, _IMAGE_MAX_DIM, "height")
+            raw_seed = payload.get("seed")
+            seed = int(raw_seed) if raw_seed is not None else None
+        except (ValueError, TypeError) as exc:
+            return self._send_error_json(400, str(exc))
+        try:
+            result = self._media_manager().generate_image(
+                prompt, steps=steps, seed=seed, width=width, height=height,
+            )
+            url = self._media_url(result.path)  # inside the guard: a mapping error is a 500, not a dropped socket
+        except ImportError as exc:  # MediaUnavailable — [media] extra not installed
+            return self._send_error_json(501, str(exc))
+        except Exception:  # inference / model-fetch failure — clean 500, never a 400 leak
+            import traceback
+            traceback.print_exc()
+            return self._send_error_json(500, "image generation failed")
+        self._send_json({
+            "url": url, "prompt": result.prompt,
+            "seed": result.seed, "seconds": result.seconds,
+        })
+
+    def _handle_synthesize(self) -> None:
+        payload = self._read_json_body()
+        if payload is None:
+            return
+        text = (payload.get("text") or "").strip()
+        if not text:
+            return self._send_error_json(400, "missing 'text'")
+        try:
+            kwargs = {"voice": payload["voice"]} if payload.get("voice") else {}
+            result = self._media_manager().synthesize(text, **kwargs)
+            url = self._media_url(result.path)
+        except ImportError as exc:  # [media] extra not installed
+            return self._send_error_json(501, str(exc))
+        except Exception:  # synthesis / model-fetch failure — clean 500
+            import traceback
+            traceback.print_exc()
+            return self._send_error_json(500, "speech synthesis failed")
+        self._send_json({"url": url, "voice": result.voice, "seconds": result.seconds})
+
+    def _handle_transcribe(self) -> None:
+        """Transcribe a raw audio body (POST /api/stt). The body is streamed straight
+        to a short-lived upload file (never held whole in RAM), transcribed, then
+        removed — it is transient input, not a gallery asset."""
+        ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        suffix = self._AUDIO_EXT.get(ctype, ".wav")
+        uploads = Path(self.server.assets_root) / "uploads"  # type: ignore[attr-defined]
+        uploads.mkdir(parents=True, exist_ok=True)
+        upload = uploads / f"{uuid.uuid4().hex}{suffix}"
+        written = self._stream_body_to_file(upload, max_bytes=_MAX_AUDIO_BYTES)
+        if written is None:
+            return  # _stream_body_to_file already sent the error + cleaned up the partial
+        if written == 0:
+            upload.unlink(missing_ok=True)
+            return self._send_error_json(400, "empty audio body")
+        try:
+            result = self._media_manager().transcribe(upload)
+        except ImportError as exc:  # [media] extra not installed
+            return self._send_error_json(501, str(exc))
+        except Exception:  # transcription / model-fetch failure — clean 500
+            import traceback
+            traceback.print_exc()
+            return self._send_error_json(500, "transcription failed")
+        finally:
+            upload.unlink(missing_ok=True)  # the upload is transient input, not output
+        self._send_json({"text": result.text, "seconds": result.seconds})
+
+    def _handle_models_status(self) -> None:
+        """Report which model (if any) is currently warm + the configured model ids.
+        Feeds the GUI's ModelManager panel (Wave 2.3). Loads nothing."""
+        from agency_studio.engines import models as media_models
+        # Read under media_lock so a concurrent first-request lazy-init can't be seen
+        # half-built (the manager reference is set under this same lock).
+        with self.server.media_lock:  # type: ignore[attr-defined]
+            mgr = self.server.media  # type: ignore[attr-defined]  # None until first media op
+        self._send_json({
+            "resident": mgr.resident_kind if mgr is not None else None,
+            "models": {
+                "image": media_models.IMAGE_MODEL_NAME,
+                "stt": media_models.STT_HF_REPO,
+                "tts": "kokoro-v1.0",
+            },
+        })
+
+    def _handle_media_asset(self, path: str) -> None:
+        """Serve a generated asset from the assets root, guarded by ``path_inside()``
+        (same traversal defense as the static GUI). 404 for an escape or a miss."""
+        root: Path = self.server.assets_root  # type: ignore[attr-defined]
+        target = path_inside(root, path[len("/media/"):])
+        if target is None or not target.is_file():
+            return self._send_error_json(404, "not found")
+        self._serve_file(target)
+
+    def _serve_file(self, target: Path) -> None:
+        """Read a file and send it with its content type. Single implementation shared
+        by the generated-asset route (/media) and the static GUI handler."""
+        body = target.read_bytes()
+        content_type = _CONTENT_TYPES.get(target.suffix.lower(), "application/octet-stream")
+        self._send_bytes(body, content_type)
+
     # ── static GUI ────────────────────────────────────────────────────────────
     def _handle_static(self, path: str) -> None:
         root: Path = self.server.static_root  # type: ignore[attr-defined]
@@ -547,9 +786,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             target = root / "index.html"
             if not target.is_file():
                 return self._send_error_json(404, "not found")
-        body = target.read_bytes()
-        content_type = _CONTENT_TYPES.get(target.suffix.lower(), "application/octet-stream")
-        self._send_bytes(body, content_type)
+        self._serve_file(target)
 
     # Quieter logging — one line per request is enough for a local tool.
     def log_message(self, fmt: str, *args) -> None:  # noqa: A002
@@ -612,6 +849,13 @@ def make_server(
     # each request (run + cancel) on its own thread.
     httpd.runs = {}  # type: ignore[attr-defined]
     httpd.runs_lock = threading.Lock()  # type: ignore[attr-defined]
+    # Wave 2 — local multimodal. Generated assets land under <project>/studio_assets/
+    # (served read-only via /media/, path_inside-guarded). The ModelManager is built
+    # lazily on the first media request (see _media_manager) so the [media] extra is
+    # only required when a media route is actually used.
+    httpd.assets_root = Path(project_root).resolve() / "studio_assets"  # type: ignore[attr-defined]
+    httpd.media = None  # type: ignore[attr-defined]
+    httpd.media_lock = threading.Lock()  # type: ignore[attr-defined]
     return httpd
 
 
