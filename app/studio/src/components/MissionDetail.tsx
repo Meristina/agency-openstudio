@@ -13,7 +13,7 @@ function List({ title, items }: { title: string; items?: string[] }) {
       <h4>{title}</h4>
       <ul>
         {items.map((it, i) => (
-          <li key={i}>{it}</li>
+          <li key={`${it}-${i}`}>{it}</li>
         ))}
       </ul>
     </section>

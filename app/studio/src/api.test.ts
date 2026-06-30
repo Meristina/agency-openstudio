@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runMission } from "./api";
+import { getMission, listMissions, runMission } from "./api";
 import type { MissionEvent } from "./types";
 
 const realFetch = global.fetch;
@@ -62,5 +62,27 @@ describe("runMission SSE parsing", () => {
   it("throws when the response is not ok", async () => {
     stubFetch({ ok: false, status: 500, body: null });
     await expect(runMission("g", () => {})).rejects.toThrow(/500/);
+  });
+
+  it("throws when the response is ok but has no body", async () => {
+    stubFetch({ ok: true, status: 200, body: null });
+    await expect(runMission("g", () => {})).rejects.toThrow(/no response body/);
+  });
+});
+
+describe("listMissions / getMission", () => {
+  it("listMissions returns the missions array", async () => {
+    stubFetch({ ok: true, status: 200, json: async () => ({ missions: [{ mission_id: "m1" }] }) });
+    expect(await listMissions()).toEqual([{ mission_id: "m1" }]);
+  });
+
+  it("listMissions throws on a non-ok response", async () => {
+    stubFetch({ ok: false, status: 503 });
+    await expect(listMissions()).rejects.toThrow(/503/);
+  });
+
+  it("getMission throws on a non-ok response", async () => {
+    stubFetch({ ok: false, status: 404 });
+    await expect(getMission("nope")).rejects.toThrow(/404/);
   });
 });

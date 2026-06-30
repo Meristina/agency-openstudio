@@ -76,6 +76,19 @@ def path_inside(root: Path, requested: str) -> Path | None:
     return None
 
 
+def _safe_mission_id(raw: str) -> "str | None":
+    """Clean a request-supplied mission id and reject anything that could escape
+    the store's filesystem path. Returns the validated id, or ``None``.
+
+    Single source for the filesystem-traversal defense on every id→path route:
+    strip the URL path wrapper, then require the strict ``[A-Za-z0-9_-]`` shape
+    (new_mission_id() output) before the id can ever reach ``store.load`` /
+    ``exporter.export_pdf``.
+    """
+    cleaned = urlparse(raw).path.strip("/")
+    return cleaned if _MISSION_ID_RE.match(cleaned) else None
+
+
 def _is_loopback_origin(origin: str) -> bool:
     """True only for http(s) origins whose host is loopback (127.0.0.1 / localhost).
 
@@ -157,9 +170,9 @@ class StudioHandler(BaseHTTPRequestHandler):
 
     def _handle_get_mission(self, mission_id: str) -> None:
         from agency_kit import store
-        mission_id = urlparse(mission_id).path.strip("/")
-        if not _MISSION_ID_RE.match(mission_id):
-            # Reject traversal / malformed ids before they reach the filesystem.
+        # Reject traversal / malformed ids before they reach the filesystem.
+        mission_id = _safe_mission_id(mission_id)
+        if mission_id is None:
             return self._send_error_json(404, "mission not found")
         try:
             self._send_json(store.load(mission_id))
@@ -172,17 +185,17 @@ class StudioHandler(BaseHTTPRequestHandler):
         Uses agency-kit's ``exporter.export_pdf`` (the ``[pdf]`` extra). A missing
         extra yields 501 (with install guidance) rather than a 500 traceback.
         """
-        mission_id = urlparse(mission_id).path.strip("/")
-        if not _MISSION_ID_RE.match(mission_id):
+        mission_id = _safe_mission_id(mission_id)
+        if mission_id is None:
             return self._send_error_json(404, "mission not found")
         from agency_cli import exporter
         try:
             pdf_path = exporter.export_pdf(mission_id)
+            body = Path(pdf_path).read_bytes()
         except ImportError as exc:  # [pdf] extra not installed
             return self._send_error_json(501, str(exc))
-        except FileNotFoundError:
+        except OSError:  # no deliverable, or the file vanished/unreadable before we read it
             return self._send_error_json(404, f"no deliverable for mission '{mission_id}'")
-        body = Path(pdf_path).read_bytes()
         self._send_bytes(
             body, "application/pdf",
             extra_headers={"Content-Disposition": f'attachment; filename="{mission_id}.pdf"'},

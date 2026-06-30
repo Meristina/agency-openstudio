@@ -1,9 +1,9 @@
 # Agency Studio
 
-> **Status: Wave 0 implemented.** The stdlib HTTP/SSE server (`agency_studio/server.py`),
-> the `on_event` hook, and the React Mission Console (`app/studio/`) are built and tested.
-> Waves **2-6** (local multimodal on Metal, RAG, web search, MCP) remain deferred — see
-> [`ROADMAP.md`](./ROADMAP.md).
+> **Status:** Wave 0 (stdlib HTTP/SSE server `agency_studio/server.py` + the `on_event`
+> hook) implemented; Wave 1 (the React Mission Console, `app/studio/`) landed — both built
+> and tested. Waves **2-6** (local multimodal on Metal, RAG, web search, MCP) remain
+> deferred — see [`ROADMAP.md`](./ROADMAP.md).
 
 **Agency Studio** is a **local-first agentic studio**. It stacks
 [agency-kit](https://github.com/Meristina/agency-kit) (the *brain* that orchestrates

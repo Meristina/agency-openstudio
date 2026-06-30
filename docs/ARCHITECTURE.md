@@ -17,7 +17,7 @@ top. Three layers:
                                 ▼  HTTP / SSE
 ┌─ agency_studio/server.py — http.server stdlib, bind 127.0.0.1 ─────┐
 │  POST /api/mission · GET /api/missions · /api/mission/{id} (+ /pdf) │
-│  /api/image · /api/tts · /api/stt · /api/docs · /api/models         │
+│  Wave 2+ (deferred): /api/{image,tts,stt,docs,models}               │
 └───────────────────────────────┬────────────────────────────────────┘
                                 ▼
 ┌─ agency-kit CORE — logic UNCHANGED ────────────────────────────────┐

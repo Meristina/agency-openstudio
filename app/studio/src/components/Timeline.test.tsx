@@ -27,4 +27,17 @@ describe("<Timeline>", () => {
     expect(text).toContain("PASS");
     expect(text).toContain("m1");
   });
+
+  it("renders both iterations of a VETO→retry (Art. IX, never collapsed)", () => {
+    const events: MissionEvent[] = [
+      { phase: "route", status: "done", route: ["product"] },
+      { phase: "synth", iteration: 1, status: "done" },
+      { phase: "inspect", iteration: 1, verdict: "VETO" },
+      { phase: "synth", iteration: 2, status: "done" },
+      { phase: "inspect", iteration: 2, verdict: "PASS" },
+    ];
+    const text = render(<Timeline events={events} />).container.textContent ?? "";
+    expect(text).toContain("VETO");
+    expect(text).toContain("PASS");
+  });
 });

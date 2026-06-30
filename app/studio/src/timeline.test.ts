@@ -49,6 +49,15 @@ describe("groupTimeline", () => {
     ]);
   });
 
+  it("reports 'running' once a route/dept has arrived but no terminal yet", () => {
+    const m = groupTimeline([
+      { phase: "route", status: "done", route: ["solve"] },
+      { phase: "dept", dept: "solve", status: "start" },
+    ]);
+    expect(m.terminal).toBeNull();
+    expect(runStatus(m)).toBe("running");
+  });
+
   it("captures an error terminal", () => {
     const m = groupTimeline([{ phase: "error", message: "engine crashed" }]);
     expect(m.terminal).toEqual({ kind: "error", message: "engine crashed" });

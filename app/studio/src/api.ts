@@ -11,9 +11,7 @@ export async function listMissions(): Promise<MissionSummary[]> {
   return data.missions ?? [];
 }
 
-// Retained ahead of its caller: the next Wave 1 step (click a history entry →
-// render its dossier) consumes this. Kept here so the typed client surface lands
-// in one place rather than churning the file twice.
+// Load one saved dossier by id (used by the history click-through in App.tsx).
 export async function getMission(id: string): Promise<Dossier> {
   const res = await fetch(`/api/mission/${encodeURIComponent(id)}`);
   if (!res.ok) throw new Error(`GET /api/mission/${id} → ${res.status}`);

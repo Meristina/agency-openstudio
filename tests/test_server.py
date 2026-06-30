@@ -98,7 +98,7 @@ def test_path_traversal_returns_404(tmp_path):
         httpd.shutdown()
 
 
-def test_path_inside_unit(tmp_path):
+def test_path_inside_resolves_inside_root_and_rejects_traversal(tmp_path):
     root = tmp_path / "dist"
     root.mkdir()
     (root / "app.js").write_text("//", encoding="utf-8")
@@ -170,6 +170,20 @@ def test_post_mission_missing_goal_is_400(tmp_path):
         resp = conn.getresponse()
         assert resp.status == 400
         assert "goal" in json.loads(resp.read())["error"]
+    finally:
+        httpd.shutdown()
+
+
+def test_post_mission_malformed_json_is_400(tmp_path):
+    # The sole POST endpoint must reject a non-JSON body before running anything.
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=b"{not json",
+                     headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        assert resp.status == 400
+        assert json.loads(resp.read())["error"] == "body must be JSON"
     finally:
         httpd.shutdown()
 
@@ -274,6 +288,23 @@ def test_cors_echoes_loopback_origin_never_wildcard(tmp_path):
         resp2 = conn.getresponse()
         resp2.read()
         assert resp2.getheader("Access-Control-Allow-Origin") is None
+    finally:
+        httpd.shutdown()
+
+
+def test_options_preflight_grants_loopback_cors(tmp_path):
+    # The browser issues OPTIONS before the POST mission stream; it must get the
+    # 204 preflight with the loopback origin echoed and the methods/headers grant.
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("OPTIONS", "/api/mission", headers={"Origin": "http://127.0.0.1:5173"})
+        resp = conn.getresponse()
+        resp.read()
+        assert resp.status == 204
+        assert resp.getheader("Access-Control-Allow-Origin") == "http://127.0.0.1:5173"
+        assert resp.getheader("Access-Control-Allow-Methods") == "GET, POST, OPTIONS"
+        assert resp.getheader("Access-Control-Allow-Headers") == "Content-Type"
     finally:
         httpd.shutdown()
 
