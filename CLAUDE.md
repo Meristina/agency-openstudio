@@ -23,10 +23,10 @@ a clean web GUI.
 > **mutually exclusive** and stay **warm** for fast repeat calls.
 > **Wave 3 (multimodal as a department deliverable) is IN PROGRESS** — offline backend
 > steps, tracked in `docs/WAVE3-PLAN.md` (which supersedes the naive `ROADMAP.md §Wave 3`
-> sketch): ✅ steps 1-4 landed/reviewed (`/api/tts` voice allowlist; `assets.py` marker
+> sketch): ✅ steps 1-5 landed/reviewed (`/api/tts` voice allowlist; `assets.py` marker
 > parser; agency-kit's additive `asset_clause` engine hook; the best-effort `render_assets`
-> bridge hook + `## Assets`), ⏳ steps 5-6 remain (server wiring + SSE `asset` phase; GUI
-> gallery + PDF fix). **Waves 4-6 remain deferred** (RAG, web search, MCP, advanced
+> bridge hook + `## Assets`; `assets.render`/`rewrite_delivered` + server wiring + SSE
+> `asset` phase), ⏳ step 6 remains (GUI gallery + PDF fix). **Waves 4-6 remain deferred** (RAG, web search, MCP, advanced
 > extensions); see `ROADMAP.md`. Do **not** invent implementation that the roadmap/WAVE3-PLAN
 > defers — follow `docs/WAVE3-PLAN.md` build order for Wave 3.
 >
