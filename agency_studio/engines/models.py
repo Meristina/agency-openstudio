@@ -98,13 +98,14 @@ IMAGE_MODEL_REPO = "dhairyashil/FLUX.1-schnell-mflux-8bit"
 # ── selectable image-model registry ──────────────────────────────────────────
 # The user picks one image model per generation. Each entry is a *backend-agnostic*
 # descriptor: the GUI-facing metadata (id/label/note/default) plus a ``backend``
-# discriminator and the parameters that backend needs to load the model. Today every
-# entry is ``backend="mflux"`` (the mflux module + class + ModelConfig factory +
-# optional model_path override + default step count), but the discriminator keeps the
-# registry pluggable: a future non-mflux entry (e.g. a "boogu" backend) just sets a
-# different ``backend`` and carries its own loader params — ModelManager dispatches on
-# the discriminator and never has to be rewritten. All three models below are
-# mflux-native, non-gated, Apache-2.0, and 16 GB-friendly; verified live on the Mac.
+# discriminator and the parameters that backend needs to load the model. Most entries
+# are ``backend="mflux"`` (the mflux module + class + ModelConfig factory + optional
+# model_path override + quantize + default step count); the discriminator keeps the
+# registry pluggable, and the live ``backend="boogu"`` entry below proves it — it carries
+# its own (base_repo/qwen_repo) params and ModelManager dispatches on the discriminator
+# without changing. The three mflux models are non-gated, Apache-2.0, 16 GB-friendly
+# (8-bit: schnell via a pre-quantized mirror, klein via ``quantize=8`` on load);
+# Boogu is experimental (its own [boogu] extra). All verified live on the target Mac.
 
 @dataclass(frozen=True)
 class ImageModel:
@@ -122,6 +123,7 @@ class ImageModel:
     class_name: str = ""           # mflux class name in that module
     config_factory: str = ""       # ModelConfig factory method, e.g. "schnell"
     model_path: "str | None" = None  # repo override, or None → mflux's default repo
+    quantize: "int | None" = None  # bits to quantize on load (None = repo's native/pre-quantized)
     steps_default: int = 4         # default num_inference_steps for this model
     steps_max: int = 8             # upper bound the API accepts for this model (compute guard)
     # -- boogu backend params (None for mflux entries) --
@@ -139,22 +141,20 @@ IMAGE_MODELS: "dict[str, ImageModel]" = {
         module="mflux.models.flux.variants.txt2img.flux", class_name="Flux1",
         config_factory="schnell",
         model_path=IMAGE_MODEL_REPO,  # schnell's official repo is GATED → use the mirror
+        quantize=None,  # the mirror is already 8-bit — no re-quantization
         steps_default=4, steps_max=8,  # schnell is distilled for 1-4 steps
     ),
-    "z-image-turbo": ImageModel(
-        id="z-image-turbo", label="Z-Image-Turbo", note="Fast · great text · 8-step",
-        backend="mflux",
-        module="mflux.models.z_image.variants.z_image", class_name="ZImage",
-        config_factory="z_image_turbo",
-        model_path=None,  # default Tongyi-MAI/Z-Image-Turbo is non-gated
-        steps_default=8, steps_max=16,  # distilled to 8; allow headroom for tuning
-    ),
+    # NOTE: Z-Image-Turbo was evaluated and DROPPED — on the 16 GB M4 it crashes with a
+    # Metal GPU timeout (kIOGPUCommandBufferCallbackErrorTimeout) at the first denoise
+    # step, even at 256²/4 steps and quantize=8 (mflux's z-image codepath; FLUX-family
+    # models run fine). Not 16 GB-viable here, so it is not offered. (Wave 2.4 live test.)
     "flux2-klein-4b": ImageModel(
         id="flux2-klein-4b", label="FLUX.2 Klein 4B", note="Modern · Apache-2.0",
         backend="mflux",
         module="mflux.models.flux2.variants.txt2img.flux2_klein", class_name="Flux2Klein",
         config_factory="flux2_klein_4b",
         model_path=None,  # default black-forest-labs/FLUX.2-klein-4B is non-gated
+        quantize=8,  # quantize the 4B model on load to stay comfortable on 16 GB
         steps_default=4, steps_max=16,  # DISTILLED — high quality in ~4 steps; modest headroom
     ),
     # Experimental: Boogu-Image-0.1 (Apache-2.0, #1 on Qwen-Image-Bench) via the

@@ -85,39 +85,33 @@ class SpeechResult:
 # All are module-level so tests monkeypatch them with stubs — the suite never
 # touches real MLX, real weights, or the network.
 
-def _import_mflux_class(entry: "models.ImageModel"):
-    """Import the mflux generator class named by a registry entry
-    (``entry.module`` → ``entry.class_name``), e.g. ``Flux1`` / ``ZImage`` /
-    ``Flux2Klein``. A missing module/attr means the [media] extra (or this mflux
-    version) can't serve the model → MediaUnavailable (the server maps it to 501)."""
+def _resolve_mflux(entry: "models.ImageModel"):
+    """Resolve the (class, ModelConfig factory) an mflux entry names — exactly the
+    symbols ``_mflux_load`` needs — importing NO weights. A missing/renamed module,
+    class, or factory raises MediaUnavailable (the server maps it to 501). Shared by
+    probe and load so the two can never drift apart (the probe-before-evict invariant)."""
     try:
-        module = importlib.import_module(entry.module)
-        return getattr(module, entry.class_name)
+        cls = getattr(importlib.import_module(entry.module), entry.class_name)
+        from mflux.models.common.config import ModelConfig
+        config_factory = getattr(ModelConfig, entry.config_factory)
     except (ImportError, AttributeError) as exc:
         raise MediaUnavailable(f"image generation needs mflux — {_INSTALL_HINT}") from exc
+    return cls, config_factory
 
 
 def _mflux_probe(entry: "models.ImageModel") -> None:
-    # Cover EVERYTHING _mflux_load resolves (class + ModelConfig factory), loading no
-    # weights — so a renamed factory fails the probe (→ MediaUnavailable) BEFORE the
-    # warm model is evicted, never after. (probe-before-evict invariant.)
-    _import_mflux_class(entry)
-    try:
-        from mflux.models.common.config import ModelConfig
-        getattr(ModelConfig, entry.config_factory)
-    except (ImportError, AttributeError) as exc:
-        raise MediaUnavailable(f"image generation needs mflux — {_INSTALL_HINT}") from exc
+    # Validate the SAME symbols _mflux_load resolves, loading no weights — so a missing
+    # class/factory fails the cheap probe (→ 501) BEFORE the warm model is evicted.
+    _resolve_mflux(entry)
 
 
 def _mflux_load(entry: "models.ImageModel"):
-    """Load an mflux model from its registry entry: import the class, build its
-    ModelConfig via the named factory (e.g. ``ModelConfig.schnell()``), and construct
-    it with the entry's ``model_path`` override (or None → mflux's default non-gated
-    repo). Pre-quantized repos take no quantize= arg. Verified on the target Mac."""
-    cls = _import_mflux_class(entry)
-    from mflux.models.common.config import ModelConfig
-    config = getattr(ModelConfig, entry.config_factory)()
-    return cls(model_config=config, model_path=entry.model_path)
+    """Construct an mflux model from its registry entry: the named class + ModelConfig
+    factory, with the entry's ``model_path`` override (None → mflux's default non-gated
+    repo) and ``quantize`` (None for an already-pre-quantized mirror like flux-schnell;
+    8 for the full-precision default repos so a 6B/4B model fits the 16 GB Mac)."""
+    cls, config_factory = _resolve_mflux(entry)
+    return cls(model_config=config_factory(), model_path=entry.model_path, quantize=entry.quantize)
 
 
 def _mflux_run(model, entry, *, prompt, steps, seed, width, height, out_path) -> None:
@@ -299,7 +293,7 @@ class ModelManager:
     # -- model residency (caller holds self._lock) -----------------------------
     def _ensure(self, key: str, probe: Callable[[], None], loader: Callable[[], object]) -> object:
         """Make the model identified by ``key`` warm and return it. ``key`` is a model
-        id ('flux-schnell', 'z-image-turbo', …) or a modality ('stt'/'tts'). Switching
+        id ('flux-schnell', 'flux2-klein-4b', …) or a modality ('stt'/'tts'). Switching
         keys (image↔voice OR image↔image) evicts the previous model first; the same key
         is a warm hit."""
         if self._resident == key and self._model is not None:
@@ -346,7 +340,7 @@ class ModelManager:
 
         ``model`` is a registry id (default ``flux-schnell``); an unknown id raises
         ``ValueError``. ``steps`` defaults to the model's own ``steps_default`` (e.g. 4
-        for the FLUX models, 8 for Z-Image-Turbo). The model is keyed by its id, so a
+        for the distilled FLUX models, 16 for Boogu). The model is keyed by its id, so a
         switch to a different image model evicts the previous one (image↔image is
         mutually exclusive, like image↔voice) while a repeat of the same id reuses the
         warm model.

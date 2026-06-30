@@ -151,12 +151,15 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
   Metal buffer cache. A cheap import **probe before eviction** means a request for an
   uninstalled modality never destroys a working warm model. A lock serialises Metal use.
   - **image** — a **selectable** model (registry in `models.py`, GUI dropdown): **FLUX.1-
-    schnell** (default, 8-bit mirror), **Z-Image-Turbo** (fast, 8-step), **FLUX.2-klein-4B**
-    (modern) — all mflux-native, non-gated, Apache-2.0, 16 GB-friendly — plus an
-    **experimental Boogu-Image-0.1** entry on a separate `"boogu"` backend (the `[boogu]`
-    extra: a git-installed community MLX port + a Qwen3-VL-8B conditioner; highest quality
-    but slow, minutes/image). The backend dispatch is a pluggable `(probe, load, run)`
-    triple, so mflux and non-mflux engines coexist. **STT** — Whisper large-v3-turbo
+    schnell** (default, 8-bit mirror) and **FLUX.2-klein-4B** (modern, distilled, 8-bit) —
+    both mflux-native, non-gated, Apache-2.0, and **live-validated on the 16 GB M4** — plus
+    an **experimental Boogu-Image-0.1** entry on a separate `"boogu"` backend (the
+    `[boogu]` extra: a git-installed community MLX port + a Qwen3-VL-8B conditioner;
+    highest quality but slow, minutes/image). The backend dispatch is a pluggable
+    `(probe, load, run)` triple, so mflux and non-mflux engines coexist.
+    *(Z-Image-Turbo was evaluated and **dropped** — it crashes with a Metal GPU timeout
+    on the 16 GB M4 even quantized at 256²/4 steps; not viable here.)*
+    **STT** — Whisper large-v3-turbo
     via **mlx-whisper** (MIT); **TTS** — Kokoro-82M via **kokoro-onnx** (MIT). All
     lazy-imported behind the `[media]` extra; `MediaUnavailable` (an `ImportError`) →
     clean **501**.
