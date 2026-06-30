@@ -32,7 +32,9 @@ are downloaded at runtime into the OS cache, never bundled or committed.
 | **mlx-whisper** | Speech-to-text (Whisper), MLX-native | MIT | ✅ Direct dependency |
 | **kokoro-onnx** | Text-to-speech (Kokoro-82M), ONNX | MIT | ✅ Direct dependency |
 | **soundfile** | Write synthesized audio to WAV | BSD-3-Clause | ✅ Direct dependency |
-| **FLUX.1-schnell** weights | Image model | Apache-2.0 | ✅ Loaded from a **non-gated** pre-quantized 8-bit mflux mirror (`dhairyashil/FLUX.1-schnell-mflux-8bit`) — the official BFL repo is gated; the weights themselves are Apache-2.0 |
+| **FLUX.1-schnell** weights | Image model (default) | Apache-2.0 | ✅ Loaded from a **non-gated** pre-quantized 8-bit mflux mirror (`dhairyashil/FLUX.1-schnell-mflux-8bit`) — the official BFL repo is gated; the weights themselves are Apache-2.0 |
+| **Z-Image-Turbo** weights (`Tongyi-MAI/Z-Image-Turbo`) | Image model (selectable) | Apache-2.0 | ✅ Non-gated (HF-verified); loaded via mflux's `z_image_turbo` config |
+| **FLUX.2-klein-4B** weights (`black-forest-labs/FLUX.2-klein-4B`) | Image model (selectable) | Apache-2.0 | ✅ Non-gated (HF-verified); loaded via mflux's `flux2_klein_4b` config |
 | **Whisper large-v3-turbo** (mlx-community) | STT model | MIT | ✅ Non-gated HF repo |
 | **Kokoro-82M** weights (ONNX + voices) | TTS model | Apache-2.0 | ✅ Pinned by URL + SHA-256 (see `engines/models.py`) |
 | **ffmpeg** | Audio decode for STT (system tool) | LGPL/GPL (build-dependent) | ⚠️ **System dependency, not bundled or linked** — invoked as a separate process by `mlx-whisper` (`brew install ffmpeg`). No distribution, so its license does not affect Agency Studio's. |
