@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 from .engines import local_media, models
 
@@ -242,3 +242,153 @@ def _build_tts(marker: dict) -> Optional[AssetRequest]:
     if not isinstance(voice, str) or voice not in models.ALLOWED_VOICES:
         voice = DEFAULT_VOICE
     return AssetRequest(type="tts", text=text, voice=voice)
+
+
+# ── render (step 5 — the consumer half: needs a warm ModelManager) ────────────
+
+def _emit(on_event: "Optional[Callable[[dict], None]]", event: dict) -> None:
+    """Fire an optional progress callback, swallowing any error — purely observational
+    (SSE streaming), so a misbehaving sink can never break a render. No-op when None."""
+    if on_event is None:
+        return
+    try:
+        on_event(event)
+    except Exception:
+        pass
+
+
+def render(
+    manager,
+    requests: "Sequence[AssetRequest]",
+    *,
+    out_dir,
+    to_url: "Callable[[object], str]",
+    should_cancel: "Optional[Callable[[], bool]]" = None,
+    on_event: "Optional[Callable[[dict], None]]" = None,
+) -> "list[dict]":
+    """Render each validated ``AssetRequest`` via the injected ``manager`` into ``out_dir``,
+    returning a manifest — one dict per request, in the original document order.
+
+    Images are rendered before TTS to avoid evict/reload thrash on the single warm GPU slot
+    (image↔voice are mutually exclusive), but the manifest is returned in document order so
+    ``rewrite_delivered`` can pair entries back to their source blocks.
+
+    **Never raises.** A per-asset backend failure (a Metal crash, a missing weight) is caught
+    and recorded ``status='failed'`` with the reason — the other assets still render and the
+    mission's deliverable is never lost. If ``should_cancel()`` fires, the current and all
+    remaining assets are recorded ``status='skipped'`` (reason ``cancelled``) WITHOUT spending
+    GPU time, so a Stop aborts a multi-minute render promptly.
+
+    ``to_url`` maps a written asset's filesystem path to its public ``/media/...`` URL (the
+    server injects its assets-root-relative mapper; tests inject a stub). ``on_event`` (optional)
+    receives a ``{phase:'asset', status:'start'|'done'|'failed'|'skipped', kind, url?}`` frame
+    per asset for live SSE streaming. ``manager`` / ``to_url`` are injected so this stays
+    offline-testable with stubbed backends.
+    """
+    manifest: "list[Optional[dict]]" = [None] * len(requests)
+    # Render images first, then TTS — but keep each result at its original index.
+    order = sorted(range(len(requests)), key=lambda i: 0 if requests[i].type == "image" else 1)
+    cancelled = False
+    for i in order:
+        req = requests[i]
+        if cancelled or (should_cancel is not None and should_cancel()):
+            cancelled = True  # once cancelled, skip the rest without re-polling
+            manifest[i] = {"type": req.type, "status": "skipped", "reason": "cancelled"}
+            _emit(on_event, {"phase": "asset", "status": "skipped", "kind": req.type})
+            continue
+        _emit(on_event, {"phase": "asset", "status": "start", "kind": req.type})
+        try:
+            if req.type == "image":
+                result = manager.generate_image(
+                    req.prompt, model=req.model,
+                    width=req.width, height=req.height, out_dir=out_dir,
+                )
+                entry = {
+                    "type": "image", "status": "ok", "url": to_url(result.path),
+                    "model": result.model, "seconds": result.seconds, "prompt": req.prompt,
+                }
+            else:
+                result = manager.synthesize(req.text, voice=req.voice, out_dir=out_dir)
+                entry = {
+                    "type": "tts", "status": "ok", "url": to_url(result.path),
+                    "voice": result.voice, "seconds": result.seconds, "text": req.text,
+                }
+        except Exception as exc:  # best-effort: one bad asset never aborts the batch
+            manifest[i] = {"type": req.type, "status": "failed", "reason": str(exc)}
+            _emit(on_event, {"phase": "asset", "status": "failed", "kind": req.type, "reason": str(exc)})
+            continue
+        manifest[i] = entry
+        _emit(on_event, {"phase": "asset", "status": "done", "kind": req.type, "url": entry["url"]})
+    return [m for m in manifest if m is not None]
+
+
+def _reference(entry: dict) -> str:
+    """The clean markdown reference that replaces a rendered ``asset`` block: an image embed
+    or an audio caption (a PDF/markdown reader can't play audio, so it gets a labelled link)."""
+    url = entry.get("url", "")
+    if entry.get("type") == "image":
+        caption = (entry.get("prompt") or "generated image").strip().replace("\n", " ")
+        return f"![{caption}]({url})"
+    secs = entry.get("seconds")
+    dur = f" ({secs}s)" if secs is not None else ""
+    return f"[Generated audio narration]({url}){dur}"
+
+
+def rewrite_delivered(delivered: str, manifest: "Sequence[dict]") -> str:
+    """Cosmetically replace each successfully-rendered ```asset block with a clean reference
+    (image embed / audio caption), leaving blocks that were dropped, failed, or skipped
+    verbatim. Pairs a block to a manifest entry by matching the block's ``prompt``/``text``
+    against the entry's — robust to render reordering and to rejected blocks. Pure: no I/O,
+    never raises; an unmatched or unparseable block is left untouched.
+    """
+    if not isinstance(delivered, str) or not delivered:
+        return delivered
+    ok = [m for m in (manifest or []) if isinstance(m, dict) and m.get("status") == "ok"]
+    if not ok:
+        return delivered
+    consumed = [False] * len(ok)
+
+    def _swap(body: str) -> "Optional[str]":
+        if len(body.encode("utf-8")) > MAX_BLOCK_BYTES:  # mirror parse_markers' DoS guard
+            return None
+        try:
+            marker = json.loads(body)
+        except (ValueError, RecursionError):
+            return None
+        if not isinstance(marker, dict):
+            return None
+        kind = marker.get("type")
+        key = {"image": "prompt", "tts": "text"}.get(kind)
+        if key is None or not isinstance(marker.get(key), str):
+            return None
+        target = marker[key].strip()
+        for idx, entry in enumerate(ok):
+            if not consumed[idx] and entry.get("type") == kind \
+                    and (entry.get(key) or "").strip() == target:
+                consumed[idx] = True
+                return _reference(entry)
+        return None
+
+    # split("\n") (not splitlines) so join("\n") round-trips byte-faithfully — trailing
+    # newlines and \r\n survive verbatim in every non-swapped region (a fence line's
+    # trailing \r is ignored by the .strip() comparison, so detection still works).
+    lines = delivered.split("\n")
+    out: "list[str]" = []
+    i, n = 0, len(lines)
+    while i < n:
+        if lines[i].strip() != _FENCE_OPEN:
+            out.append(lines[i])
+            i += 1
+            continue
+        body, j = [], i + 1
+        while j < n and lines[j].strip() not in (_FENCE_CLOSE, _FENCE_OPEN):
+            body.append(lines[j])
+            j += 1
+        if j < n and lines[j].strip() == _FENCE_CLOSE:
+            ref = _swap("\n".join(body))
+            out.extend([ref] if ref is not None else lines[i:j + 1])  # swap, else keep verbatim
+            i = j + 1
+        else:
+            out.extend(lines[i:j])  # unterminated opener: keep as-is up to the next opener/EOF
+            i = j
+    return "\n".join(out)

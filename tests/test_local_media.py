@@ -435,3 +435,33 @@ def test_synthesize_rejects_unlisted_voice(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         mgr.synthesize("hello", voice="zz_not_a_voice")
     assert "af_heart" in models.ALLOWED_VOICES   # the default is a member, so it always passes
+
+
+# ── Wave 3: per-mission out_dir (the asset writer) ────────────────────────────
+
+def test_generate_image_out_dir_overrides_default(tmp_path, monkeypatch):
+    # out_dir routes the asset under a per-mission folder instead of the manager's
+    # default assets/images/ — uuid filename, real file written.
+    _stub_backends(monkeypatch)
+    mgr = local_media.ModelManager(tmp_path)
+    mission = tmp_path / "missions" / "001-x"
+    result = mgr.generate_image("hero banner", out_dir=mission)
+    assert result.path.parent == mission / "images"
+    assert result.path.is_file()
+
+
+def test_synthesize_out_dir_overrides_default(tmp_path, monkeypatch):
+    _stub_backends(monkeypatch)
+    mgr = local_media.ModelManager(tmp_path)
+    mission = tmp_path / "missions" / "001-x"
+    result = mgr.synthesize("hello there", voice=local_media.TTS_DEFAULT_VOICE, out_dir=mission)
+    assert result.path.parent == mission / "audio"
+    assert result.path.is_file()
+
+
+def test_out_dir_none_keeps_default_location(tmp_path, monkeypatch):
+    # Default (no out_dir) is byte-identical to the pre-Wave-3 behaviour: assets/images/.
+    _stub_backends(monkeypatch)
+    mgr = local_media.ModelManager(tmp_path)
+    result = mgr.generate_image("a banner")
+    assert result.path.parent == tmp_path / "images"
