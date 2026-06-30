@@ -5,18 +5,42 @@
 import ReactMarkdown from "react-markdown";
 import { lastVerdict, verdictClass } from "../types";
 import type { Dossier } from "../types";
+import type { ReactNode } from "react";
 
-function List({ title, items }: { title: string; items?: string[] }) {
+function List({
+  title,
+  items,
+  renderItem,
+}: {
+  title: string;
+  items?: string[];
+  renderItem?: (item: string) => ReactNode;
+}) {
   if (!items || items.length === 0) return null;
   return (
     <section className="detail-list">
       <h4>{title}</h4>
       <ul>
         {items.map((it, i) => (
-          <li key={`${it}-${i}`}>{it}</li>
+          <li key={`${it}-${i}`}>{renderItem ? renderItem(it) : it}</li>
         ))}
       </ul>
     </section>
+  );
+}
+
+/**
+ * `_extract_sources` (cli_engine.py) populates `sources` with bare http(s) URLs,
+ * so each renders as a real link — opened in a new tab and isolated with
+ * `rel="noopener noreferrer"` (no opener access, no referrer leak), matching the
+ * studio's security ethos. A non-URL string degrades to plain text.
+ */
+function sourceItem(url: string): ReactNode {
+  if (!/^https?:\/\//i.test(url)) return url;
+  return (
+    <a className="source-link" href={url} target="_blank" rel="noopener noreferrer">
+      {url}
+    </a>
   );
 }
 
@@ -57,7 +81,7 @@ export default function MissionDetail({ dossier, loading }: { dossier: Dossier |
       </section>
 
       <List title="Decisions" items={dossier.decisions} />
-      <List title="Sources" items={dossier.sources} />
+      <List title="Sources" items={dossier.sources} renderItem={sourceItem} />
       <List title="Open to verify" items={dossier.open_to_verify} />
     </article>
   );

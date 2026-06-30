@@ -56,6 +56,10 @@ export type MissionEvent =
 export interface MissionSummary {
   mission_id: string;
   goal?: string;
+  route?: string[];
+  /** Last verdict token, or "in-progress" / "—" for missions with no verdict yet. */
+  verdict?: string;
+  delivered?: boolean;
   [k: string]: unknown;
 }
 
@@ -84,4 +88,14 @@ export function verdictClass(verdict: string): "ok" | "veto" | "warn" {
   if (verdict === "PASS") return "ok";
   if (verdict === "VETO") return "veto";
   return "warn";
+}
+
+/**
+ * Badge class for a history-summary verdict. Unlike `verdictClass`, the non-
+ * terminal markers `store.list_missions` emits ("in-progress", "—", or none)
+ * map to "pending" rather than the amber "warn" reserved for real fix verdicts.
+ */
+export function summaryVerdictClass(verdict?: string): "ok" | "veto" | "warn" | "pending" {
+  if (!verdict || verdict === "in-progress" || verdict === "—") return "pending";
+  return verdictClass(verdict);
 }

@@ -87,6 +87,14 @@ button.ghost { background: transparent; color: var(--text); border: 1px solid va
 
 .muted { color: var(--muted); font-size: 0.88rem; }
 .error { color: var(--error); font-size: 0.88rem; }
+.hint { color: var(--muted); font-size: 0.75rem; margin-left: auto; }
+
+/* elapsed-time indicator on the live timeline */
+.elapsed { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--muted); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+.elapsed.live { color: var(--accent); }
+.pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
 
 /* ── timeline ─────────────────────────────────────────────────────────── */
 .timeline-grid { display: flex; flex-direction: column; gap: 0.85rem; }
@@ -148,6 +156,7 @@ button.ghost { background: transparent; color: var(--text); border: 1px solid va
 }
 .mission-item.selected { border-color: var(--accent); }
 .mission-item:hover { border-color: var(--accent); }
+.mission-item-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .goal-text { color: var(--muted); font-size: 0.82rem; }
 
 /* ── detail ───────────────────────────────────────────────────────────── */
@@ -167,6 +176,8 @@ button.ghost { background: transparent; color: var(--text); border: 1px solid va
 .pdf-link:hover { border-color: var(--accent); }
 .detail-list ul { margin: 0.2rem 0 0.8rem; padding-left: 1.1rem; }
 .detail-list li { font-size: 0.86rem; margin-bottom: 0.2rem; }
+.source-link { color: var(--accent); text-decoration: none; word-break: break-all; }
+.source-link:hover { text-decoration: underline; }
 
 .markdown { font-size: 0.9rem; line-height: 1.5; }
 .markdown h1, .markdown h2, .markdown h3 { margin: 0.8rem 0 0.4rem; }

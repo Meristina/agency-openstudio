@@ -3,6 +3,7 @@
 // the agency-kit mission loop. The veto loop shows as multiple synth/inspect
 // iterations — never collapsed, so a VETO→retry is visible (Constitution Art. IX).
 
+import { useMemo } from "react";
 import { groupTimeline } from "../timeline";
 import { verdictClass } from "../types";
 import type { MissionEvent } from "../types";
@@ -13,7 +14,9 @@ function Verdict({ verdict }: { verdict: string | null }) {
 }
 
 export default function Timeline({ events }: { events: MissionEvent[] }) {
-  const model = groupTimeline(events);
+  // Re-fold only when the event list itself changes — not on the per-second
+  // `elapsed`-tick re-renders App fires during a run.
+  const model = useMemo(() => groupTimeline(events), [events]);
   const empty = !model.route && model.depts.length === 0 && !model.terminal;
 
   if (empty) return <p className="muted">No events yet — run a mission to see the live timeline.</p>;

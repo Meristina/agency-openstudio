@@ -55,3 +55,5 @@ npm run test:watch               # watch mode
 - `src/timeline.test.ts` — `groupTimeline` folding, incl. VETO→retry.
 - `src/api.test.ts` — `runMission` SSE parsing (split frames, tail flush, errors).
 - `src/components/Timeline.test.tsx` — render smoke test.
+- `src/components/MissionDetail.test.tsx` — empty state + cited sources rendered
+  as safe (`noopener noreferrer`) new-tab links; non-URL sources stay plain text.
