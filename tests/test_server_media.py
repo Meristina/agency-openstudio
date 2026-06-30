@@ -103,11 +103,11 @@ def test_post_image_explicit_model_echoed(monkeypatch, tmp_path):
     try:
         status, body = _request(
             host, port, "POST", "/api/image",
-            body=json.dumps({"prompt": "great text", "model": "z-image-turbo"}),
+            body=json.dumps({"prompt": "modern look", "model": "flux2-klein-4b"}),
             headers={"Content-Type": "application/json"},
         )
         assert status == 200
-        assert json.loads(body)["model"] == "z-image-turbo"
+        assert json.loads(body)["model"] == "flux2-klein-4b"
     finally:
         httpd.shutdown()
 
@@ -252,7 +252,7 @@ def test_models_status_reports_resident(monkeypatch, tmp_path):
         assert payload["resident"] is None
         # New shape: ordered image_models with id/label/note/default; flux-schnell first + default.
         ids = [m["id"] for m in payload["image_models"]]
-        assert ids == ["flux-schnell", "z-image-turbo", "flux2-klein-4b", "boogu-base"]
+        assert ids == ["flux-schnell", "flux2-klein-4b", "boogu-base"]
         assert payload["image_models"][0]["default"] is True
         assert payload["image_models"][0]["label"] == "FLUX.1-schnell"
         assert sum(m["default"] for m in payload["image_models"]) == 1  # exactly one default

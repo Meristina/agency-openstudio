@@ -17,8 +17,8 @@ import ImagePanel from "./ImagePanel";
 
 const MODELS: ImageModelInfo[] = [
   { id: "flux-schnell", label: "FLUX.1-schnell", note: "Photoreal · 2–4 step", default: true },
-  { id: "z-image-turbo", label: "Z-Image-Turbo", note: "Fast · great text · 8-step" },
   { id: "flux2-klein-4b", label: "FLUX.2 Klein 4B", note: "Modern · Apache-2.0" },
+  { id: "boogu-base", label: "Boogu-Image 0.1 (experimental)", note: "Highest quality · slow · experimental" },
 ];
 
 describe("ImagePanel model selector", () => {
@@ -26,7 +26,7 @@ describe("ImagePanel model selector", () => {
     render(<ImagePanel imageModels={MODELS} onGenerated={vi.fn()} />);
     const select = screen.getByLabelText("Image model") as HTMLSelectElement;
     const labels = Array.from(select.options).map((o) => o.textContent);
-    expect(labels).toEqual(["FLUX.1-schnell", "Z-Image-Turbo", "FLUX.2 Klein 4B"]);
+    expect(labels).toEqual(["FLUX.1-schnell", "FLUX.2 Klein 4B", "Boogu-Image 0.1 (experimental)"]);
     expect(select.value).toBe("flux-schnell");
   });
 
@@ -36,7 +36,7 @@ describe("ImagePanel model selector", () => {
       prompt: "a cat",
       seed: 1,
       seconds: 0.9,
-      model: "z-image-turbo",
+      model: "flux2-klein-4b",
     });
     const onGenerated = vi.fn();
     render(<ImagePanel imageModels={MODELS} onGenerated={onGenerated} />);
@@ -44,10 +44,10 @@ describe("ImagePanel model selector", () => {
     fireEvent.change(screen.getByPlaceholderText(/describe the image/i), {
       target: { value: "a cat" },
     });
-    fireEvent.change(screen.getByLabelText("Image model"), { target: { value: "z-image-turbo" } });
+    fireEvent.change(screen.getByLabelText("Image model"), { target: { value: "flux2-klein-4b" } });
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));
 
-    await waitFor(() => expect(generateImage).toHaveBeenCalledWith("a cat", { model: "z-image-turbo" }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalledWith("a cat", { model: "flux2-klein-4b" }));
     await waitFor(() => expect(onGenerated).toHaveBeenCalled());
   });
 

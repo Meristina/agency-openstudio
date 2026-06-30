@@ -230,10 +230,10 @@ def test_generate_image_defaults_to_flux_schnell(tmp_path, monkeypatch):
 def test_generate_image_explicit_model_selection(tmp_path, monkeypatch):
     counters = _stub_backends(monkeypatch)
     mgr = local_media.ModelManager(tmp_path)
-    result = mgr.generate_image("great text", model="z-image-turbo")
-    assert result.model == "z-image-turbo"
-    assert mgr.resident == "z-image-turbo"
-    assert counters["loaded_models"] == ["z-image-turbo"]
+    result = mgr.generate_image("modern look", model="flux2-klein-4b")
+    assert result.model == "flux2-klein-4b"
+    assert mgr.resident == "flux2-klein-4b"
+    assert counters["loaded_models"] == ["flux2-klein-4b"]
 
 
 def test_generate_image_unknown_model_raises_valueerror(tmp_path, monkeypatch):
@@ -261,7 +261,8 @@ def test_switching_image_model_evicts_and_reloads(tmp_path, monkeypatch):
 
 
 def test_steps_default_per_model(tmp_path, monkeypatch):
-    """When steps is omitted the model's own steps_default is used (8 for Z-Image)."""
+    """When steps is omitted the model's own steps_default is used (16 for Boogu vs 4
+    for the distilled FLUX models)."""
     seen = {}
 
     def _run_image(entry, model, *, prompt, steps, seed, width, height, out_path):
@@ -271,8 +272,8 @@ def test_steps_default_per_model(tmp_path, monkeypatch):
     _stub_backends(monkeypatch)
     monkeypatch.setattr(local_media, "_run_image_backend", _run_image)
     mgr = local_media.ModelManager(tmp_path)
-    mgr.generate_image("x", model="z-image-turbo")
-    assert seen["steps"] == 8  # z-image-turbo's steps_default
+    mgr.generate_image("x", model="boogu-base")
+    assert seen["steps"] == 16  # boogu-base's steps_default
 
 
 def test_boogu_backend_registered():
