@@ -98,16 +98,6 @@ def _import_flux():
         raise MediaUnavailable(f"image generation needs mflux — {_INSTALL_HINT}") from exc
 
 
-def _import_flux_config():
-    """Return mflux's ``Config`` (per-generation settings: steps, width, height)."""
-    try:
-        from mflux.config.config import Config
-        return Config
-    except ImportError:
-        from mflux import Config  # older top-level export
-        return Config
-
-
 def _probe_image() -> None:
     _import_flux()
 
@@ -119,12 +109,12 @@ def _load_image_backend():
 
 
 def _run_image_backend(model, *, prompt, steps, seed, width, height, out_path) -> None:
-    # mflux takes per-generation settings wrapped in a Config object passed as
-    # `config=` — NOT as loose kwargs on generate_image (that raises TypeError).
-    Config = _import_flux_config()
+    # mflux's Flux1.generate_image takes the per-generation settings as direct
+    # keyword arguments (verified against the installed mflux on the target Mac in
+    # Phase 2.4 — there is no Config object in this version).
     image = model.generate_image(
         seed=seed, prompt=prompt,
-        config=Config(num_inference_steps=steps, width=width, height=height),
+        num_inference_steps=steps, width=width, height=height,
     )
     image.save(path=str(out_path))
 
