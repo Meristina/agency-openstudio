@@ -36,6 +36,11 @@ missions/
 chat-history/
 transcriptions/
 
+# ── Wave 2 — locally generated multimodal assets (images / audio) ─────────
+# Downloaded model weights live in the OS cache (~/.cache/agency-studio,
+# ~/.cache/huggingface), never in the repo. Generated outputs land here.
+studio_assets/
+
 # ── Partial downloads & archives ──────────────────────────────────────────
 *.part
 *.tmp
