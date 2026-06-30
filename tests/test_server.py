@@ -162,6 +162,43 @@ def test_post_mission_writes_mission_folder(monkeypatch, tmp_path):
     assert "DEPARTMENT / SYNTHESIS OUTPUT" in (folder / "deliverable.md").read_text()
 
 
+def test_stream_mission_wires_a_live_cancel_predicate(monkeypatch, tmp_path):
+    # The server must hand the worker a cooperative-cancel predicate so a client
+    # disconnect can stop the run (the GUI's "Stop mission"). Capture it and confirm
+    # it is a live, initially-False callable — the cancel_event.is_set bound method.
+    # (What happens once it returns True — MissionCancelled + no-persist — is locked
+    # deterministically in the engine/bridge tests; the disconnect→set race is not
+    # worth a flaky socket test.)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_cli import runner_bridge
+
+    captured = {}
+
+    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None):
+        captured["should_cancel"] = should_cancel
+        on_event({"phase": "route", "status": "done", "route": []})
+        return runner_bridge.MissionResult(
+            path=tmp_path, dossier={"verdicts": [], "mission_id": "test-id"}
+        )
+
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request(
+            "POST", "/api/mission",
+            body=json.dumps({"goal": "x"}),
+            headers={"Content-Type": "application/json"},
+        )
+        _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    sc = captured.get("should_cancel")
+    assert callable(sc), "server must pass a should_cancel predicate to the worker"
+    assert sc() is False, "predicate must read False while the client stays connected"
+
+
 def test_post_mission_missing_goal_is_400(tmp_path):
     httpd, host, port = _start(tmp_path)
     try:

@@ -354,19 +354,39 @@ class StudioHandler(BaseHTTPRequestHandler):
 
         Returns the result box (carrying ``result`` or ``error``) once the worker
         signals completion, or ``None`` if the client disconnected mid-stream.
+
+        A client disconnect (the GUI's "Stop mission" aborts the fetch) requests a
+        cooperative cancel: we set ``cancel_event``, which the worker polls via
+        ``should_cancel`` at the next phase boundary (after routing / before a
+        department / before a synthesis iteration) and then raises
+        ``MissionCancelled``. It is best-effort, not a kill: an in-flight engine
+        call and the final synth→inspect cycle run to completion first, so a stop
+        that lands inside that last window still completes and persists the mission.
         """
         events: "queue.Queue[dict | None]" = queue.Queue()
         result_box: dict = {}
+        cancel_event = threading.Event()
+        project_root = self.server.project_root  # type: ignore[attr-defined]
 
         def _worker() -> None:
+            # Capture only `project_root` (a str), not `self`: this daemon thread can
+            # outlive the request after a disconnect, and capturing the handler would
+            # pin its dead socket buffers alive until the worker reaches a boundary.
             from agency_cli import runner_bridge
+            from agency_cli.engines.cli_engine import MissionCancelled
             try:
                 result_box["result"] = runner_bridge.run(
                     goal,
-                    project_root=self.server.project_root,  # type: ignore[attr-defined]
+                    project_root=project_root,
                     engine=engine,
                     on_event=events.put,
+                    should_cancel=cancel_event.is_set,
                 )
+            except MissionCancelled:
+                # Cooperative stop: nothing was persisted. Caught only to keep the
+                # daemon thread from printing a spurious traceback — by this point
+                # the drain loop has already returned None to the gone client.
+                pass
             except Exception as exc:  # surfaced to the client as an SSE error event
                 result_box["error"] = str(exc)
             finally:
@@ -380,7 +400,11 @@ class StudioHandler(BaseHTTPRequestHandler):
             if event is None:
                 break
             if not self._write_sse(event):
-                return None  # client disconnected mid-stream
+                # Client gone: ask the worker to stop at its next phase boundary.
+                # The queue is unbounded so the worker's remaining put()s never
+                # block — no need to keep draining; the daemon thread unwinds.
+                cancel_event.set()
+                return None
         return result_box
 
     def _send_terminal_frame(self, result_box: dict) -> None:

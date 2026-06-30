@@ -39,9 +39,17 @@ a clean web GUI.
 Agency Studio does **not** reimplement agency-kit's mission loop. It wraps it:
 - Reuses `run_mission_cli` (route→execute→synth→inspect, veto loop), `runner_bridge`
   (serialize_dossier / run), `store`, `departments`, `exporter`.
-- The **only** core change planned is an **observational** `on_event` callback on
-  `run_mission_cli` so the GUI can stream live progress. The veto loop and
-  `_short_verdict` logic must **never** change behavior (agency-kit Constitution Art. IX).
+- Two sanctioned core hooks on `run_mission_cli`, both additive and default-None
+  so standalone agency-kit is byte-identical:
+  1. an **observational** `on_event` callback so the GUI can stream live progress;
+  2. a **cooperative-cancel** `should_cancel` predicate (the "Stop mission"
+     feature), polled **only at phase boundaries** (after routing, before each
+     department, before each synth→inspect iteration) — **never inside** a started
+     synth→inspect cycle. When it fires, `run_mission_cli` raises `MissionCancelled`
+     before any persistence.
+  The veto loop and `_short_verdict` logic must **never** change behavior
+  (agency-kit Constitution Art. IX): `should_cancel` can only stop the loop cleanly
+  between iterations, never alter a verdict or skip an inspection.
 
 ## Build order
 

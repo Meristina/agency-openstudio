@@ -34,7 +34,7 @@ export default function App() {
   }, [running]);
 
   const refreshMissions = useCallback(async () => {
-    setNotice(null);  // a manual refresh supersedes the "stopped watching" notice
+    setNotice(null);  // a manual refresh supersedes the "mission stopped" notice
     try {
       setMissions(await listMissions());
     } catch (e) {
@@ -50,7 +50,7 @@ export default function App() {
     setSelectedId(id);
     setDetailLoading(true);
     setError(null);
-    setNotice(null);  // opening a mission supersedes the "stopped watching" notice
+    setNotice(null);  // opening a mission supersedes the "mission stopped" notice
     try {
       setDetail(await getMission(id));
     } catch (e) {
@@ -85,10 +85,12 @@ export default function App() {
       await refreshMissions();
       if (completedId) await openMission(completedId);
     } catch (e) {
-      // Aborting only stops the live stream — the mission keeps running on the
-      // server and will be saved to History. Say so, rather than silently dropping.
+      // Aborting the fetch asks the server to cancel cooperatively at the next
+      // phase boundary — best-effort, not a kill. A stop that lands during the
+      // final synth→inspect step still completes and is saved, so we can't promise
+      // "nothing was saved"; tell the user to Refresh and check History.
       if (ctrl.signal.aborted) {
-        setNotice("Stopped watching. The mission keeps running on the server and will appear in History when it finishes — use Refresh to check.");
+        setNotice("Stop requested. The mission halts at the next safe checkpoint; if it had already reached its final step it may still finish and appear in History — use Refresh to check.");
       } else {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -98,9 +100,10 @@ export default function App() {
     }
   }, [goal, running, refreshMissions, openMission]);
 
-  // "Stop watching" aborts the live SSE stream only; the server-side mission
-  // continues to completion and is persisted (see the catch handler above).
-  const onStopWatching = useCallback(() => abortRef.current?.abort(), []);
+  // "Stop mission" aborts the fetch; the dropped connection signals the server to
+  // cancel cooperatively at the next phase boundary (best-effort — a stop inside
+  // the final synth→inspect step still completes and persists).
+  const onStopMission = useCallback(() => abortRef.current?.abort(), []);
 
   // ⌘/Ctrl+Enter submits from the goal box (a plain Enter stays a newline).
   const onGoalKeyDown = useCallback(
@@ -137,8 +140,8 @@ export default function App() {
               {running ? "Running…" : "Run mission"}
             </button>
             {running && (
-              <button className="ghost" onClick={onStopWatching}>
-                Stop watching
+              <button className="ghost" onClick={onStopMission}>
+                Stop mission
               </button>
             )}
             <span className="hint">⌘/Ctrl+Enter to run</span>
