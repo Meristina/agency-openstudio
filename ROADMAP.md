@@ -1,7 +1,10 @@
 # Roadmap — Agency Studio
 
-> **Status: Wave 0 implemented; Wave 1 GUI in progress.** The stdlib server, `on_event`
-> hook, and React Mission Console are built and tested in a Linux session (the core).
+> **Status: Waves 0-1 shipped (core).** The stdlib server + `on_event`/`should_cancel`
+> hooks and the React Mission Console (live SSE timeline, project-scoped history, PDF
+> export, full "Stop mission") are built, reviewed, and tested in a Linux session.
+> The only Wave-1 items left — the **gallery** and **ModelManager** components — are
+> deferred *with* the multimodal layer they front (nothing to show until Wave 2-3).
 > Waves **2-6**: target Apple Silicon (Metal) + model downloads → deferred to the Mac.
 
 ## Context
@@ -74,8 +77,10 @@ React/Vite GUI (app/studio, 127.0.0.1)
 - **Mission Console**: goal → Run → SSE → live timeline (route, dept start/done, synth
   iter, inspect+verdict) → Markdown render of dossier + deliverable. History via
   `GET /api/missions`.
-- **PDF export**: `exporter.export_pdf(mission_id)` via `GET /api/mission/{id}/pdf` (`[pdf]` extra).
-- Rich components (Sidebar, gallery, ModelManager) = **written fresh**.
+- **PDF export**: `exporter.export_pdf(mission_id)` via `GET /api/mission/{id}/pdf` (`[pdf]` extra). ✅
+- Rich components: the **History sidebar** is built ✅. The **gallery** (generated
+  assets) and **ModelManager** (local SD/Whisper/Kokoro) are **deferred with the
+  multimodal layer** — they have nothing to front until Wave 2-3 (Mac/Metal).
 
 **Post-review refinements (shipped):**
 - **GUI polish**: cited sources rendered as safe (`noopener noreferrer`) links,
