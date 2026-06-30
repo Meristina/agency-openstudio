@@ -38,4 +38,26 @@ describe("<MissionDetail>", () => {
     expect(container.querySelector("a.source-link")).toBeNull();
     expect(container.textContent).toContain("internal note, no url");
   });
+
+  it("renders the persisted asset manifest as a per-mission gallery", () => {
+    const dossier: Dossier = {
+      mission_id: "m3",
+      goal: "demo",
+      delivered: "body",
+      assets: [
+        { type: "image", status: "ok", url: "/media/missions/m3/images/a.png", model: "flux-schnell", prompt: "hero" },
+        { type: "image", status: "failed", reason: "Metal OOM" },
+      ],
+    };
+    const { container } = render(<MissionDetail dossier={dossier} />);
+    expect(container.textContent).toContain("Generated assets");
+    expect(container.querySelector("img")?.getAttribute("src")).toBe("/media/missions/m3/images/a.png");
+    expect(container.textContent).toContain("failed — Metal OOM");
+  });
+
+  it("omits the asset section entirely for a non-asset mission", () => {
+    const dossier: Dossier = { mission_id: "m4", goal: "demo", delivered: "body" };
+    const { container } = render(<MissionDetail dossier={dossier} />);
+    expect(container.textContent).not.toContain("Generated assets");
+  });
 });

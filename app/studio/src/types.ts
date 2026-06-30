@@ -36,6 +36,41 @@ export interface InspectEvent {
   verdict?: string;
 }
 
+/**
+ * Wave 3 — one multimodal asset render, streamed from `assets.render` after a clean
+ * PASS (cli_engine emits these inside the worker scope, before the `done` sentinel).
+ * `start` opens a render; `done` carries the served `url`; `failed`/`skipped` carry a
+ * `reason`. `kind` mirrors the marker type (`image` | `tts`).
+ */
+export interface AssetEvent {
+  phase: "asset";
+  status: "start" | "done" | "failed" | "skipped";
+  kind: "image" | "tts";
+  url?: string;
+  reason?: string;
+}
+
+/**
+ * One entry of the persisted render manifest (`dossier.assets`, mirrored verbatim in
+ * the terminal `done` frame). `ok` entries carry a served `url` + render metadata;
+ * `failed`/`skipped` entries carry a `reason` instead. Field names track `assets.render`.
+ */
+export interface AssetManifestItem {
+  type: "image" | "tts";
+  status: "ok" | "failed" | "skipped";
+  url?: string;
+  reason?: string;
+  /** image-only — the model that rendered it. */
+  model?: string;
+  /** tts-only — the voice that spoke it. */
+  voice?: string;
+  seconds?: number;
+  /** image-only — the verbatim prompt (the caption). */
+  prompt?: string;
+  /** tts-only — the verbatim narration text. */
+  text?: string;
+}
+
 /** Terminal frame the server appends once the worker returns. */
 export interface DoneEvent {
   phase: "done";
@@ -43,6 +78,10 @@ export interface DoneEvent {
   verdict: string | null;
   path: string;
   residual_risk?: string | null;
+  /** Wave 3: the render manifest + partial-render summary (empty for non-asset runs). */
+  assets?: AssetManifestItem[];
+  assets_rendered?: number;
+  assets_total?: number;
 }
 
 /** Terminal frame the server appends if the worker raised. */
@@ -63,6 +102,7 @@ export type MissionEvent =
   | DeptEvent
   | SynthEvent
   | InspectEvent
+  | AssetEvent
   | DoneEvent
   | ErrorEvent
   | CancelledEvent;
@@ -138,6 +178,8 @@ export interface Dossier {
   decisions?: string[];
   open_to_verify?: string[];
   residual_risk?: string;
+  /** Wave 3: the multimodal render manifest, present only on asset-bearing missions. */
+  assets?: AssetManifestItem[];
   [k: string]: unknown;
 }
 

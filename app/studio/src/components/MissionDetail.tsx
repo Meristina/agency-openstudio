@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown";
 import { lastVerdict, verdictClass } from "../types";
 import type { Dossier } from "../types";
 import type { ReactNode } from "react";
+import AssetGallery from "./AssetGallery";
 
 function List({
   title,
@@ -79,6 +80,8 @@ export default function MissionDetail({ dossier, loading }: { dossier: Dossier |
           ? <div className="markdown"><ReactMarkdown>{dossier.delivered}</ReactMarkdown></div>
           : <p className="muted">No deliverable recorded.</p>}
       </section>
+
+      <AssetGallery items={dossier.assets} />
 
       <List title="Decisions" items={dossier.decisions} />
       <List title="Sources" items={dossier.sources} renderItem={sourceItem} />

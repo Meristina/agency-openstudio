@@ -544,7 +544,15 @@ def test_mission_pdf_streams_the_exported_file(monkeypatch, tmp_path):
     _save_dossier("20260630-101010-demo", tmp_path)
     pdf = tmp_path / "deliverable.pdf"
     pdf.write_bytes(b"%PDF-1.7\nfake pdf bytes\n%%EOF")
-    monkeypatch.setattr("agency_cli.exporter.export_pdf", lambda _mid: pdf)
+    # Capture the kwargs so we assert the server threads the studio_assets root through
+    # to the exporter (Wave 3 — so /media asset refs resolve to on-disk files).
+    captured = {}
+
+    def _export(_mid, **kw):
+        captured.update(kw)
+        return pdf
+
+    monkeypatch.setattr("agency_cli.exporter.export_pdf", _export)
     httpd, host, port = _start(tmp_path)
     try:
         resp, body = _get(host, port, "/api/mission/20260630-101010-demo/pdf")
@@ -552,6 +560,7 @@ def test_mission_pdf_streams_the_exported_file(monkeypatch, tmp_path):
         assert resp.getheader("Content-Type") == "application/pdf"
         assert "attachment" in (resp.getheader("Content-Disposition") or "")
         assert body.startswith(b"%PDF")
+        assert str(captured["assets_root"]).endswith("studio_assets")
     finally:
         httpd.shutdown()
 
@@ -560,7 +569,7 @@ def test_mission_pdf_missing_extra_is_501(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     _save_dossier("20260630-101010-demo", tmp_path)
 
-    def _no_extra(_mid):
+    def _no_extra(_mid, **kw):
         raise ImportError('WeasyPrint not installed. Run:  pip install -e ".[pdf]"')
 
     monkeypatch.setattr("agency_cli.exporter.export_pdf", _no_extra)
@@ -591,7 +600,7 @@ def test_mission_pdf_no_deliverable_is_404(monkeypatch, tmp_path):
     _save_dossier("20260630-101010-demo", tmp_path)
     monkeypatch.setattr(
         "agency_cli.exporter.export_pdf",
-        lambda _mid: (_ for _ in ()).throw(FileNotFoundError("no deliverable")),
+        lambda _mid, **kw: (_ for _ in ()).throw(FileNotFoundError("no deliverable")),
     )
     httpd, host, port = _start(tmp_path)
     try:
@@ -603,7 +612,7 @@ def test_mission_pdf_no_deliverable_is_404(monkeypatch, tmp_path):
 
 def test_mission_pdf_rejects_path_traversal(monkeypatch, tmp_path):
     # The id is validated before export_pdf runs — a traversal id never exports.
-    def _must_not_export(_mid):
+    def _must_not_export(_mid, **kw):
         raise AssertionError("export_pdf must not run for a traversal id")
 
     monkeypatch.setattr("agency_cli.exporter.export_pdf", _must_not_export)
@@ -622,7 +631,7 @@ def test_mission_pdf_render_error_is_500(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     _save_dossier("20260630-101010-demo", tmp_path)
 
-    def _boom(_mid):
+    def _boom(_mid, **kw):
         raise RuntimeError("WeasyPrint failed to render")
 
     monkeypatch.setattr("agency_cli.exporter.export_pdf", _boom)
@@ -641,7 +650,7 @@ def test_mission_pdf_from_another_project_is_404(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     _save_dossier("20260101-000000-foreign", tmp_path / "projB")
 
-    def _must_not_export(_mid):
+    def _must_not_export(_mid, **kw):
         raise AssertionError("export_pdf must not run for a foreign mission")
 
     monkeypatch.setattr("agency_cli.exporter.export_pdf", _must_not_export)

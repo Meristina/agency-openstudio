@@ -257,6 +257,8 @@ button.ghost { background: transparent; color: var(--text); border: 1px solid va
 .detail-list li { font-size: 0.86rem; margin-bottom: 0.2rem; }
 .source-link { color: var(--accent); text-decoration: none; word-break: break-all; }
 .source-link:hover { text-decoration: underline; }
+.asset-gallery .gallery { margin: 0.2rem 0 0.8rem; }
+.asset-residuals { margin: 0.2rem 0 0.8rem; }
 
 .markdown { font-size: 0.9rem; line-height: 1.5; }
 .markdown h1, .markdown h2, .markdown h3 { margin: 0.8rem 0 0.4rem; }

@@ -453,7 +453,9 @@ class StudioHandler(BaseHTTPRequestHandler):
             return
         from agency_cli import exporter
         try:
-            pdf_path = exporter.export_pdf(mission_id)
+            # Pass the assets root so the exporter can resolve any /media asset
+            # reference in the deliverable back to its on-disk file (Wave 3).
+            pdf_path = exporter.export_pdf(mission_id, assets_root=self.server.assets_root)  # type: ignore[attr-defined]
             body = Path(pdf_path).read_bytes()
         except ImportError as exc:  # [pdf] extra not installed
             return self._send_error_json(501, str(exc))
