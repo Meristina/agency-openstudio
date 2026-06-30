@@ -177,7 +177,8 @@ def test_stream_mission_wires_a_live_cancel_predicate(monkeypatch, tmp_path):
 
     captured = {}
 
-    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None):
+    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
+                  asset_clause=None, render_assets=None):
         captured["should_cancel"] = should_cancel
         on_event({"phase": "route", "status": "done", "route": []})
         return runner_bridge.MissionResult(
@@ -262,7 +263,8 @@ def test_endpoint_cancel_stops_an_in_flight_mission_and_emits_cancelled(monkeypa
     from agency_cli import runner_bridge
     from agency_cli.engines.cli_engine import MissionCancelled
 
-    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None):
+    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
+                  asset_clause=None, render_assets=None):
         on_event({"phase": "route", "status": "done", "route": ["solve"]})
         for _ in range(500):  # ~5s ceiling: a stuck cancel fails the test, never hangs CI
             if should_cancel():
@@ -542,7 +544,15 @@ def test_mission_pdf_streams_the_exported_file(monkeypatch, tmp_path):
     _save_dossier("20260630-101010-demo", tmp_path)
     pdf = tmp_path / "deliverable.pdf"
     pdf.write_bytes(b"%PDF-1.7\nfake pdf bytes\n%%EOF")
-    monkeypatch.setattr("agency_cli.exporter.export_pdf", lambda _mid: pdf)
+    # Capture the kwargs so we assert the server threads the studio_assets root through
+    # to the exporter (Wave 3 — so /media asset refs resolve to on-disk files).
+    captured = {}
+
+    def _export(_mid, **kw):
+        captured.update(kw)
+        return pdf
+
+    monkeypatch.setattr("agency_cli.exporter.export_pdf", _export)
     httpd, host, port = _start(tmp_path)
     try:
         resp, body = _get(host, port, "/api/mission/20260630-101010-demo/pdf")
@@ -550,6 +560,7 @@ def test_mission_pdf_streams_the_exported_file(monkeypatch, tmp_path):
         assert resp.getheader("Content-Type") == "application/pdf"
         assert "attachment" in (resp.getheader("Content-Disposition") or "")
         assert body.startswith(b"%PDF")
+        assert str(captured["assets_root"]).endswith("studio_assets")
     finally:
         httpd.shutdown()
 
@@ -558,7 +569,7 @@ def test_mission_pdf_missing_extra_is_501(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     _save_dossier("20260630-101010-demo", tmp_path)
 
-    def _no_extra(_mid):
+    def _no_extra(_mid, **kw):
         raise ImportError('WeasyPrint not installed. Run:  pip install -e ".[pdf]"')
 
     monkeypatch.setattr("agency_cli.exporter.export_pdf", _no_extra)
@@ -589,7 +600,7 @@ def test_mission_pdf_no_deliverable_is_404(monkeypatch, tmp_path):
     _save_dossier("20260630-101010-demo", tmp_path)
     monkeypatch.setattr(
         "agency_cli.exporter.export_pdf",
-        lambda _mid: (_ for _ in ()).throw(FileNotFoundError("no deliverable")),
+        lambda _mid, **kw: (_ for _ in ()).throw(FileNotFoundError("no deliverable")),
     )
     httpd, host, port = _start(tmp_path)
     try:
@@ -601,7 +612,7 @@ def test_mission_pdf_no_deliverable_is_404(monkeypatch, tmp_path):
 
 def test_mission_pdf_rejects_path_traversal(monkeypatch, tmp_path):
     # The id is validated before export_pdf runs — a traversal id never exports.
-    def _must_not_export(_mid):
+    def _must_not_export(_mid, **kw):
         raise AssertionError("export_pdf must not run for a traversal id")
 
     monkeypatch.setattr("agency_cli.exporter.export_pdf", _must_not_export)
@@ -620,7 +631,7 @@ def test_mission_pdf_render_error_is_500(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     _save_dossier("20260630-101010-demo", tmp_path)
 
-    def _boom(_mid):
+    def _boom(_mid, **kw):
         raise RuntimeError("WeasyPrint failed to render")
 
     monkeypatch.setattr("agency_cli.exporter.export_pdf", _boom)
@@ -639,7 +650,7 @@ def test_mission_pdf_from_another_project_is_404(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     _save_dossier("20260101-000000-foreign", tmp_path / "projB")
 
-    def _must_not_export(_mid):
+    def _must_not_export(_mid, **kw):
         raise AssertionError("export_pdf must not run for a foreign mission")
 
     monkeypatch.setattr("agency_cli.exporter.export_pdf", _must_not_export)
@@ -801,3 +812,141 @@ def test_static_serves_known_content_type(tmp_path):
         assert resp.getheader("Content-Type") == "image/webp"
     finally:
         httpd.shutdown()
+
+
+# ── Wave 3: asset render hook wiring (_build_render_assets + ASSET_CLAUSE) ─────
+
+def test_build_render_assets_renders_rewrites_and_emits(tmp_path):
+    # The closure the worker hands the bridge: parse markers from `delivered`, render via
+    # the one warm manager into studio_assets/missions/<id>/, attach the manifest, rewrite
+    # `delivered`, and queue an SSE asset frame.
+    import queue
+    from types import SimpleNamespace
+    from pathlib import Path
+
+    class _FakeMgr:
+        def generate_image(self, prompt, *, model, width, height, out_dir):
+            p = Path(out_dir) / "images" / "a.png"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"\x89PNG")
+            return SimpleNamespace(path=p, model=model, seconds=1.0)
+
+    fake_server = SimpleNamespace(
+        media_lock=threading.Lock(), media=_FakeMgr(), assets_root=tmp_path,
+    )
+    events: "queue.Queue" = queue.Queue()
+    cancel = threading.Event()
+    render_assets = server._build_render_assets(fake_server, events, cancel)
+
+    dossier = {
+        "mission_id": "001-x",
+        "route": ["marketing"],
+        "delivered": "Hi\n```asset\n" + json.dumps({"type": "image", "prompt": "hero"}) + "\n```\nBye",
+    }
+    render_assets(dossier)
+
+    assert dossier["assets"][0]["status"] == "ok"
+    assert "![hero](/media/missions/001-x/images/a.png)" in dossier["delivered"]
+    assert (tmp_path / "missions" / "001-x" / "images" / "a.png").is_file()
+    frames = []
+    while not events.empty():
+        frames.append(events.get())
+    assert any(f.get("phase") == "asset" for f in frames), "an SSE asset frame must be queued"
+
+
+def test_build_render_assets_stop_skips_render_without_gpu(tmp_path):
+    # The closure must thread should_cancel=cancel_event.is_set into render, so a Stop
+    # landing in the post-inspection window aborts the render with no GPU spend. A
+    # regression dropping the predicate (should_cancel=None) would pass every other test.
+    import queue
+    from types import SimpleNamespace
+
+    class _FakeMgr:
+        def __init__(self):
+            self.calls = 0
+
+        def generate_image(self, *a, **k):
+            self.calls += 1
+            raise AssertionError("render must not run once the mission is cancelled")
+
+    mgr = _FakeMgr()
+    fake_server = SimpleNamespace(media_lock=threading.Lock(), media=mgr, assets_root=tmp_path)
+    cancel = threading.Event()
+    cancel.set()  # Stop already requested before render
+    render_assets = server._build_render_assets(fake_server, queue.Queue(), cancel)
+
+    dossier = {
+        "mission_id": "001-x", "route": ["marketing"],
+        "delivered": "```asset\n" + json.dumps({"type": "image", "prompt": "hero"}) + "\n```",
+    }
+    render_assets(dossier)
+    assert mgr.calls == 0
+    assert dossier["assets"][0]["status"] == "skipped"
+
+
+def test_build_render_assets_no_markers_is_a_noop(tmp_path):
+    from types import SimpleNamespace
+    import queue
+    fake_server = SimpleNamespace(media_lock=threading.Lock(), media=object(), assets_root=tmp_path)
+    render_assets = server._build_render_assets(fake_server, queue.Queue(), threading.Event())
+    dossier = {"mission_id": "001-x", "route": ["marketing"], "delivered": "no markers here"}
+    render_assets(dossier)
+    assert "assets" not in dossier  # nothing parsed → nothing attached, delivered untouched
+
+
+def test_post_mission_passes_asset_hook_to_runner(monkeypatch, tmp_path):
+    # The worker must forward ASSET_CLAUSE + a render_assets callable into runner_bridge.run.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_cli import runner_bridge
+    captured = {}
+
+    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
+                  asset_clause=None, render_assets=None):
+        captured["asset_clause"] = asset_clause
+        captured["render_assets"] = render_assets
+        return runner_bridge.MissionResult(
+            path=tmp_path, dossier={"verdicts": [{"verdict": "PASS"}], "mission_id": "x"}
+        )
+
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=json.dumps({"goal": "g"}),
+                     headers={"Content-Type": "application/json"})
+        _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    assert captured["asset_clause"] == server.ASSET_CLAUSE
+    assert callable(captured["render_assets"])
+
+
+def test_done_frame_carries_asset_summary(monkeypatch, tmp_path):
+    # The terminal `done` frame surfaces the manifest + rendered/total counts for the GUI.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_cli import runner_bridge
+
+    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
+                  asset_clause=None, render_assets=None):
+        return runner_bridge.MissionResult(path=tmp_path, dossier={
+            "verdicts": [{"verdict": "PASS"}], "mission_id": "x",
+            "assets": [
+                {"type": "image", "status": "ok", "url": "/media/a.png"},
+                {"type": "tts", "status": "failed", "reason": "x"},
+            ],
+        })
+
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=json.dumps({"goal": "g"}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    done = next(e for e in events if e["phase"] == "done")
+    assert done["assets_total"] == 2 and done["assets_rendered"] == 1
+    assert len(done["assets"]) == 2

@@ -11,6 +11,22 @@
 
 GUARD_ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
+# The repos the gates watch. The studio project (GUARD_ROOT) is always present;
+# the sibling agency-kit *brain* checkout this studio wraps is added too, so a
+# brick that lands in EITHER repo arms the gate and is folded into the one shared
+# fingerprint (Wave 3+ steps touch the brain repo, which the gates would otherwise
+# never see). The brain root defaults to a sibling dir of the studio root and is
+# overridable with AGENCY_KIT_ROOT; it is included only when it actually is a git
+# repo, so a missing or relocated sibling degrades gracefully to studio-only.
+# Markers still live under GUARD_ROOT/.claude — only the watched surface widened.
+guard_roots() {
+  printf '%s\n' "$GUARD_ROOT"
+  local kit="${AGENCY_KIT_ROOT:-$(dirname "$GUARD_ROOT")/agency-kit-studio}"
+  if [ "$kit" != "$GUARD_ROOT" ] && git -C "$kit" rev-parse --git-dir >/dev/null 2>&1; then
+    printf '%s\n' "$kit"
+  fi
+}
+
 # Files the gates care about: source + docs. Build output is gitignored, so it
 # never reaches `git status` here.
 is_guardable() {
@@ -20,25 +36,30 @@ is_guardable() {
   esac
 }
 
-# The current uncommitted guardable change set, one "path:blob-hash" line per
-# changed or untracked guardable file (":deleted" when the file is gone). Empty
-# output ⇒ nothing to guard. The signature and the "any changes?" check both
-# derive from this single parse.
+# The current uncommitted guardable change set across every watched repo, one
+# "<root>/<path>:blob-hash" line per changed or untracked guardable file
+# (":deleted" when the file is gone). The line is keyed by absolute root so the
+# same relative path in two repos never collides in the fingerprint. Empty output
+# ⇒ nothing to guard. The signature and the "any changes?" check both derive from
+# this single parse.
 guardable_state() {
-  git -C "$GUARD_ROOT" status --porcelain --untracked-files=all 2>/dev/null \
-  | while IFS= read -r line; do
-      local path h
-      path="${line#???}"                       # strip the 3-char "XY " prefix
-      case "$path" in *" -> "*) path="${path##* -> }" ;; esac  # rename → new name
-      path="${path%\"}"; path="${path#\"}"      # unquote odd names
-      is_guardable "$path" || continue
-      if [ -f "$GUARD_ROOT/$path" ]; then
-        h=$(git -C "$GUARD_ROOT" hash-object "$GUARD_ROOT/$path" 2>/dev/null || echo missing)
-      else
-        h="deleted"
-      fi
-      printf '%s:%s\n' "$path" "$h"
-    done
+  local root
+  guard_roots | while IFS= read -r root; do
+    git -C "$root" status --porcelain --untracked-files=all 2>/dev/null \
+    | while IFS= read -r line; do
+        local path h
+        path="${line#???}"                       # strip the 3-char "XY " prefix
+        case "$path" in *" -> "*) path="${path##* -> }" ;; esac  # rename → new name
+        path="${path%\"}"; path="${path#\"}"      # unquote odd names
+        is_guardable "$path" || continue
+        if [ -f "$root/$path" ]; then
+          h=$(git -C "$root" hash-object "$root/$path" 2>/dev/null || echo missing)
+        else
+          h="deleted"
+        fi
+        printf '%s/%s:%s\n' "$root" "$path" "$h"
+      done
+  done
 }
 
 # Fingerprint of the change set: its lines sorted and hashed. The same change

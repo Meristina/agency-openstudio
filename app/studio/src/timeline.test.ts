@@ -5,7 +5,7 @@ import type { MissionEvent } from "./types";
 describe("groupTimeline", () => {
   it("returns an empty model for no events", () => {
     const m = groupTimeline([]);
-    expect(m).toEqual({ route: null, depts: [], synth: [], inspect: [], terminal: null });
+    expect(m).toEqual({ route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null });
     expect(runStatus(m)).toBe("idle");
   });
 
@@ -70,7 +70,46 @@ describe("groupTimeline", () => {
       { phase: "route", status: "done", route: ["solve"] },
     ]);
     // The run frame contributes no step; only the route shows.
-    expect(m).toEqual({ route: ["solve"], depts: [], synth: [], inspect: [], terminal: null });
+    expect(m).toEqual({ route: ["solve"], depts: [], synth: [], inspect: [], assets: [], terminal: null });
+  });
+
+  it("folds an asset render phase: start→done pairs into ok steps with the served url", () => {
+    const m = groupTimeline([
+      { phase: "inspect", iteration: 1, verdict: "PASS" },
+      { phase: "asset", status: "start", kind: "image" },
+      { phase: "asset", status: "done", kind: "image", url: "/media/a.png" },
+      { phase: "asset", status: "start", kind: "tts" },
+      { phase: "asset", status: "done", kind: "tts", url: "/media/a.wav" },
+    ]);
+    expect(m.assets).toEqual([
+      { kind: "image", status: "ok", url: "/media/a.png", reason: null },
+      { kind: "tts", status: "ok", url: "/media/a.wav", reason: null },
+    ]);
+  });
+
+  it("folds a failed render (reason, no url) and a skipped marker (no preceding start)", () => {
+    const m = groupTimeline([
+      { phase: "asset", status: "start", kind: "image" },
+      { phase: "asset", status: "failed", kind: "image", reason: "Metal OOM" },
+      { phase: "asset", status: "skipped", kind: "tts", reason: "cancelled" },
+    ]);
+    expect(m.assets).toEqual([
+      { kind: "image", status: "failed", url: null, reason: "Metal OOM" },
+      { kind: "tts", status: "skipped", url: null, reason: "cancelled" },
+    ]);
+  });
+
+  it("closes the most recent open render of a kind (sequential per modality)", () => {
+    const m = groupTimeline([
+      { phase: "asset", status: "start", kind: "image" },
+      { phase: "asset", status: "done", kind: "image", url: "/media/1.png" },
+      { phase: "asset", status: "start", kind: "image" },
+      { phase: "asset", status: "done", kind: "image", url: "/media/2.png" },
+    ]);
+    expect(m.assets).toEqual([
+      { kind: "image", status: "ok", url: "/media/1.png", reason: null },
+      { kind: "image", status: "ok", url: "/media/2.png", reason: null },
+    ]);
   });
 
   it("captures a cancelled terminal", () => {

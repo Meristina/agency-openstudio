@@ -6,11 +6,19 @@
 import { useMemo } from "react";
 import { groupTimeline } from "../timeline";
 import { verdictClass } from "../types";
+import type { AssetStep } from "../timeline";
 import type { MissionEvent } from "../types";
 
 function Verdict({ verdict }: { verdict: string | null }) {
   if (!verdict) return <span className="badge pending">…</span>;
   return <span className={`badge ${verdictClass(verdict)}`}>{verdict}</span>;
+}
+
+/** The right-aligned status label for one asset render step (failed/skipped carry why). */
+function assetStateLabel(a: AssetStep): string {
+  if (a.status === "running") return "rendering…";
+  if (a.status === "ok") return "done";
+  return a.reason ? `${a.status} — ${a.reason}` : a.status;
 }
 
 export default function Timeline({ events }: { events: MissionEvent[] }) {
@@ -70,6 +78,20 @@ export default function Timeline({ events }: { events: MissionEvent[] }) {
               <li key={i.iteration} className="step">
                 <span className="step-dot" /> iteration {i.iteration}
                 <Verdict verdict={i.verdict} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {model.assets.length > 0 && (
+        <section className="phase">
+          <h4>Assets</h4>
+          <ul className="steps">
+            {model.assets.map((a, i) => (
+              <li key={`${a.kind}-${i}`} className={`step ${a.status === "running" ? "active" : "done"}`}>
+                <span className="step-dot" /> {a.kind === "image" ? "image" : "narration"}
+                <span className="step-state">{assetStateLabel(a)}</span>
               </li>
             ))}
           </ul>

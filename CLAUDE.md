@@ -21,9 +21,16 @@ a clean web GUI.
 > `/media/` asset serving, and the GUI's **Image/Voice tabs, gallery, and warm-model
 > status chip** (the former deferred Wave-1 gallery/ModelManager surface). Models load
 > **mutually exclusive** and stay **warm** for fast repeat calls.
-> **Waves 3-6 remain deferred** (multimodal-as-department-deliverable, RAG, web search,
-> MCP, advanced extensions); see `ROADMAP.md`. Do **not** invent implementation that the
-> roadmap defers.
+> **Wave 3 (multimodal as a department deliverable) is SHIPPED** — tracked in
+> `docs/WAVE3-PLAN.md` (which supersedes the naive `ROADMAP.md §Wave 3` sketch): all six
+> steps landed/reviewed — `/api/tts` voice allowlist; `assets.py` marker parser;
+> agency-kit's additive `asset_clause` engine hook; the best-effort `render_assets` bridge
+> hook + `## Assets`; `assets.render`/`rewrite_delivered` + server wiring + SSE `asset`
+> phase; and the GUI asset timeline + per-mission gallery (`AssetGallery`) + the PDF
+> `/media`→on-disk fix (`exporter._localize_assets`). Its offline suite runs anywhere; the
+> live render path needs the Apple Silicon Mac. **Waves 4-6 remain deferred** (RAG, web
+> search, MCP, advanced extensions); see `ROADMAP.md`. Do **not** invent implementation
+> that the roadmap/WAVE3-PLAN defers.
 >
 > **Running Wave 2 (target Mac):** a **Python 3.10+ venv** with the `[media]` extra
 > (`pip install -e ".[media]"`), plus **`ffmpeg`** on PATH for speech-to-text

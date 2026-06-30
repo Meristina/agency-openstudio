@@ -28,6 +28,22 @@ describe("<Timeline>", () => {
     expect(text).toContain("m1");
   });
 
+  it("renders the live asset phase with rendering / done / failed states", () => {
+    const events: MissionEvent[] = [
+      { phase: "route", status: "done", route: ["marketing"] },
+      { phase: "inspect", iteration: 1, verdict: "PASS" },
+      { phase: "asset", status: "start", kind: "image" },
+      { phase: "asset", status: "done", kind: "image", url: "/media/a.png" },
+      { phase: "asset", status: "start", kind: "tts" },
+      { phase: "asset", status: "failed", kind: "tts", reason: "no voice" },
+    ];
+    const text = render(<Timeline events={events} />).container.textContent ?? "";
+    expect(text).toContain("Assets");
+    expect(text).toContain("image");
+    expect(text).toContain("narration");
+    expect(text).toContain("failed — no voice");
+  });
+
   it("renders both iterations of a VETO→retry (Art. IX, never collapsed)", () => {
     const events: MissionEvent[] = [
       { phase: "route", status: "done", route: ["product"] },

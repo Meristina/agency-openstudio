@@ -19,6 +19,13 @@ export interface InspectStep {
   verdict: string | null;
 }
 
+export interface AssetStep {
+  kind: "image" | "tts";
+  status: "running" | "ok" | "failed" | "skipped";
+  url: string | null;
+  reason: string | null;
+}
+
 export type Terminal =
   | { kind: "done"; verdict: string | null; missionId: string | null; path: string; residualRisk: string | null }
   | { kind: "error"; message: string }
@@ -29,12 +36,13 @@ export interface TimelineModel {
   depts: DeptStep[];
   synth: SynthStep[];
   inspect: InspectStep[];
+  assets: AssetStep[];
   terminal: Terminal | null;
 }
 
 /** Fold the events received so far into a stable, render-ready model. */
 export function groupTimeline(events: MissionEvent[]): TimelineModel {
-  const model: TimelineModel = { route: null, depts: [], synth: [], inspect: [], terminal: null };
+  const model: TimelineModel = { route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null };
 
   for (const e of events) {
     switch (e.phase) {
@@ -61,6 +69,30 @@ export function groupTimeline(events: MissionEvent[]): TimelineModel {
         const step = model.inspect.find((i) => i.iteration === e.iteration);
         if (step) step.verdict = e.verdict ?? step.verdict;
         else model.inspect.push({ iteration: e.iteration, verdict: e.verdict ?? null });
+        break;
+      }
+      case "asset": {
+        // `start` opens a render; the next `done`/`failed` of the same kind closes the
+        // most recent open one (the render loop is strictly sequential per modality, so
+        // last-open is the right match without an asset id). `skipped` never has a
+        // preceding `start`, so it lands as its own terminal step.
+        if (e.status === "start") {
+          model.assets.push({ kind: e.kind, status: "running", url: null, reason: null });
+          break;
+        }
+        if (e.status === "skipped") {
+          model.assets.push({ kind: e.kind, status: "skipped", url: null, reason: e.reason ?? null });
+          break;
+        }
+        const open = [...model.assets].reverse().find((a) => a.kind === e.kind && a.status === "running");
+        const closed: AssetStep["status"] = e.status === "done" ? "ok" : "failed";
+        if (open) {
+          open.status = closed;
+          open.url = e.url ?? null;
+          open.reason = e.reason ?? null;
+        } else {
+          model.assets.push({ kind: e.kind, status: closed, url: e.url ?? null, reason: e.reason ?? null });
+        }
         break;
       }
       case "done":

@@ -118,6 +118,65 @@ _CONTENT_TYPES = {
 }
 
 
+# Generic capability clause appended to department/synthesis prompts (Wave 3) so a
+# department MAY request a multimodal asset. Deliberately small and protocol-only: it is
+# advisory model-facing text, NOT trusted — every constraint (type/model/voice allowlists,
+# fixed canvas, length + per-mission caps, route gate) is enforced at the untrusted
+# boundary in ``assets.parse_markers``, never here.
+ASSET_CLAUSE = (
+    "OPTIONAL MULTIMODAL ASSETS: if a visual or spoken deliverable genuinely helps the "
+    "mission, you may embed fenced ```asset blocks — a marketing image, a comms narration. "
+    "Each is a single JSON object on its own fenced lines:\n"
+    "```asset\n"
+    '{"type": "image", "prompt": "<concise description of the image>"}\n'
+    "```\n"
+    "or\n"
+    "```asset\n"
+    '{"type": "tts", "text": "<the exact words to speak>"}\n'
+    "```\n"
+    "Only `type` and `prompt`/`text` are honored; keep prompts concise. Omit entirely when "
+    "no asset is warranted — never invent one to fill space."
+)
+
+
+def _build_render_assets(server, events: "queue.Queue", cancel_event: threading.Event):
+    """Build the best-effort asset renderer the headless bridge calls after a clean PASS,
+    closed over the long-lived ``server`` (its single warm ``ModelManager`` + assets root),
+    this run's SSE ``events`` queue, and its ``cancel_event``.
+
+    Defined at module scope and over ``server`` (never the request handler) so the daemon
+    worker can't pin the handler's dead socket buffers alive. Returns a ``render_assets``
+    callable matching the bridge's hook contract: it mutates ``dossier['assets']`` (manifest)
+    and cosmetically rewrites ``dossier['delivered']`` — building both before assigning, so a
+    failure can't persist a half-rewritten dossier. Assets are written under
+    ``studio_assets/missions/<mission_id>/`` (a subtree of the assets root the existing
+    ``/media`` route already serves through ``path_inside``)."""
+    def render_assets(dossier: dict) -> None:
+        from agency_studio import assets
+        from agency_studio.engines.local_media import ModelManager
+        requests = assets.parse_markers(dossier.get("delivered") or "", dossier.get("route") or [])
+        if not requests:
+            return
+        with server.media_lock:  # reuse the ONE warm manager (16 GB mutual-exclusivity)
+            if server.media is None:
+                server.media = ModelManager(server.assets_root)
+            manager = server.media
+        assets_root = Path(server.assets_root).resolve()
+        out_dir = assets_root / "missions" / str(dossier.get("mission_id"))
+
+        def to_url(path) -> str:
+            return "/media/" + Path(path).resolve().relative_to(assets_root).as_posix()
+
+        manifest = assets.render(
+            manager, requests, out_dir=out_dir, to_url=to_url,
+            should_cancel=cancel_event.is_set, on_event=events.put,
+        )
+        new_delivered = assets.rewrite_delivered(dossier.get("delivered") or "", manifest)
+        dossier["assets"] = manifest
+        dossier["delivered"] = new_delivered
+    return render_assets
+
+
 def path_inside(root: Path, requested: str) -> Path | None:
     """Resolve ``requested`` (a URL path) under ``root`` and reject any escape.
 
@@ -394,7 +453,9 @@ class StudioHandler(BaseHTTPRequestHandler):
             return
         from agency_cli import exporter
         try:
-            pdf_path = exporter.export_pdf(mission_id)
+            # Pass the assets root so the exporter can resolve any /media asset
+            # reference in the deliverable back to its on-disk file (Wave 3).
+            pdf_path = exporter.export_pdf(mission_id, assets_root=self.server.assets_root)  # type: ignore[attr-defined]
             body = Path(pdf_path).read_bytes()
         except ImportError as exc:  # [pdf] extra not installed
             return self._send_error_json(501, str(exc))
@@ -511,11 +572,14 @@ class StudioHandler(BaseHTTPRequestHandler):
         events: "queue.Queue[dict | None]" = queue.Queue()
         result_box: dict = {}
         project_root = self.server.project_root  # type: ignore[attr-defined]
+        # Built over the server (never `self`) so the daemon worker doesn't pin the handler.
+        render_assets = _build_render_assets(self.server, events, cancel_event)  # type: ignore[attr-defined]
 
         def _worker() -> None:
-            # Capture only `project_root` (a str), not `self`: this daemon thread can
-            # outlive the request after a disconnect, and capturing the handler would
-            # pin its dead socket buffers alive until the worker reaches a boundary.
+            # Capture only `project_root` (a str) + `render_assets` (closed over the server,
+            # not `self`): this daemon thread can outlive the request after a disconnect, and
+            # capturing the handler would pin its dead socket buffers alive until the worker
+            # reaches a boundary.
             from agency_cli import runner_bridge
             from agency_cli.engines.cli_engine import MissionCancelled
             try:
@@ -525,6 +589,8 @@ class StudioHandler(BaseHTTPRequestHandler):
                     engine=engine,
                     on_event=events.put,
                     should_cancel=cancel_event.is_set,
+                    asset_clause=ASSET_CLAUSE,
+                    render_assets=render_assets,
                 )
             except MissionCancelled:
                 # Stopped before any persistence. Recorded so that — when the client
@@ -590,12 +656,18 @@ class StudioHandler(BaseHTTPRequestHandler):
             return
         dossier = result.dossier
         verdicts = dossier.get("verdicts") or []
+        manifest = dossier.get("assets") or []
+        rendered = sum(1 for a in manifest if isinstance(a, dict) and a.get("status") == "ok")
         self._write_sse({
             "phase": "done",
             "mission_id": dossier.get("mission_id"),
             "verdict": verdicts[-1].get("verdict") if verdicts else None,
             "path": str(result.path),
             "residual_risk": dossier.get("residual_risk"),
+            # Wave 3: the asset manifest + partial-render summary (empty for non-asset runs).
+            "assets": manifest,
+            "assets_rendered": rendered,
+            "assets_total": len(manifest),
         })
 
     def _write_sse(self, event: dict) -> bool:
@@ -700,8 +772,18 @@ class StudioHandler(BaseHTTPRequestHandler):
         text = (payload.get("text") or "").strip()
         if not text:
             return self._send_error_json(400, "missing 'text'")
+        # Validate a client-supplied voice up front (→ 400 with the allowlist), so an
+        # unknown voice is an actionable client error — not the generic 500 the manager's
+        # ValueError would otherwise become under the `except Exception` below. A
+        # falsy/omitted voice falls through to synthesize's default (af_heart).
+        from agency_studio.engines import models as media_models
+        voice = payload.get("voice")
+        if voice and voice not in media_models.ALLOWED_VOICES:
+            return self._send_error_json(
+                400, f"unknown voice {voice!r} (allowed: {sorted(media_models.ALLOWED_VOICES)})"
+            )
         try:
-            kwargs = {"voice": payload["voice"]} if payload.get("voice") else {}
+            kwargs = {"voice": voice} if voice else {}
             result = self._media_manager().synthesize(text, **kwargs)
             url = self._media_url(result.path)
         except ImportError as exc:  # [media] extra not installed

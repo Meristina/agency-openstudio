@@ -324,8 +324,14 @@ class ModelManager:
     def resident_kind(self) -> Optional[str]:
         return self._resident
 
-    def _asset_path(self, sub: str, ext: str) -> Path:
-        directory = self._assets / sub
+    def _asset_path(self, sub: str, ext: str, out_dir: "str | Path | None" = None) -> Path:
+        # ``out_dir`` (Wave 3 per-mission writer) overrides the manager's default assets
+        # dir so a mission's assets land under studio_assets/missions/<id>/. Filenames stay
+        # uuid-only (traversal-safe); the marker parser already dropped any path/filename
+        # field, so out_dir is only ever a trusted caller-supplied dir (the server scopes it
+        # under the served assets root — the manager does not re-validate a trusted path).
+        base = Path(out_dir) if out_dir is not None else self._assets
+        directory = base / sub
         directory.mkdir(parents=True, exist_ok=True)
         return directory / f"{uuid.uuid4().hex}.{ext}"
 
@@ -334,6 +340,7 @@ class ModelManager:
         self, prompt: str, *, model: str = models.DEFAULT_IMAGE_MODEL,
         steps: Optional[int] = None, seed: Optional[int] = None,
         width: int = 1024, height: int = 1024,
+        out_dir: "str | Path | None" = None,
     ) -> ImageResult:
         """Generate one image from ``prompt`` with the selected ``model`` and write it
         under assets/images/.
@@ -350,7 +357,7 @@ class ModelManager:
         entry = models.image_model(model)  # ValueError on unknown id (re-validated here)
         steps = entry.steps_default if steps is None else steps
         seed = random.randint(0, 2**31 - 1) if seed is None else seed
-        out = self._asset_path("images", "png")
+        out = self._asset_path("images", "png", out_dir)
         started = time.monotonic()
         with self._lock:
             backend = self._ensure(
@@ -376,11 +383,22 @@ class ModelManager:
             text = _run_stt_backend(model, audio_path=audio_path)
         return TranscriptResult(text=text, seconds=round(time.monotonic() - started, 2))
 
-    def synthesize(self, text: str, *, voice: str = TTS_DEFAULT_VOICE) -> SpeechResult:
-        """Synthesize speech from ``text`` and write it under assets/audio/."""
+    def synthesize(
+        self, text: str, *, voice: str = TTS_DEFAULT_VOICE,
+        out_dir: "str | Path | None" = None,
+    ) -> SpeechResult:
+        """Synthesize speech from ``text`` and write it under assets/audio/.
+
+        ``voice`` must be in ``models.ALLOWED_VOICES`` — an unlisted voice raises
+        ``ValueError`` (the /api/tts route maps it to 400) rather than being forwarded to
+        the backend. This re-validates what the route already checked, so a direct caller
+        can't reach the backend with an unlisted voice (mirrors the model-id double-check
+        in generate_image)."""
         if not text.strip():
             raise ValueError("text must not be empty")
-        out = self._asset_path("audio", "wav")
+        if voice not in models.ALLOWED_VOICES:
+            raise ValueError(f"unknown voice {voice!r} (allowed: {sorted(models.ALLOWED_VOICES)})")
+        out = self._asset_path("audio", "wav", out_dir)
         started = time.monotonic()
         with self._lock:
             model = self._ensure("tts", _probe_tts, _load_tts_backend)
