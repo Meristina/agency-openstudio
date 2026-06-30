@@ -333,6 +333,37 @@ def test_stt_withheld_body_times_out_408_partial_unlinked(monkeypatch, tmp_path)
         httpd.shutdown()
 
 
+def test_stt_truncated_body_is_rejected_400_not_transcribed(monkeypatch, tmp_path):
+    # A body SHORTER than its Content-Length (client half-closes after a few bytes) must be
+    # rejected as truncated — never transcribed as if whole. Regression: the read loop used
+    # to break on EOF and return the partial byte count, which _handle_transcribe accepted.
+    _stub_media(monkeypatch)
+    httpd, host, port = _start(tmp_path)
+    try:
+        with socket.create_connection((host, port), timeout=5) as sock:
+            sock.sendall(
+                b"POST /api/stt HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                b"Content-Type: audio/wav\r\nContent-Length: 100\r\n\r\nRIFF"  # promises 100, sends 4
+            )
+            sock.shutdown(socket.SHUT_WR)  # EOF the read side without timing out
+            sock.settimeout(5)
+            chunks = []
+            try:
+                while True:
+                    buf = sock.recv(4096)
+                    if not buf:
+                        break
+                    chunks.append(buf)
+            except socket.timeout:
+                pass
+        raw = b"".join(chunks)
+        assert raw.startswith(b"HTTP/1.1 400"), "a short body is a truncation, not a clip"
+        assert b"transcribed text" not in raw, "the truncated clip must never be transcribed"
+        assert _uploads(tmp_path) == [], "the partial upload must be unlinked on truncation"
+    finally:
+        httpd.shutdown()
+
+
 # ── /api/models + asset traversal ─────────────────────────────────────────────
 
 def test_models_status_reports_resident(monkeypatch, tmp_path):

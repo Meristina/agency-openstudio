@@ -386,7 +386,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                 while remaining > 0:
                     chunk = self.rfile.read(min(_READ_CHUNK, remaining))
                     if not chunk:
-                        break  # client closed early; transcription will reject a truncated clip
+                        break  # client closed early — body is short of the declared length
                     out.write(chunk)
                     remaining -= len(chunk)
         except (TimeoutError, socket.timeout):
@@ -395,7 +395,11 @@ class StudioHandler(BaseHTTPRequestHandler):
             return None
         finally:
             self.connection.settimeout(None)
-        return length - remaining
+        if remaining > 0:  # fewer bytes arrived than Content-Length promised → truncated.
+            dest.unlink(missing_ok=True)  # never hand a partial clip downstream as if whole.
+            self._reject(400, "request body shorter than Content-Length")
+            return None
+        return length
 
     # ── routing ─────────────────────────────────────────────────────────────
     def do_OPTIONS(self) -> None:  # noqa: N802 (stdlib naming)

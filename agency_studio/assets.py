@@ -32,7 +32,7 @@ output dir) is a separate, later step that consumes this module's output.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Optional, Sequence
 
 from .engines import local_media, models
@@ -161,7 +161,13 @@ class AssetRequest:
     sees. Every field here has already passed the parse-time gate, so the renderer never
     re-validates. ``type`` discriminates which fields are meaningful: ``image`` →
     ``prompt``/``model``/``width``/``height`` (the latter two are the fixed safe canvas,
-    never marker-supplied); ``tts`` → ``text``/``voice``."""
+    never marker-supplied); ``tts`` → ``text``/``voice``.
+
+    ``block_index`` is the request's ordinal among *all* well-formed ```asset blocks in the
+    source document (0-based), set by :func:`parse_markers`. It is carried into the render
+    manifest so :func:`rewrite_delivered` can pair each manifest entry back to its exact
+    source block by position — never by content, which collides when two markers share a
+    prompt/text (e.g. a rejected block followed by a valid one)."""
     type: str
     prompt: str = ""
     model: str = ""
@@ -169,6 +175,7 @@ class AssetRequest:
     height: int = 0
     text: str = ""
     voice: str = ""
+    block_index: int = -1
 
 
 def parse_markers(delivered: str, route: Sequence[str]) -> "list[AssetRequest]":
@@ -192,7 +199,10 @@ def parse_markers(delivered: str, route: Sequence[str]) -> "list[AssetRequest]":
     counts = {"image": 0, "tts": 0}
     caps = {"image": MAX_IMAGES, "tts": MAX_TTS}
 
-    for block in _iter_asset_blocks(delivered):
+    # ``block_index`` counts EVERY well-formed block (incl. dropped ones), so a kept
+    # request's ordinal matches the same block's position when ``rewrite_delivered`` later
+    # re-walks the shared scanner — the two enumerations can never drift.
+    for block_index, block in enumerate(_iter_asset_blocks(delivered)):
         # Cheap DoS guard: never hand a giant blob to json.loads.
         if len(block.encode("utf-8")) > MAX_BLOCK_BYTES:
             continue
@@ -212,7 +222,7 @@ def parse_markers(delivered: str, route: Sequence[str]) -> "list[AssetRequest]":
         req = _build_image(marker) if kind == "image" else _build_tts(marker)
         if req is None:  # failed field validation → drop this marker
             continue
-        requests.append(req)
+        requests.append(replace(req, block_index=block_index))
         counts[kind] += 1
     return requests
 
@@ -288,8 +298,10 @@ def render(
     returning a manifest — one dict per request, in the original document order.
 
     Images are rendered before TTS to avoid evict/reload thrash on the single warm GPU slot
-    (image↔voice are mutually exclusive), but the manifest is returned in document order so
-    ``rewrite_delivered`` can pair entries back to their source blocks.
+    (image↔voice are mutually exclusive), but the manifest is returned in document order.
+    Each entry carries its request's ``block`` ordinal (the source ```asset block's
+    position) so ``rewrite_delivered`` can pair entries back to their exact source block by
+    position rather than by content.
 
     **Never raises.** A per-asset backend failure (a Metal crash, a missing weight) is caught
     and recorded ``status='failed'`` with the reason — the other assets still render and the
@@ -311,7 +323,8 @@ def render(
         req = requests[i]
         if cancelled or (should_cancel is not None and should_cancel()):
             cancelled = True  # once cancelled, skip the rest without re-polling
-            manifest[i] = {"type": req.type, "status": "skipped", "reason": "cancelled"}
+            manifest[i] = {"type": req.type, "status": "skipped", "reason": "cancelled",
+                           "block": req.block_index}
             _emit(on_event, {"phase": "asset", "status": "skipped", "kind": req.type})
             continue
         _emit(on_event, {"phase": "asset", "status": "start", "kind": req.type})
@@ -324,15 +337,18 @@ def render(
                 entry = {
                     "type": "image", "status": "ok", "url": to_url(result.path),
                     "model": result.model, "seconds": result.seconds, "prompt": req.prompt,
+                    "block": req.block_index,
                 }
             else:
                 result = manager.synthesize(req.text, voice=req.voice, out_dir=out_dir)
                 entry = {
                     "type": "tts", "status": "ok", "url": to_url(result.path),
                     "voice": result.voice, "seconds": result.seconds, "text": req.text,
+                    "block": req.block_index,
                 }
         except Exception as exc:  # best-effort: one bad asset never aborts the batch
-            manifest[i] = {"type": req.type, "status": "failed", "reason": str(exc)}
+            manifest[i] = {"type": req.type, "status": "failed", "reason": str(exc),
+                           "block": req.block_index}
             _emit(on_event, {"phase": "asset", "status": "failed", "kind": req.type, "reason": str(exc)})
             continue
         manifest[i] = entry
@@ -369,47 +385,36 @@ def _reference(entry: dict) -> str:
 def rewrite_delivered(delivered: str, manifest: "Sequence[dict]") -> str:
     """Cosmetically replace each successfully-rendered ```asset block with a clean reference
     (image embed / audio caption), leaving blocks that were dropped, failed, or skipped
-    verbatim. Pairs a block to a manifest entry by matching the block's ``prompt``/``text``
-    against the entry's — robust to render reordering and to rejected blocks. Pure: no I/O,
-    never raises; an unmatched or unparseable block is left untouched.
+    verbatim. Pairs a block to a manifest entry by its ``block`` ordinal — the source
+    block's position, stamped by :func:`parse_markers` and carried through :func:`render` —
+    so two markers sharing a prompt/text (e.g. a rejected block immediately followed by a
+    valid one) can never cross-match and splice a render URL onto the wrong block. Pure:
+    no I/O, never raises; a block with no matching ``ok`` entry is left untouched.
     """
     if not isinstance(delivered, str) or not delivered:
         return delivered
-    ok = [m for m in (manifest or []) if isinstance(m, dict) and m.get("status") == "ok"]
-    if not ok:
+    # Index the successful renders by their source-block ordinal. An entry without a valid
+    # ``block`` is ignored (it can't be paired safely) rather than guessed by content.
+    by_block = {
+        m["block"]: m
+        for m in (manifest or [])
+        if isinstance(m, dict) and m.get("status") == "ok" and isinstance(m.get("block"), int)
+    }
+    if not by_block:
         return delivered
-    consumed = [False] * len(ok)
 
-    def _swap(body: str) -> "Optional[str]":
-        if len(body.encode("utf-8")) > MAX_BLOCK_BYTES:  # mirror parse_markers' DoS guard
-            return None
-        try:
-            marker = json.loads(body)
-        except (ValueError, RecursionError):
-            return None
-        if not isinstance(marker, dict):
-            return None
-        kind = marker.get("type")
-        key = {"image": "prompt", "tts": "text"}.get(kind)
-        if key is None or not isinstance(marker.get(key), str):
-            return None
-        target = marker[key].strip()
-        for idx, entry in enumerate(ok):
-            if not consumed[idx] and entry.get("type") == kind \
-                    and (entry.get(key) or "").strip() == target:
-                consumed[idx] = True
-                return _reference(entry)
-        return None
-
-    # Walk the SAME scanner the parser uses (so a block it rendered is a block we swap),
-    # rebuilding the text byte-faithfully: each passthrough line and each non-swapped
-    # block's raw lines are emitted verbatim, and join("\n") round-trips exactly.
+    # Walk the SAME scanner the parser used, counting blocks in the SAME order, so the Nth
+    # block here is the request parse_markers stamped block_index=N. Rebuild byte-faithfully:
+    # passthrough lines and every non-swapped block's raw lines are emitted verbatim, and
+    # join("\n") round-trips exactly.
     out: "list[str]" = []
+    block_ordinal = -1
     for kind, *rest in _scan_asset_blocks(delivered):
         if kind == "text":
             out.append(rest[0])
             continue
-        body, raw = rest[0], rest[1]
-        ref = _swap(body)
-        out.extend([ref] if ref is not None else raw)  # swap, else keep verbatim
+        block_ordinal += 1
+        raw = rest[1]
+        entry = by_block.get(block_ordinal)
+        out.extend([_reference(entry)] if entry is not None else raw)  # swap, else verbatim
     return "\n".join(out)

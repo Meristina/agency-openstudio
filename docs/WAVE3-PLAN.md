@@ -86,8 +86,15 @@ Parse rules (all enforced in `assets.py`):
 - `model` validated against the **marker** allowlist (not the full registry); unknown
   or non-allowlisted (e.g. `boogu-base`) → reject at parse time (before any load).
 - `voice` validated against `ALLOWED_VOICES`; default `af_heart` if absent/invalid.
-- Per-mission caps: stop honoring image markers after 4, TTS after 2; record the
-  truncation in the manifest (visible, not silent).
+- Per-mission caps: stop honoring image markers after 4, TTS after 2. Over-cap markers
+  are **dropped at the parse boundary** — silently, exactly like malformed / off-route /
+  unparseable markers. The manifest only ever contains entries for markers that were
+  actually rendered/attempted, so a dropped marker never reaches the manifest or the GUI
+  gallery. (Note the limit: `rewrite_delivered` only swaps *rendered* blocks; a block with
+  no `ok` entry — dropped, off-route, over-cap, or failed at render — is left **verbatim**
+  in `delivered`, so its raw ```asset fence still appears in the deliverable/PDF. That is
+  the existing, tested behavior; cleaning those residual fences is a separate change, not
+  part of this safety surface.)
 - Route gate: drop `image` markers unless `marketing ∈ dossier['route']`; drop `tts`
   unless `comms ∈ dossier['route']`.
 
@@ -135,9 +142,15 @@ Parse rules (all enforced in `assets.py`):
   for each request, check `should_cancel()` first (abort cleanly), call the injected
   `manager.generate_image/synthesize(out_dir=out_dir)`, batch by modality (all images
   then all TTS) to avoid evict/reload thrash, catch per-asset errors → record
-  `{type, status: ok|failed|skipped, reason, url, model, seed, seconds}`. Never raises.
+  `{type, status: ok|failed|skipped, reason, url, model, voice, seconds, prompt, text,
+  block}` (only the fields meaningful to that entry's type/status). Never
+  raises. `block` is the source ```asset block's ordinal (0-based over all well-formed
+  blocks), stamped by `parse_markers` so the rewrite can pair an entry back to its exact
+  block by position.
 - `rewrite_delivered(delivered, manifest) -> str`: **cosmetic** swap of each rendered
-  marker block for a clean reference (`![caption](/media/...)` / audio caption). No
+  marker block for a clean reference (`![caption](/media/...)` / audio caption), pairing
+  block↔entry by the `block` ordinal — never by prompt/text content, which collides when
+  two markers share text (a rejected block beside a valid one would cross-match). No
   semantic edit — keeps the text the Inspector verdict refers to intact in meaning;
   `_extract_sources` already ran inside `run_mission_cli`, so sourcing is unaffected.
 - Takes an **injected** `ModelManager` so tests stub the backends.
