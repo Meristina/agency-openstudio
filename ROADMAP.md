@@ -91,15 +91,21 @@ React/Vite GUI (app/studio, 127.0.0.1)
   GET-by-id / PDF scope to the launched `--path`, so the GUI shows only this
   project's missions (pre-feature unstamped missions stay visible). The
   `agency missions` CLI still lists all (unchanged).
-- ✅ **Mission "Stop watching"** *(server-side cancellation — resolved)*: the old
-  "Cancel" only stopped the client SSE stream while the mission finished and
-  persisted server-side; it now reads **"Stop watching"** with an honest notice
-  (the run continues, appears in History). **True** server-side termination is
-  intentionally **not** built — at the SSE layer an explicit cancel and a transient
-  disconnect are indistinguishable (killing on disconnect would discard valuable
-  runs), and a real kill needs a control input into `run_mission_cli` that this doc
-  reserves to the observational `on_event` (Art. IX) plus subprocess termination.
-  Left as a future **sanctioned** feature (explicit cancel endpoint + run-id + kill).
+- ✅ **Mission "Stop mission"** *(real server-side cancellation — shipped)*: the
+  button (formerly "Stop watching") now triggers a **cooperative** server-side
+  cancel. Aborting the fetch drops the SSE connection; the server sets a
+  `cancel_event` that the worker polls via a new `should_cancel` predicate on
+  `run_mission_cli`, checked at **phase boundaries only** (after routing, before
+  each department, before each synth→inspect iteration — **never** inside a started
+  synth→inspect cycle, so the veto loop is byte-identical and Art. IX holds). On
+  cancel it raises `MissionCancelled` **before** any persistence, so a stopped
+  mission usually leaves no trace, and the abandoned-worker leak is fixed.
+  It is **best-effort, not a kill**: an in-flight engine call and the *final*
+  synth→inspect cycle complete first, so a stop that lands in that last window still
+  finishes and persists — the GUI notice says so honestly (Refresh + check History).
+  Remaining future work: immediate subprocess termination (kill the in-flight
+  `Popen`) and an explicit cancel endpoint with a run-id, to close the best-effort
+  window.
 
 ### Wave 2 — Local multimodal inference, hardened *(Mac/Metal — deferred)*
 - **`agency_studio/engines/local_media.py`**: spawn SD/Whisper/Kokoro, **Metal only**,
