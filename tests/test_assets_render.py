@@ -101,6 +101,33 @@ def test_cancel_skips_remaining_without_spending_gpu():
     }
 
 
+def test_partial_cancel_keeps_rendered_and_latches_skip_for_the_rest():
+    # The realistic Stop: the user clicks mid-batch. Assets already rendered stay 'ok';
+    # the rest become 'skipped'. Polls go False (before the image) then True (from the
+    # first tts on), and the latch skips the SECOND tts WITHOUT re-polling.
+    mgr = _FakeManager()
+    events = []
+    polls = {"n": 0}
+
+    def should_cancel():
+        polls["n"] += 1
+        return polls["n"] > 1
+
+    tts2 = assets.AssetRequest(type="tts", text="world", voice="af_heart")
+    manifest = assets.render(
+        mgr, [IMG, TTS, tts2], out_dir="/m", to_url=_to_url,
+        should_cancel=should_cancel, on_event=events.append,
+    )
+    assert mgr.calls == [("image", "hero")], "only the pre-Stop image spent GPU time"
+    assert [(m["type"], m["status"]) for m in manifest] == [
+        ("image", "ok"), ("tts", "skipped"), ("tts", "skipped"),
+    ]  # document order, partial manifest
+    assert all(m["reason"] == "cancelled" for m in manifest if m["status"] == "skipped")
+    assert polls["n"] == 2, "the latch skips the rest without re-polling should_cancel"
+    asset_frames = {(e["status"], e["kind"]) for e in events if e.get("phase") == "asset"}
+    assert ("done", "image") in asset_frames and ("skipped", "tts") in asset_frames
+
+
 def test_render_emits_sse_event_frames():
     mgr = _FakeManager(fail_on={"hello"})
     events = []
@@ -156,6 +183,31 @@ def test_rewrite_matches_by_content_robust_to_order():
     ]
     out = assets.rewrite_delivered(delivered, manifest)
     assert "![first](/media/1.png)" in out and "![second](/media/2.png)" in out
+
+
+def test_rewrite_dedupes_identical_prompt_blocks_to_distinct_urls():
+    # Two blocks with the SAME prompt must each pair to a DISTINCT manifest entry (the
+    # consumed[] guard) — not both collapse onto the first url.
+    delivered = _block({"type": "image", "prompt": "hero"}) + "\n" + _block({"type": "image", "prompt": "hero"})
+    manifest = [
+        {"type": "image", "status": "ok", "url": "/media/1.png", "prompt": "hero"},
+        {"type": "image", "status": "ok", "url": "/media/2.png", "prompt": "hero"},
+    ]
+    out = assets.rewrite_delivered(delivered, manifest)
+    assert "![hero](/media/1.png)" in out and "![hero](/media/2.png)" in out
+    assert out.count("/media/1.png") == 1 and out.count("/media/2.png") == 1
+    assert "```asset" not in out
+
+
+def test_rewrite_escapes_untrusted_caption_so_it_cannot_inject_a_link():
+    # A crafted prompt must not break out of ![alt](url) and splice in an external image.
+    evil = "x](http://evil/p.png)![y"
+    delivered = _block({"type": "image", "prompt": evil})
+    manifest = [{"type": "image", "status": "ok", "url": "/media/a.png", "prompt": evil}]
+    out = assets.rewrite_delivered(delivered, manifest)
+    assert "](http://evil/p.png)" not in out  # the injected url never becomes an active ref
+    assert out.count("](/media/a.png)") == 1  # the real, server-generated url is the only embed
+    assert "\\]" in out and "\\(" in out  # the metacharacters were escaped, not left active
 
 
 def test_rewrite_no_ok_entries_returns_input_unchanged():

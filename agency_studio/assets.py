@@ -322,12 +322,26 @@ def render(
     return [m for m in manifest if m is not None]
 
 
+def _escape_caption(text: str) -> str:
+    """Neutralize an UNTRUSTED caption so it cannot break out of an ``![alt](url)`` link
+    and splice in an attacker-chosen image/URL. The marker ``prompt`` is model output:
+    a value like ``x](http://evil/p.png)![y`` would otherwise terminate the alt segment
+    and inject an external embed into the deliverable (and the PDF rendered from it).
+    Backslash-escapes the link-delimiter set ``[ ] ( )`` (markdown reads ``\\[`` as a
+    literal ``[``) and flattens newlines. Escape the backslash first so the ones we add
+    aren't re-escaped."""
+    out = text.replace("\\", "\\\\")
+    for ch in "[]()":
+        out = out.replace(ch, "\\" + ch)
+    return out.replace("\n", " ").replace("\r", " ")
+
+
 def _reference(entry: dict) -> str:
     """The clean markdown reference that replaces a rendered ``asset`` block: an image embed
     or an audio caption (a PDF/markdown reader can't play audio, so it gets a labelled link)."""
     url = entry.get("url", "")
     if entry.get("type") == "image":
-        caption = (entry.get("prompt") or "generated image").strip().replace("\n", " ")
+        caption = _escape_caption((entry.get("prompt") or "generated image").strip())
         return f"![{caption}]({url})"
     secs = entry.get("seconds")
     dur = f" ({secs}s)" if secs is not None else ""
