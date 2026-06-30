@@ -25,7 +25,7 @@ def _stub_engine(monkeypatch, inspector="VERDICT: PASS"):
     everything else → canned text. Keys off stable prompt text, never call order."""
     monkeypatch.setattr(cli_engine.shutil, "which", lambda b: "/usr/local/bin/" + b)
 
-    def _call(cmd, prompt, timeout=900):
+    def _call(cmd, prompt, timeout=900, should_cancel=None):
         low = prompt.lower()
         if "json array" in low:
             return '["solve", "product"]'
@@ -199,6 +199,35 @@ def test_stream_mission_wires_a_live_cancel_predicate(monkeypatch, tmp_path):
     assert sc() is False, "predicate must read False while the client stays connected"
 
 
+def test_write_heartbeat_writes_an_sse_comment_when_connected():
+    # The v2 mid-call kill hinges on noticing a disconnect during an event-silent
+    # engine call. The drain loop probes by WRITING a heartbeat; a connected client
+    # takes the write and the frame is an SSE comment (":" prefix, no data: field) so
+    # the GUI parser ignores it — it must never look like a mission event.
+    import io
+
+    handler = server.StudioHandler.__new__(server.StudioHandler)
+    handler.wfile = io.BytesIO()
+    assert handler._write_heartbeat() is True, "a connected client must read as live"
+    frame = handler.wfile.getvalue()
+    assert frame.startswith(b":"), "heartbeat must be an SSE comment, not a data: frame"
+    assert b"data:" not in frame
+
+
+def test_write_heartbeat_reports_gone_on_broken_pipe():
+    # A failed write is the reliable 'client gone' signal (the GUI aborted the fetch).
+    class _BrokenWfile:
+        def write(self, _data):
+            raise BrokenPipeError()
+
+        def flush(self):
+            pass
+
+    handler = server.StudioHandler.__new__(server.StudioHandler)
+    handler.wfile = _BrokenWfile()
+    assert handler._write_heartbeat() is False, "a broken pipe must read as gone"
+
+
 def test_post_mission_missing_goal_is_400(tmp_path):
     httpd, host, port = _start(tmp_path)
     try:
@@ -232,7 +261,7 @@ def test_veto_then_pass_streams_two_inspect_events(monkeypatch, tmp_path):
     monkeypatch.setattr(cli_engine.shutil, "which", lambda b: "/usr/local/bin/" + b)
     seq = iter(["VETO: invented stat", "VERDICT: PASS"])
 
-    def _call(cmd, prompt, timeout=900):
+    def _call(cmd, prompt, timeout=900, should_cancel=None):
         low = prompt.lower()
         if "json array" in low:
             return '["product"]'
