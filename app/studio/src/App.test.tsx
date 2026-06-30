@@ -7,7 +7,7 @@ afterEach(cleanup); // no auto-cleanup (globals off) — unmount between tests
 vi.mock("./api", () => ({
   listMissions: vi.fn().mockResolvedValue([]),
   getMission: vi.fn(),
-  getModelsStatus: vi.fn().mockResolvedValue({ resident: null, models: {} }),
+  getModelsStatus: vi.fn().mockResolvedValue({ resident: null, image_models: [], models: {} }),
   runMission: vi.fn(),
   cancelMission: vi.fn(),
 }));

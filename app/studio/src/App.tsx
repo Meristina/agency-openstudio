@@ -327,7 +327,7 @@ export default function App() {
         aria-labelledby="tab-image"
         hidden={tab !== "image"}
       >
-        <ImagePanel onGenerated={onGenerated} />
+        <ImagePanel imageModels={modelStatus?.image_models ?? []} onGenerated={onGenerated} />
         <section className="panel gallery-panel">
           <h2>Gallery</h2>
           <Gallery items={gallery.filter((g) => g.kind === "image")} />

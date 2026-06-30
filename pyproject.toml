@@ -40,6 +40,17 @@ media = [
     "kokoro-onnx",   # MIT — Kokoro-82M text-to-speech (ONNX, no torch/spacy)
     "soundfile",     # BSD — write the synthesized audio to a WAV file
 ]
+# Wave 2 (EXPERIMENTAL) — Boogu-Image-0.1 (Apache-2.0 weights; #1 on Qwen-Image-Bench)
+# via the community MLX port. Deliberately SEPARATE from [media]: the port is a
+# git-installed, unvetted, work-in-progress repo and the heaviest + slowest image option
+# (a 10B model + a Qwen3-VL-8B conditioner; minutes/image on a 16 GB Mac). It rides its
+# own "boogu" backend in local_media, lazy-imported, so it never weighs on the lean mflux
+# path; absent ⇒ a clean 501 pointing here. Validated live on the target Mac (Wave 2.4).
+boogu = [
+    "boogu-image-mlx @ git+https://github.com/xocialize/boogu-image-mlx",  # MIT — MLX port
+    "mlx-vlm",       # MIT — the Qwen3-VL conditioner Boogu uses
+    "Pillow",        # HPND — save the generated array to PNG
+]
 # Placeholders — populated when the matching waves are implemented (see ROADMAP.md).
 # Wave 4 (RAG): markitdown for document ingestion + an embeddings lib.
 studio = [

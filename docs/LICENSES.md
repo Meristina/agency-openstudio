@@ -37,6 +37,18 @@ are downloaded at runtime into the OS cache, never bundled or committed.
 | **Kokoro-82M** weights (ONNX + voices) | TTS model | Apache-2.0 | ✅ Pinned by URL + SHA-256 (see `engines/models.py`) |
 | **ffmpeg** | Audio decode for STT (system tool) | LGPL/GPL (build-dependent) | ⚠️ **System dependency, not bundled or linked** — invoked as a separate process by `mlx-whisper` (`brew install ffmpeg`). No distribution, so its license does not affect Agency Studio's. |
 
+### Experimental image backend — the `[boogu]` extra
+
+Isolated behind its own backend + extra; an unvetted, work-in-progress **community** port
+(reviewed as such, opt-in only). All MIT/Apache.
+
+| Component | Role | License | Notes |
+|---|---|---|---|
+| **boogu-image-mlx** (`xocialize/boogu-image-mlx`) | MLX port of Boogu-Image | MIT | ⚠️ git-installed (not on PyPI), WIP community port — opt-in `[boogu]` extra only |
+| **mlx-vlm** | Qwen3-VL conditioner runtime | MIT | ✅ |
+| **Boogu-Image-0.1-Base** weights (mlx-community 4-bit) | Image model | Apache-2.0 | ✅ non-gated |
+| **Qwen3-VL-8B-Instruct** weights (mlx-community 4-bit) | Text/instruction conditioner | Apache-2.0 | ✅ non-gated |
+
 ## Rule for contributors / agents
 
 Before adding a dependency or porting third-party code: **check the license**. If it is not

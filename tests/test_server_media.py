@@ -39,14 +39,14 @@ def _request(host, port, method, path, body=None, headers=None):
 
 def _stub_media(monkeypatch):
     """Stub the multimodal back-ends so the real ModelManager runs without MLX."""
-    monkeypatch.setattr(local_media, "_probe_image", lambda: None)
+    monkeypatch.setattr(local_media, "_probe_image", lambda entry: None)
     monkeypatch.setattr(local_media, "_probe_stt", lambda: None)
     monkeypatch.setattr(local_media, "_probe_tts", lambda: None)
-    monkeypatch.setattr(local_media, "_load_image_backend", lambda: object())
+    monkeypatch.setattr(local_media, "_load_image_backend", lambda entry: object())
     monkeypatch.setattr(local_media, "_load_stt_backend", lambda: object())
     monkeypatch.setattr(local_media, "_load_tts_backend", lambda: object())
 
-    def _run_image(model, *, prompt, steps, seed, width, height, out_path):
+    def _run_image(entry, model, *, prompt, steps, seed, width, height, out_path):
         out_path.write_bytes(b"\x89PNG\r\n\x1a\nstub")
 
     def _run_tts(model, *, text, voice, out_path):
@@ -71,6 +71,7 @@ def test_post_image_generates_and_serves(monkeypatch, tmp_path):
         assert status == 200
         payload = json.loads(body)
         assert payload["seed"] == 7
+        assert payload["model"] == "flux-schnell"  # default model echoed back
         assert payload["url"].startswith("/media/images/")
         assert payload["url"].endswith(".png")
         # The generated asset is actually served back through /media (path_inside).
@@ -88,6 +89,38 @@ def test_post_image_missing_prompt_400(monkeypatch, tmp_path):
         status, _ = _request(
             host, port, "POST", "/api/image",
             body=json.dumps({"prompt": "   "}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert status == 400
+    finally:
+        httpd.shutdown()
+
+
+def test_post_image_explicit_model_echoed(monkeypatch, tmp_path):
+    """An explicit valid model id is accepted and echoed back in the 200 JSON."""
+    _stub_media(monkeypatch)
+    httpd, host, port = _start(tmp_path)
+    try:
+        status, body = _request(
+            host, port, "POST", "/api/image",
+            body=json.dumps({"prompt": "great text", "model": "z-image-turbo"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert status == 200
+        assert json.loads(body)["model"] == "z-image-turbo"
+    finally:
+        httpd.shutdown()
+
+
+def test_post_image_unknown_model_400(monkeypatch, tmp_path):
+    """An unknown model id is a clean 400 (validated against the registry before the
+    manager runs), never a 500."""
+    _stub_media(monkeypatch)
+    httpd, host, port = _start(tmp_path)
+    try:
+        status, _ = _request(
+            host, port, "POST", "/api/image",
+            body=json.dumps({"prompt": "x", "model": "totally-made-up"}),
             headers={"Content-Type": "application/json"},
         )
         assert status == 400
@@ -116,7 +149,7 @@ def test_post_image_backend_failure_returns_500(monkeypatch, tmp_path):
     client error and could leak an internal model URL/size cap)."""
     _stub_media(monkeypatch)
 
-    def _explode(model, **kwargs):
+    def _explode(entry, model, **kwargs):
         raise RuntimeError("model download exceeded cap: https://internal/url")
 
     monkeypatch.setattr(local_media, "_run_image_backend", _explode)
@@ -137,7 +170,7 @@ def test_post_image_missing_extra_returns_501(monkeypatch, tmp_path):
     → the route answers 501 with the install hint, never a 500 traceback."""
     _stub_media(monkeypatch)
 
-    def _no_mflux():
+    def _no_mflux(entry):
         raise local_media.MediaUnavailable("image generation needs mflux — pip install ...")
 
     monkeypatch.setattr(local_media, "_probe_image", _no_mflux)
@@ -212,19 +245,25 @@ def test_models_status_reports_resident(monkeypatch, tmp_path):
     _stub_media(monkeypatch)
     httpd, host, port = _start(tmp_path)
     try:
-        # Nothing loaded yet → resident is null, model ids reported.
+        # Nothing loaded yet → resident is null; the image_models list is reported.
         status, body = _request(host, port, "GET", "/api/models")
         assert status == 200
         payload = json.loads(body)
         assert payload["resident"] is None
-        assert "FLUX.1-schnell" in payload["models"]["image"]
+        # New shape: ordered image_models with id/label/note/default; flux-schnell first + default.
+        ids = [m["id"] for m in payload["image_models"]]
+        assert ids == ["flux-schnell", "z-image-turbo", "flux2-klein-4b", "boogu-base"]
+        assert payload["image_models"][0]["default"] is True
+        assert payload["image_models"][0]["label"] == "FLUX.1-schnell"
+        assert sum(m["default"] for m in payload["image_models"]) == 1  # exactly one default
+        assert payload["models"]["tts"] == "kokoro-v1.0"
 
-        # After a generation the image model is warm.
+        # After a generation the image model is warm; resident is the model id.
         _request(host, port, "POST", "/api/image",
                  body=json.dumps({"prompt": "warm it"}),
                  headers={"Content-Type": "application/json"})
         _, body2 = _request(host, port, "GET", "/api/models")
-        assert json.loads(body2)["resident"] == "image"
+        assert json.loads(body2)["resident"] == "flux-schnell"
     finally:
         httpd.shutdown()
 

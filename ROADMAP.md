@@ -150,17 +150,25 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
   is resident — switching modality (image ↔ voice) **evicts** the previous and frees the
   Metal buffer cache. A cheap import **probe before eviction** means a request for an
   uninstalled modality never destroys a working warm model. A lock serialises Metal use.
-  - **image** — FLUX.1-schnell via **mflux** (MIT); **STT** — Whisper large-v3-turbo via
-    **mlx-whisper** (MIT); **TTS** — Kokoro-82M via **kokoro-onnx** (MIT). All lazy-imported
-    behind the `[media]` extra; `MediaUnavailable` (an `ImportError`) → clean **501**.
+  - **image** — a **selectable** model (registry in `models.py`, GUI dropdown): **FLUX.1-
+    schnell** (default, 8-bit mirror), **Z-Image-Turbo** (fast, 8-step), **FLUX.2-klein-4B**
+    (modern) — all mflux-native, non-gated, Apache-2.0, 16 GB-friendly — plus an
+    **experimental Boogu-Image-0.1** entry on a separate `"boogu"` backend (the `[boogu]`
+    extra: a git-installed community MLX port + a Qwen3-VL-8B conditioner; highest quality
+    but slow, minutes/image). The backend dispatch is a pluggable `(probe, load, run)`
+    triple, so mflux and non-mflux engines coexist. **STT** — Whisper large-v3-turbo
+    via **mlx-whisper** (MIT); **TTS** — Kokoro-82M via **kokoro-onnx** (MIT). All
+    lazy-imported behind the `[media]` extra; `MediaUnavailable` (an `ImportError`) →
+    clean **501**.
 - ✅ **`agency_studio/engines/models.py`** — integrity-checked model resolution. Hub
   models (mflux/whisper) ride HF's content-addressed cache; the two direct Kokoro files
   are pinned by URL (https + host **allowlist**, re-validated on **every redirect hop**)
   and **SHA-256**, verified on **every load** (cache hits included). Weights live in the
   OS cache (~18 GB), never in the repo.
-- ✅ **Endpoints** `POST /api/image` · `/api/tts` · `/api/stt` · `GET /api/models`, with
-  generated assets served read-only under `/media/` (`path_inside()`-guarded). Image
-  params are range-checked (no unbounded-compute OOM); STT streams the upload to disk in
+- ✅ **Endpoints** `POST /api/image` (optional `model` id) · `/api/tts` · `/api/stt` ·
+  `GET /api/models` (lists `image_models` + the warm `resident`), with generated assets
+  served read-only under `/media/` (`path_inside()`-guarded). Image params are
+  range-checked per-model (`steps_max`; no unbounded-compute OOM); STT streams the upload to disk in
   bounded chunks; back-end/model-fetch failures are 5xx, input errors 400.
 - ✅ **GUI** — Image/Voice **tabs**, a session **gallery**, and a warm-model **status
   chip** (the former deferred Wave-1 gallery/ModelManager surface). Full ARIA tab

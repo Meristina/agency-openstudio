@@ -97,6 +97,21 @@ body {
 }
 input[type="file"] { color: var(--muted); font: inherit; font-size: 0.85rem; }
 
+/* image-model selector (Image tab) */
+.field { display: inline-flex; align-items: center; gap: 0.4rem; }
+.field-label { color: var(--muted); font-size: 0.78rem; }
+.model-select {
+  background: #0c0e12;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.45rem 0.5rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.model-select:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* layout: run + history on top row, detail spanning below */
 .layout {
   display: grid;
