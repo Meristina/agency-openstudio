@@ -512,6 +512,58 @@ def test_options_preflight_grants_loopback_cors(tmp_path):
         httpd.shutdown()
 
 
+# ── DNS-rebinding: Host-header allowlist ────────────────────────────────────────
+
+def test_foreign_host_header_is_rejected_403(tmp_path):
+    # Even reaching the loopback-bound socket, a request whose Host names a non-loopback
+    # name (a rebound evil.com) is refused with 403 before any route runs — the defense
+    # the Origin allowlist alone can't provide against DNS rebinding.
+    httpd, host, port = _start(tmp_path)
+    try:
+        raw = _raw_request(
+            host, port,
+            b"GET /api/missions HTTP/1.1\r\nHost: evil.example.com\r\n"
+            b"Connection: close\r\n\r\n",
+        )
+        assert raw.startswith(b"HTTP/1.1 403")
+    finally:
+        httpd.shutdown()
+
+
+def test_loopback_host_header_is_allowed(tmp_path):
+    # The legitimate local client (Host: 127.0.0.1:<port>) passes the guard.
+    httpd, host, port = _start(tmp_path)
+    try:
+        raw = _raw_request(
+            host, port,
+            f"GET /api/missions HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+            f"Connection: close\r\n\r\n".encode(),
+        )
+        assert not raw.startswith(b"HTTP/1.1 403"), "a loopback Host must not be rejected"
+    finally:
+        httpd.shutdown()
+
+
+# ── SSE streaming: a stalled (non-draining) client is detected as gone ──────────
+
+def test_sse_writes_treat_socket_timeout_as_a_gone_client():
+    # With a send deadline on the streaming socket, a write that times out (a client that
+    # opened the stream but stopped reading) is reported as gone — the same as a broken
+    # pipe — so the drain loop sets cancel_event instead of blocking the handler forever.
+    handler = server.StudioHandler.__new__(server.StudioHandler)
+
+    class _StalledWfile:
+        def write(self, _b):
+            raise socket.timeout("send timed out")
+
+        def flush(self):
+            pass
+
+    handler.wfile = _StalledWfile()
+    assert handler._write_sse({"phase": "x"}) is False
+    assert handler._write_heartbeat() is False
+
+
 # ── PDF export: GET /api/mission/{id}/pdf ───────────────────────────────────────
 
 def _get(host, port, path):
