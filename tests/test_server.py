@@ -9,6 +9,7 @@ a CLI installed and without any network. HOME is redirected to a tmp dir so the
 
 import http.client
 import json
+import socket
 import threading
 
 import pytest
@@ -371,5 +372,173 @@ def test_mission_pdf_rejects_path_traversal(monkeypatch, tmp_path):
         resp, body = _get(host, port, "/api/mission/../../../../etc/passwd/pdf")
         assert resp.status == 404
         assert b"root:" not in body
+    finally:
+        httpd.shutdown()
+
+
+def test_mission_pdf_render_error_is_500(monkeypatch, tmp_path):
+    # A render failure AFTER the [pdf] extra is present (not ImportError/OSError)
+    # must surface as a clean 500, not a dropped connection.
+    def _boom(_mid):
+        raise RuntimeError("WeasyPrint failed to render")
+
+    monkeypatch.setattr("agency_cli.exporter.export_pdf", _boom)
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _get(host, port, "/api/mission/20260630-101010-demo/pdf")
+        assert resp.status == 500
+        assert "PDF export failed" in json.loads(body)["error"]
+    finally:
+        httpd.shutdown()
+
+
+# ── request-body hardening ──────────────────────────────────────────────────────
+
+def _raw_request(host, port, request_bytes):
+    """Send a hand-crafted HTTP request (bypassing http.client's own framing) and
+    return the raw response bytes — for malformed Content-Length cases."""
+    with socket.create_connection((host, port), timeout=5) as sock:
+        sock.sendall(request_bytes)
+        sock.settimeout(5)
+        chunks = []
+        try:
+            while True:
+                buf = sock.recv(4096)
+                if not buf:
+                    break
+                chunks.append(buf)
+        except socket.timeout:
+            pass
+    return b"".join(chunks)
+
+
+def test_negative_content_length_is_400(tmp_path):
+    httpd, host, port = _start(tmp_path)
+    try:
+        raw = _raw_request(
+            host, port,
+            b"POST /api/mission HTTP/1.1\r\nHost: localhost\r\n"
+            b"Content-Length: -1\r\nConnection: close\r\n\r\n",
+        )
+        assert raw.startswith(b"HTTP/1.1 400")
+    finally:
+        httpd.shutdown()
+
+
+def test_oversized_content_length_is_413(tmp_path):
+    # A Content-Length above the cap is rejected WITHOUT reading the body, so the
+    # handler thread never blocks waiting on bytes the client won't send. The reject
+    # also tells keep-alive clients the socket is closing (Connection: close).
+    httpd, host, port = _start(tmp_path)
+    try:
+        raw = _raw_request(
+            host, port,
+            b"POST /api/mission HTTP/1.1\r\nHost: localhost\r\n"
+            b"Content-Length: 2000000\r\n\r\n",
+        )
+        assert raw.startswith(b"HTTP/1.1 413")
+        assert b"Connection: close" in raw
+    finally:
+        httpd.shutdown()
+
+
+def test_chunked_body_is_rejected_as_411(tmp_path):
+    # http.server can't decode a chunked body; an unread chunk-framed body would
+    # desync the socket, so Transfer-Encoding is refused before any read.
+    httpd, host, port = _start(tmp_path)
+    try:
+        raw = _raw_request(
+            host, port,
+            b"POST /api/mission HTTP/1.1\r\nHost: localhost\r\n"
+            b"Transfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
+        )
+        assert raw.startswith(b"HTTP/1.1 411")
+        assert b"Connection: close" in raw
+    finally:
+        httpd.shutdown()
+
+
+def test_withheld_body_times_out_as_408(monkeypatch, tmp_path):
+    # A declared-but-withheld body (slowloris) must not pin the handler thread; the
+    # bounded read returns 408 instead of blocking forever.
+    monkeypatch.setattr(server, "_BODY_READ_TIMEOUT", 0.3)
+    httpd, host, port = _start(tmp_path)
+    try:
+        raw = _raw_request(
+            host, port,
+            b"POST /api/mission HTTP/1.1\r\nHost: localhost\r\n"
+            b"Content-Length: 50\r\n\r\n",  # promises 50 bytes, sends none
+        )
+        assert raw.startswith(b"HTTP/1.1 408")
+    finally:
+        httpd.shutdown()
+
+
+def test_unknown_post_path_is_404(tmp_path):
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/nope", body=json.dumps({"x": 1}),
+                     headers={"Content-Type": "application/json"})
+        assert conn.getresponse().status == 404
+    finally:
+        httpd.shutdown()
+
+
+# ── static serving: SPA fallback + content types ────────────────────────────────
+
+def test_missing_asset_with_extension_is_404_not_index(tmp_path):
+    # A stale/renamed hashed bundle must 404 — never the SPA index as text/html,
+    # which the browser would reject as a module script (blank-screen failure).
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<!doctype html><title>spa</title>", encoding="utf-8")
+    httpd, host, port = _start(tmp_path, static_root=dist)
+    try:
+        resp, body = _get(host, port, "/assets/index-abc123.js")
+        assert resp.status == 404
+        assert b"<!doctype html>" not in body
+    finally:
+        httpd.shutdown()
+
+
+def test_extensionless_route_falls_back_to_index(tmp_path):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<!doctype html><title>spa</title>", encoding="utf-8")
+    httpd, host, port = _start(tmp_path, static_root=dist)
+    try:
+        resp, body = _get(host, port, "/missions/some-id")  # client-side route
+        assert resp.status == 200
+        assert b"spa" in body
+    finally:
+        httpd.shutdown()
+
+
+def test_dotted_route_segment_still_falls_back_to_index(tmp_path):
+    # A route whose last segment has a dot (e.g. a version) is NOT a known asset
+    # type, so it must fall back to index.html, not 404.
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<!doctype html><title>spa</title>", encoding="utf-8")
+    httpd, host, port = _start(tmp_path, static_root=dist)
+    try:
+        resp, body = _get(host, port, "/missions/v1.2")
+        assert resp.status == 200
+        assert b"spa" in body
+    finally:
+        httpd.shutdown()
+
+
+def test_static_serves_known_content_type(tmp_path):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("x", encoding="utf-8")
+    (dist / "logo.webp").write_bytes(b"RIFFfakewebp")
+    httpd, host, port = _start(tmp_path, static_root=dist)
+    try:
+        resp, _ = _get(host, port, "/logo.webp")
+        assert resp.status == 200
+        assert resp.getheader("Content-Type") == "image/webp"
     finally:
         httpd.shutdown()

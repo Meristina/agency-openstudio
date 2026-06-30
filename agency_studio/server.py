@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import queue
 import re
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -32,6 +33,16 @@ from urllib.parse import urlparse
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+
+# Upper bound on a request body the studio will read. A mission request is a tiny
+# JSON object ({goal, engine}); capping the read defends the handler thread from a
+# lying/oversized Content-Length that would otherwise block it on rfile.read().
+_MAX_BODY_BYTES = 1 << 20  # 1 MiB
+
+# Wall-clock bound on reading a request body. Without it a client that declares a
+# Content-Length but withholds the bytes (slowloris) would pin a handler thread
+# forever — ThreadingHTTPServer spawns one unbounded thread per connection.
+_BODY_READ_TIMEOUT = 15.0  # seconds
 
 # Loopback hosts the studio is allowed to bind — enforced at the bind point.
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
@@ -54,8 +65,15 @@ _CONTENT_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".ico": "image/x-icon",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".avif": "image/avif",
     ".woff": "font/woff",
     ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+    ".wasm": "application/wasm",
+    ".txt": "text/plain; charset=utf-8",
+    ".webmanifest": "application/manifest+json",
     ".map": "application/json; charset=utf-8",
 }
 
@@ -124,18 +142,74 @@ class StudioHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        # When we're about to drop the socket (e.g. an unread body), tell HTTP/1.1
+        # keep-alive clients so they don't reuse a connection we're closing.
+        if self.close_connection:
+            self.send_header("Connection", "close")
         for name, value in (extra_headers or {}).items():
             self.send_header(name, value)
         self._cors()
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_json(self, obj, status: int = 200) -> None:
+    def _send_json(self, obj: object, status: int = 200) -> None:
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self._send_bytes(body, "application/json; charset=utf-8", status)
 
     def _send_error_json(self, status: int, message: str) -> None:
         self._send_json({"error": message}, status=status)
+
+    def _reject(self, status: int, message: str) -> None:
+        """Send an error response AND close the connection. The single way to reject
+        a request whose body was not (fully) read: an unread body left in the socket
+        would desync the next request on a kept-alive HTTP/1.1 connection, so the
+        socket must not be reused (``_send_bytes`` emits ``Connection: close``)."""
+        self.close_connection = True
+        self._send_error_json(status, message)
+
+    def _read_body(self) -> "bytes | None":
+        """Read the request body, bounded in size and time. Returns the body bytes,
+        or ``None`` after rejecting + closing the connection (400 malformed length,
+        413 too large, 408 read timeout, 411 chunked-unsupported).
+
+        Defends the handler thread two ways: ``_MAX_BODY_BYTES`` caps a lying-large
+        Content-Length, and ``_BODY_READ_TIMEOUT`` stops a withheld/slow body
+        (slowloris) from blocking ``rfile.read`` forever.
+        """
+        # http.server does not decode chunked bodies; an unread chunk-framed body
+        # would desync the socket, so reject Transfer-Encoding outright.
+        if self.headers.get("Transfer-Encoding"):
+            self._reject(411, "Transfer-Encoding unsupported — send Content-Length")
+            return None
+        raw_len = self.headers.get("Content-Length")
+        if raw_len is None:
+            return b""
+        try:
+            length = int(raw_len)
+        except ValueError:
+            length = -1
+        if length < 0:
+            self._reject(400, "invalid Content-Length")
+            return None
+        if length > _MAX_BODY_BYTES:
+            self._reject(413, "request body too large")
+            return None
+        if length == 0:
+            return b""
+        # Bound the body read so a stalled client can't pin the thread. The timeout
+        # is scoped to this read and cleared afterwards — the SSE stream that follows
+        # only writes, and the reject response below must not write under a deadline.
+        self.connection.settimeout(_BODY_READ_TIMEOUT)
+        try:
+            body: "bytes | None" = self.rfile.read(length)
+        except (TimeoutError, socket.timeout):
+            body = None
+        finally:
+            self.connection.settimeout(None)
+        if body is None:
+            self._reject(408, "request body read timed out")
+            return None
+        return body
 
     # ── routing ─────────────────────────────────────────────────────────────
     def do_OPTIONS(self) -> None:  # noqa: N802 (stdlib naming)
@@ -161,7 +235,8 @@ class StudioHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/mission":
             return self._handle_run_mission()
-        self._send_error_json(404, "not found")
+        # Unknown POST: the body is never read, so close to avoid a keep-alive desync.
+        self._reject(404, "not found")
 
     # ── API: list / get saved missions ───────────────────────────────────────
     def _handle_list_missions(self) -> None:
@@ -196,6 +271,12 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._send_error_json(501, str(exc))
         except OSError:  # no deliverable, or the file vanished/unreadable before we read it
             return self._send_error_json(404, f"no deliverable for mission '{mission_id}'")
+        except Exception:  # a render failure (e.g. WeasyPrint) — clean 500, not a dropped socket
+            # Log the full trace to the operator (log_message is silenced), but return
+            # a generic message so internal paths in the exception don't leak.
+            import traceback
+            traceback.print_exc()
+            return self._send_error_json(500, "PDF export failed")
         self._send_bytes(
             body, "application/pdf",
             extra_headers={"Content-Disposition": f'attachment; filename="{mission_id}.pdf"'},
@@ -214,12 +295,12 @@ class StudioHandler(BaseHTTPRequestHandler):
 
     def _parse_mission_request(self) -> "tuple[str, str] | None":
         """Read + validate the JSON body. Returns ``(goal, engine)``, or ``None``
-        after sending the matching 400 (bad JSON / missing goal)."""
-        try:
-            length = int(self.headers.get("Content-Length", 0))
-        except ValueError:
-            length = 0
-        raw = self.rfile.read(length) if length else b""
+        after sending the matching error: a 400 for bad JSON / missing goal, or the
+        error ``_read_body`` already sent (400/408/411/413) for a malformed, withheld,
+        chunked, or oversized body."""
+        raw = self._read_body()
+        if raw is None:
+            return None  # _read_body already sent the error and closed the connection
         try:
             payload = json.loads(raw or b"{}")
         except json.JSONDecodeError:
@@ -319,7 +400,13 @@ class StudioHandler(BaseHTTPRequestHandler):
         if target.is_dir():
             target = target / "index.html"
         if not target.is_file():
-            # SPA fallback: unknown non-API route → index.html (client-side routing).
+            # SPA fallback: a client-side route → index.html. A missing path whose
+            # suffix is a KNOWN asset type is a real asset (e.g. a stale hashed bundle)
+            # — 404 it, never serve index.html as that type (the browser would reject
+            # the module script and the GUI would blank-screen). Keying on known types
+            # (not "any dot") means a route segment with a dot still falls back.
+            if Path(path).suffix.lower() in _CONTENT_TYPES:
+                return self._send_error_json(404, "not found")
             target = root / "index.html"
             if not target.is_file():
                 return self._send_error_json(404, "not found")
