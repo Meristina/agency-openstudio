@@ -2,7 +2,27 @@
 // the Python server by Vite (see vite.config.ts); in the built GUI they are
 // same-origin because server.py serves dist/.
 
-import type { Dossier, MissionEvent, MissionSummary } from "./types";
+import type {
+  Dossier,
+  ImageResult,
+  MissionEvent,
+  MissionSummary,
+  ModelsStatus,
+  SpeechResult,
+  TranscriptResult,
+} from "./types";
+
+/** Build an error message that surfaces the server's JSON `error` field when present
+ * (e.g. a 501's "pip install 'agency-studio[media]'" hint), else just the status. */
+async function errorText(res: Response, label: string): Promise<string> {
+  try {
+    const data = (await res.json()) as { error?: string };
+    if (data.error) return `${label} → ${res.status}: ${data.error}`;
+  } catch {
+    /* body was not JSON — fall through to the bare status */
+  }
+  return `${label} → ${res.status}`;
+}
 
 export async function listMissions(): Promise<MissionSummary[]> {
   const res = await fetch("/api/missions");
@@ -80,6 +100,52 @@ export async function runMission(
   // Flush any final frame the stream ended on without a trailing blank line.
   const tail = parseFrame(buffer);
   if (tail) onEvent(tail);
+}
+
+// ── Wave 2 — local multimodal ────────────────────────────────────────────────
+
+/** Generate an image from a prompt (POST /api/image). Optional steps/seed/size. */
+export async function generateImage(
+  prompt: string,
+  opts: { steps?: number; seed?: number; width?: number; height?: number } = {},
+): Promise<ImageResult> {
+  const res = await fetch("/api/image", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, ...opts }),
+  });
+  if (!res.ok) throw new Error(await errorText(res, "POST /api/image"));
+  return (await res.json()) as ImageResult;
+}
+
+/** Synthesize speech from text (POST /api/tts). */
+export async function synthesizeSpeech(text: string, voice?: string): Promise<SpeechResult> {
+  const res = await fetch("/api/tts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(voice ? { text, voice } : { text }),
+  });
+  if (!res.ok) throw new Error(await errorText(res, "POST /api/tts"));
+  return (await res.json()) as SpeechResult;
+}
+
+/** Transcribe an audio clip (POST /api/stt). The blob's bytes are the request body;
+ * its MIME type tells the server how to decode it. */
+export async function transcribeAudio(audio: Blob): Promise<TranscriptResult> {
+  const res = await fetch("/api/stt", {
+    method: "POST",
+    headers: { "Content-Type": audio.type || "audio/wav" },
+    body: audio,
+  });
+  if (!res.ok) throw new Error(await errorText(res, "POST /api/stt"));
+  return (await res.json()) as TranscriptResult;
+}
+
+/** Which local model is currently warm + the configured model ids (GET /api/models). */
+export async function getModelsStatus(): Promise<ModelsStatus> {
+  const res = await fetch("/api/models");
+  if (!res.ok) throw new Error(await errorText(res, "GET /api/models"));
+  return (await res.json()) as ModelsStatus;
 }
 
 /** Parse one SSE frame ("data: {...}") into a MissionEvent, or null. */

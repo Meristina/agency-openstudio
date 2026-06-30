@@ -28,6 +28,25 @@ lsof -iTCP -sTCP:LISTEN | grep <port>                              # → 127.0.0
 Both checks are part of Wave 0's definition of done and must be covered by
 `tests/test_server.py`.
 
+## Wave 2 — model downloads (rules #4 & #5, implemented)
+
+The local multimodal layer downloads model weights at runtime; the supply-chain rules
+are enforced in `agency_studio/engines/models.py` (covered by `tests/test_local_media.py`):
+
+- **Hub-managed models** (mflux / mlx-whisper) are pulled by repo id through `huggingface_hub`,
+  which stores blobs in a **content-addressed cache** — integrity comes from the content hash.
+- **Direct-URL files** (the two Kokoro-onnx artifacts) go through `models.ensure_file`, which:
+  - **validates the URL** — `https` only, host on a fixed **allowlist**, re-checked on
+    **every redirect hop** (`_AllowlistRedirectHandler`) so an allowlisted host can't bounce
+    the bytes elsewhere (rule #4);
+  - **verifies SHA-256** against a pinned digest on **every load** (cache hits included),
+    removing and rejecting a file that fails (rule #5);
+  - bounds the download size and time, and writes atomically (temp + rename).
+- Generated assets are served read-only under `/media/`, guarded by the same
+  `path_inside()` as the GUI; a traversal attempt is a 404 (asserted in `tests/test_server_media.py`).
+- The image model is loaded from a **non-gated, Apache-2.0** pre-quantized mirror, so no
+  Hugging Face token or credential is stored anywhere (consistent with rule #6).
+
 ## `path_inside()` reference implementation
 
 Mirrors the shipped guard in `agency_studio/server.py` (the source of truth). It takes the

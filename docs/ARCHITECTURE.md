@@ -1,8 +1,9 @@
 # Architecture — Agency Studio
 
-> Target state. Wave 0 (the stdlib server, `on_event` hook, and React Mission Console) is
-> implemented; the local-inference layer (Waves 2-6) is still deferred. See `ROADMAP.md`
-> for the build order.
+> Target state. Waves 0-2 are implemented: the stdlib server + `on_event` hook, the React
+> Mission Console, and the **local multimodal layer (image / STT / TTS on Metal)** —
+> validated live on an M4. The remaining local-inference layers (Waves 3-6: multimodal-as-
+> deliverable, RAG, web search, MCP) are still deferred. See `ROADMAP.md` for the build order.
 
 ## Stacked view
 
@@ -17,7 +18,9 @@ top. Three layers:
                                 ▼  HTTP / SSE
 ┌─ agency_studio/server.py — http.server stdlib, bind 127.0.0.1 ─────┐
 │  POST /api/mission · GET /api/missions · /api/mission/{id} (+ /pdf) │
-│  Wave 2+ (deferred): /api/{image,tts,stt,docs,models}               │
+│  Wave 2 (shipped): POST /api/{image,tts,stt} · GET /api/models      │
+│                    · /media/<asset> (path_inside-guarded)           │
+│  Wave 4 (deferred): /api/docs (RAG)                                 │
 └───────────────────────────────┬────────────────────────────────────┘
                                 ▼
 ┌─ agency-kit CORE — logic UNCHANGED ────────────────────────────────┐
@@ -26,9 +29,10 @@ top. Three layers:
 └──────────┬───────────────────────┬─────────────────────────────────┘
            ▼                       ▼
    department tools         LOCAL INFERENCE (multimodal only, Metal)
-   • web search (Claude       • SD · Whisper · Kokoro (mutually exclusive)
-     WebSearch already wired) • rag.py: markitdown → embeddings → SQLite
-   • image/TTS = deliverable  • mcp_client (Jan ideas, fresh MIT code)
+   • web search (Claude       • FLUX · Whisper · Kokoro (warm, mutually exclusive) ✅
+     WebSearch already wired) • rag.py: markitdown → embeddings → SQLite (Wave 4)
+   • image/TTS = deliverable  • mcp_client (Jan ideas, fresh MIT code) (Wave 5)
+     (Wave 3)
 ```
 
 ## Layer 1 — Brain (agency-kit, reused)
@@ -50,10 +54,16 @@ identical to today. The veto loop and `_short_verdict` do **not** change.
 Strict **`127.0.0.1`** bind. Serves the API + the built GUI (`app/studio/dist/`) with a
 `path_inside()` guard on the static handler.
 
-## Layer 3 — Local inference (new, Metal, deferred)
+## Layer 3 — Local inference (Wave 2, Metal — shipped)
 
-Subprocess wrappers around stable-diffusion.cpp / whisper.cpp / Kokoro, targeting Apple
-Silicon. **Mutually exclusive** image↔LLM loading (16 GB constraint).
+`agency_studio/engines/local_media.py` — a warm single-resident `ModelManager` over
+MLX-native back-ends: **FLUX.1-schnell** (mflux, image), **Whisper large-v3-turbo**
+(mlx-whisper, STT), **Kokoro-82M** (kokoro-onnx, TTS). At most one model is resident; a
+model is kept **warm** for fast repeats and **evicted** (freeing the Metal buffer cache)
+only when switching modality — so image and a local LLM are never co-resident (the 16 GB
+constraint; the local LLM engine stays off). Weights resolve through `models.py` with the
+URL-allowlist + SHA-256 / content-addressed-cache integrity guards (see `docs/SECURITY.md`).
+All back-ends are lazy-imported behind the `[media]` extra; absent ⇒ a clean 501.
 
 ## Streaming flow (the centerpiece)
 

@@ -21,6 +21,22 @@ project) — we borrow only its *concepts*, never its code.
 | **chunkr** | Document OCR/chunking | **AGPL-3.0** | ❌ Ruled out (AGPL + heavy Rust/Docker service) |
 | **LM Studio** | LLM runner | Proprietary | ❌ Closed, not reusable |
 
+## Wave 2 runtime dependencies — the `[media]` extra (shipped)
+
+All MIT/Apache/BSD; lazily imported so the core has zero runtime deps. Model **weights**
+are downloaded at runtime into the OS cache, never bundled or committed.
+
+| Component | Role | License | Notes |
+|---|---|---|---|
+| **mflux** (`filipstrand/mflux`) | FLUX image generation, MLX-native | MIT | ✅ Direct dependency |
+| **mlx-whisper** | Speech-to-text (Whisper), MLX-native | MIT | ✅ Direct dependency |
+| **kokoro-onnx** | Text-to-speech (Kokoro-82M), ONNX | MIT | ✅ Direct dependency |
+| **soundfile** | Write synthesized audio to WAV | BSD-3-Clause | ✅ Direct dependency |
+| **FLUX.1-schnell** weights | Image model | Apache-2.0 | ✅ Loaded from a **non-gated** pre-quantized 8-bit mflux mirror (`dhairyashil/FLUX.1-schnell-mflux-8bit`) — the official BFL repo is gated; the weights themselves are Apache-2.0 |
+| **Whisper large-v3-turbo** (mlx-community) | STT model | MIT | ✅ Non-gated HF repo |
+| **Kokoro-82M** weights (ONNX + voices) | TTS model | Apache-2.0 | ✅ Pinned by URL + SHA-256 (see `engines/models.py`) |
+| **ffmpeg** | Audio decode for STT (system tool) | LGPL/GPL (build-dependent) | ⚠️ **System dependency, not bundled or linked** — invoked as a separate process by `mlx-whisper` (`brew install ffmpeg`). No distribution, so its license does not affect Agency Studio's. |
+
 ## Rule for contributors / agents
 
 Before adding a dependency or porting third-party code: **check the license**. If it is not

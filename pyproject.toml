@@ -24,6 +24,22 @@ dependencies = []
 agency-studio = "agency_studio.cli:main"
 
 [project.optional-dependencies]
+# Wave 2 — local multimodal inference on Apple Silicon (Metal). All MLX-native,
+# all MIT/Apache (see docs/LICENSES.md). Imported LAZILY inside agency_studio.
+# engines.local_media, so the core server still boots and missions still run with
+# this extra absent — a multimodal request then returns 501 with install guidance
+# (mirrors the [pdf] path). These wheels target Apple Silicon + Python >= 3.10.
+#
+# System dependency: speech-to-text (mlx-whisper) shells out to `ffmpeg` to decode
+# audio — install it separately (`brew install ffmpeg`). Image + TTS do not need it.
+# The image model is a non-gated pre-quantized FLUX.1-schnell (see engines/models.py
+# IMAGE_MODEL_REPO); the official BFL repo is gated, this avoids any HF login.
+media = [
+    "mflux",         # MIT — FLUX.1 (schnell) image generation, MLX-native
+    "mlx-whisper",   # MIT — Whisper speech-to-text, MLX-native
+    "kokoro-onnx",   # MIT — Kokoro-82M text-to-speech (ONNX, no torch/spacy)
+    "soundfile",     # BSD — write the synthesized audio to a WAV file
+]
 # Placeholders — populated when the matching waves are implemented (see ROADMAP.md).
 # Wave 4 (RAG): markitdown for document ingestion + an embeddings lib.
 studio = [
@@ -42,6 +58,6 @@ dev = [
 ]
 
 [tool.setuptools]
-# Wave 0 ships the thin local server package. The React GUI (app/studio/) and the
-# deferred multimodal/RAG modules arrive in later waves.
-packages = ["agency_studio"]
+# Wave 0 shipped the thin local server package; Wave 2 adds the engines subpackage
+# (local multimodal inference). The React GUI lives in app/studio/.
+packages = ["agency_studio", "agency_studio.engines"]
