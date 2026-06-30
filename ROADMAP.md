@@ -92,20 +92,32 @@ React/Vite GUI (app/studio, 127.0.0.1)
   project's missions (pre-feature unstamped missions stay visible). The
   `agency missions` CLI still lists all (unchanged).
 - ✅ **Mission "Stop mission"** *(real server-side cancellation — shipped)*: the
-  button (formerly "Stop watching") now triggers a **cooperative** server-side
-  cancel. Aborting the fetch drops the SSE connection; the server sets a
-  `cancel_event` that the worker polls via a new `should_cancel` predicate on
-  `run_mission_cli`, checked at **phase boundaries only** (after routing, before
-  each department, before each synth→inspect iteration — **never** inside a started
-  synth→inspect cycle, so the veto loop is byte-identical and Art. IX holds). On
-  cancel it raises `MissionCancelled` **before** any persistence, so a stopped
-  mission usually leaves no trace, and the abandoned-worker leak is fixed.
-  It is **best-effort, not a kill**: an in-flight engine call and the *final*
-  synth→inspect cycle complete first, so a stop that lands in that last window still
-  finishes and persists — the GUI notice says so honestly (Refresh + check History).
-  Remaining future work: immediate subprocess termination (kill the in-flight
-  `Popen`) and an explicit cancel endpoint with a run-id, to close the best-effort
-  window.
+  button (formerly "Stop watching") triggers a server-side cancel. Aborting the
+  fetch closes the SSE connection; the server sets a `cancel_event` that the worker
+  polls via a `should_cancel` predicate on `run_mission_cli`, checked at **phase
+  boundaries** (after routing, before each department, before each synth→inspect
+  iteration) as a no-spend early-exit. On cancel it raises `MissionCancelled`
+  **before** any persistence, so a stopped mission leaves no trace and the
+  abandoned-worker leak is fixed.
+- ✅ **v2 — immediate subprocess kill** *(closes the best-effort window — shipped)*:
+  `should_cancel` is now also polled **inside `_call`**, which runs the child under
+  a reader thread (`communicate` drains both pipes) and, the moment a cancel lands,
+  kills the child's **whole process group** (`start_new_session=True` +
+  `killpg` SIGTERM→SIGKILL — so the `claude` node wrapper's child tree dies too, not
+  just the direct child) and raises `MissionCancelled`. A Stop no longer waits up to
+  the per-call timeout. The server makes the kill reachable during a long,
+  event-silent call by emitting a periodic SSE-comment **heartbeat**
+  (`_write_heartbeat`): a failed write is the reliable "client gone" signal (the GUI
+  aborted the fetch), which sets `cancel_event`. **Art. IX holds**: an aborted
+  mission yields **no dossier**, so no verdict is altered and no un-inspected result
+  ships — the veto loop's logic is byte-identical; only an abort can now happen
+  mid-call. Trade-off (by design): a Stop landing in the *final* synth→inspect window
+  now discards that nearly-finished run instead of persisting it — the deliberate
+  cost of an immediate, no-trace cancel.
+  Remaining future work: an **explicit cancel endpoint with a run-id** (a registry
+  of in-flight missions + `POST /api/mission/{run_id}/cancel`) so the GUI can cancel
+  without relying on the connection drop, and the matching frontend wiring (including
+  refreshing the now-too-pessimistic "may still finish" Stop notice).
 
 ### Wave 2 — Local multimodal inference, hardened *(Mac/Metal — deferred)*
 - **`agency_studio/engines/local_media.py`**: spawn SD/Whisper/Kokoro, **Metal only**,

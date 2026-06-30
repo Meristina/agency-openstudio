@@ -44,6 +44,14 @@ _MAX_BODY_BYTES = 1 << 20  # 1 MiB
 # forever — ThreadingHTTPServer spawns one unbounded thread per connection.
 _BODY_READ_TIMEOUT = 15.0  # seconds
 
+# How often the SSE drain loop emits a heartbeat while no mission event is pending.
+# A long engine call emits no events, so without a periodic write a mid-call "Stop"
+# (the GUI aborting the fetch) would go unnoticed until the call finished. The
+# heartbeat is an SSE comment line — ignored by clients — whose WRITE failing is the
+# reliable "client gone" signal (a failed write, not a fragile read-side peek). On
+# failure we set cancel_event so the engine kills the in-flight subprocess promptly.
+_HEARTBEAT_SECONDS = 1.0
+
 # Loopback hosts the studio is allowed to bind — enforced at the bind point.
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
@@ -356,12 +364,13 @@ class StudioHandler(BaseHTTPRequestHandler):
         signals completion, or ``None`` if the client disconnected mid-stream.
 
         A client disconnect (the GUI's "Stop mission" aborts the fetch) requests a
-        cooperative cancel: we set ``cancel_event``, which the worker polls via
-        ``should_cancel`` at the next phase boundary (after routing / before a
-        department / before a synthesis iteration) and then raises
-        ``MissionCancelled``. It is best-effort, not a kill: an in-flight engine
-        call and the final synth→inspect cycle run to completion first, so a stop
-        that lands inside that last window still completes and persists the mission.
+        cancel: we set ``cancel_event``, which the worker polls via ``should_cancel``
+        both at phase boundaries AND inside the engine's in-flight subprocess call —
+        so the running child is killed promptly and the mission raises
+        ``MissionCancelled`` before any persistence. The disconnect is detected by a
+        failed write: a real event frame when one is pending, or — during a long,
+        event-silent call — a periodic heartbeat (``_write_heartbeat``), so a Stop
+        lands without waiting for the next emitted event.
         """
         events: "queue.Queue[dict | None]" = queue.Queue()
         result_box: dict = {}
@@ -394,18 +403,41 @@ class StudioHandler(BaseHTTPRequestHandler):
 
         threading.Thread(target=_worker, daemon=True).start()
 
-        # Drain progress events until the worker signals completion.
+        # Drain progress events until the worker signals completion. The get() is
+        # bounded so a long, event-silent engine call can't hide a disconnect: on
+        # each idle tick we send a heartbeat, and a failed write (client gone) sets
+        # cancel_event — which the engine reads mid-call to kill the in-flight tree.
         while True:
-            event = events.get()
+            try:
+                event = events.get(timeout=_HEARTBEAT_SECONDS)
+            except queue.Empty:
+                if not self._write_heartbeat():
+                    cancel_event.set()
+                    return None
+                continue
             if event is None:
                 break
             if not self._write_sse(event):
-                # Client gone: ask the worker to stop at its next phase boundary.
-                # The queue is unbounded so the worker's remaining put()s never
-                # block — no need to keep draining; the daemon thread unwinds.
+                # Client gone: ask the worker to cancel. The queue is unbounded so the
+                # worker's remaining put()s never block — no need to keep draining; the
+                # daemon thread unwinds once the engine raises MissionCancelled.
                 cancel_event.set()
                 return None
         return result_box
+
+    def _write_heartbeat(self) -> bool:
+        """Write an SSE comment line as a liveness probe. Returns False once the
+        client has gone — a failed write is the reliable disconnect signal (the GUI
+        aborted the fetch / closed the connection), unlike a read-side EOF which a
+        client that half-closes its write half but keeps reading would trip falsely.
+        Comment lines (``:`` prefix) carry no ``data:`` field, so the GUI's SSE
+        parser ignores them. Mirrors ``_write_sse``'s gone-client handling."""
+        try:
+            self.wfile.write(b": heartbeat\n\n")
+            self.wfile.flush()
+            return True
+        except (BrokenPipeError, ConnectionResetError):
+            return False
 
     def _send_terminal_frame(self, result_box: dict) -> None:
         """Emit the final SSE frame: an ``error`` frame, or a ``done`` frame with

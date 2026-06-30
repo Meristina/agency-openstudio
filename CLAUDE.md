@@ -42,14 +42,20 @@ Agency Studio does **not** reimplement agency-kit's mission loop. It wraps it:
 - Two sanctioned core hooks on `run_mission_cli`, both additive and default-None
   so standalone agency-kit is byte-identical:
   1. an **observational** `on_event` callback so the GUI can stream live progress;
-  2. a **cooperative-cancel** `should_cancel` predicate (the "Stop mission"
-     feature), polled **only at phase boundaries** (after routing, before each
-     department, before each synth→inspect iteration) — **never inside** a started
-     synth→inspect cycle. When it fires, `run_mission_cli` raises `MissionCancelled`
-     before any persistence.
+  2. a **cancel** `should_cancel` predicate (the "Stop mission" feature), polled in
+     two places: at **phase boundaries** (after routing, before each department,
+     before each synth→inspect iteration) as a no-spend early-exit, **and inside
+     `_call`** while a child process is in flight — so a Stop **kills the running
+     subprocess tree immediately** (`start_new_session` + `killpg` SIGTERM→SIGKILL,
+     so the CLI wrapper's grandchildren die too) instead of waiting up to the
+     per-call timeout. Either way `run_mission_cli` raises `MissionCancelled`
+     **before** any persistence.
   The veto loop and `_short_verdict` logic must **never** change behavior
-  (agency-kit Constitution Art. IX): `should_cancel` can only stop the loop cleanly
-  between iterations, never alter a verdict or skip an inspection.
+  (agency-kit Constitution Art. IX). The in-flight kill preserves this: an aborted
+  mission yields **no dossier at all**, so no verdict is ever altered and no
+  un-inspected result is ever delivered — `MissionCancelled` cancels the whole run,
+  it does not let a synthesis skip its inspection and ship. The veto loop's *logic*
+  is untouched; only an abort can now happen mid-call rather than only between calls.
 
 ## Build order
 
