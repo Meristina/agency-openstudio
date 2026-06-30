@@ -85,7 +85,16 @@ KOKORO_VOICES = ModelFile(
 # Hugging Face repo ids for the hub-managed back-ends (no manifest needed — HF's
 # cache is content-addressed). Centralised here so the model choice lives in one place.
 STT_HF_REPO = "mlx-community/whisper-large-v3-turbo"  # MLX-converted Whisper turbo
-IMAGE_MODEL_NAME = "schnell"  # mflux FLUX.1-schnell — 2-4 step, fast + high quality
+
+# Image: a non-gated, pre-quantized (8-bit) mflux build of FLUX.1-schnell. The
+# official black-forest-labs/FLUX.1-schnell repo is GATED (license + login), so we
+# load the ready-to-use mflux-format weights mflux's own docs point to (the
+# `dhairyashil/…-mflux-…` repos for mflux >= 0.6.0). 8-bit keeps quality visibly on
+# par with full precision (4-bit deviates); Apache-2.0; verified loading + generating
+# on the target Mac in Wave 2.4.
+IMAGE_MODEL_REPO = "dhairyashil/FLUX.1-schnell-mflux-8bit"
+IMAGE_MODEL_BASE = "schnell"  # architecture mflux maps the repo onto (ModelConfig.schnell())
+IMAGE_MODEL_DISPLAY = "FLUX.1-schnell (8-bit)"  # shown in the GUI model panel
 
 
 class IntegrityError(RuntimeError):

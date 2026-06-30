@@ -743,7 +743,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         self._send_json({
             "resident": mgr.resident_kind if mgr is not None else None,
             "models": {
-                "image": media_models.IMAGE_MODEL_NAME,
+                "image": media_models.IMAGE_MODEL_DISPLAY,
                 "stt": media_models.STT_HF_REPO,
                 "tts": "kokoro-v1.0",
             },

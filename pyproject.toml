@@ -29,6 +29,11 @@ agency-studio = "agency_studio.cli:main"
 # engines.local_media, so the core server still boots and missions still run with
 # this extra absent — a multimodal request then returns 501 with install guidance
 # (mirrors the [pdf] path). These wheels target Apple Silicon + Python >= 3.10.
+#
+# System dependency: speech-to-text (mlx-whisper) shells out to `ffmpeg` to decode
+# audio — install it separately (`brew install ffmpeg`). Image + TTS do not need it.
+# The image model is a non-gated pre-quantized FLUX.1-schnell (see engines/models.py
+# IMAGE_MODEL_REPO); the official BFL repo is gated, this avoids any HF login.
 media = [
     "mflux",         # MIT — FLUX.1 (schnell) image generation, MLX-native
     "mlx-whisper",   # MIT — Whisper speech-to-text, MLX-native

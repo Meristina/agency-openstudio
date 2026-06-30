@@ -217,7 +217,7 @@ def test_models_status_reports_resident(monkeypatch, tmp_path):
         assert status == 200
         payload = json.loads(body)
         assert payload["resident"] is None
-        assert payload["models"]["image"] == "schnell"
+        assert "FLUX.1-schnell" in payload["models"]["image"]
 
         # After a generation the image model is warm.
         _request(host, port, "POST", "/api/image",

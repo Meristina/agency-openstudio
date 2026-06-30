@@ -103,9 +103,14 @@ def _probe_image() -> None:
 
 
 def _load_image_backend():
-    """Load FLUX.1-schnell (mflux). Quantized to 8-bit to fit comfortably in RAM."""
+    """Load FLUX.1-schnell from the non-gated, already-8-bit mflux build
+    (models.IMAGE_MODEL_REPO). The weights are pre-quantized, so no quantize= arg —
+    mflux loads them onto the schnell architecture via ModelConfig + model_path.
+    Verified on the target Mac in Wave 2.4."""
     Flux1 = _import_flux()
-    return Flux1.from_name(model_name=models.IMAGE_MODEL_NAME, quantize=8)
+    from mflux.models.common.config import ModelConfig
+    base_config = getattr(ModelConfig, models.IMAGE_MODEL_BASE)()  # e.g. ModelConfig.schnell()
+    return Flux1(model_config=base_config, model_path=models.IMAGE_MODEL_REPO)
 
 
 def _run_image_backend(model, *, prompt, steps, seed, width, height, out_path) -> None:
