@@ -20,6 +20,7 @@ export default function App() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   // Live "working" feedback: tick an elapsed-seconds counter for the duration of
@@ -33,6 +34,7 @@ export default function App() {
   }, [running]);
 
   const refreshMissions = useCallback(async () => {
+    setNotice(null);  // a manual refresh supersedes the "stopped watching" notice
     try {
       setMissions(await listMissions());
     } catch (e) {
@@ -48,6 +50,7 @@ export default function App() {
     setSelectedId(id);
     setDetailLoading(true);
     setError(null);
+    setNotice(null);  // opening a mission supersedes the "stopped watching" notice
     try {
       setDetail(await getMission(id));
     } catch (e) {
@@ -63,6 +66,7 @@ export default function App() {
     if (!trimmed || running) return;
     setRunning(true);
     setError(null);
+    setNotice(null);
     setEvents([]);
     setDetail(null);
     setSelectedId(null);
@@ -81,14 +85,22 @@ export default function App() {
       await refreshMissions();
       if (completedId) await openMission(completedId);
     } catch (e) {
-      if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : String(e));
+      // Aborting only stops the live stream — the mission keeps running on the
+      // server and will be saved to History. Say so, rather than silently dropping.
+      if (ctrl.signal.aborted) {
+        setNotice("Stopped watching. The mission keeps running on the server and will appear in History when it finishes — use Refresh to check.");
+      } else {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
       setRunning(false);
       abortRef.current = null;
     }
   }, [goal, running, refreshMissions, openMission]);
 
-  const onCancel = useCallback(() => abortRef.current?.abort(), []);
+  // "Stop watching" aborts the live SSE stream only; the server-side mission
+  // continues to completion and is persisted (see the catch handler above).
+  const onStopWatching = useCallback(() => abortRef.current?.abort(), []);
 
   // ⌘/Ctrl+Enter submits from the goal box (a plain Enter stays a newline).
   const onGoalKeyDown = useCallback(
@@ -125,13 +137,14 @@ export default function App() {
               {running ? "Running…" : "Run mission"}
             </button>
             {running && (
-              <button className="ghost" onClick={onCancel}>
-                Cancel
+              <button className="ghost" onClick={onStopWatching}>
+                Stop watching
               </button>
             )}
             <span className="hint">⌘/Ctrl+Enter to run</span>
           </div>
           {error && <p className="error">{error}</p>}
+          {notice && <p className="notice">{notice}</p>}
 
           <div className="row between">
             <h3>Live timeline</h3>
