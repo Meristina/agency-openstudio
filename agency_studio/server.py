@@ -700,8 +700,18 @@ class StudioHandler(BaseHTTPRequestHandler):
         text = (payload.get("text") or "").strip()
         if not text:
             return self._send_error_json(400, "missing 'text'")
+        # Validate a client-supplied voice up front (→ 400 with the allowlist), so an
+        # unknown voice is an actionable client error — not the generic 500 the manager's
+        # ValueError would otherwise become under the `except Exception` below. A
+        # falsy/omitted voice falls through to synthesize's default (af_heart).
+        from agency_studio.engines import models as media_models
+        voice = payload.get("voice")
+        if voice and voice not in media_models.ALLOWED_VOICES:
+            return self._send_error_json(
+                400, f"unknown voice {voice!r} (allowed: {sorted(media_models.ALLOWED_VOICES)})"
+            )
         try:
-            kwargs = {"voice": payload["voice"]} if payload.get("voice") else {}
+            kwargs = {"voice": voice} if voice else {}
             result = self._media_manager().synthesize(text, **kwargs)
             url = self._media_url(result.path)
         except ImportError as exc:  # [media] extra not installed

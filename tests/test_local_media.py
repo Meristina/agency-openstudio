@@ -425,3 +425,13 @@ def test_failed_probe_does_not_evict_warm_model(tmp_path, monkeypatch):
     assert counters["freed"] == 0              # nothing was evicted
     mgr.generate_image("still warm")
     assert counters["image_load"] == 1         # reused, never reloaded
+
+
+def test_synthesize_rejects_unlisted_voice(tmp_path, monkeypatch):
+    """An unlisted voice is rejected at the manager (chokepoint to the TTS backend) and
+    never reaches the backend — /api/tts maps the same allowlist to a 400."""
+    _stub_backends(monkeypatch)
+    mgr = local_media.ModelManager(tmp_path)
+    with pytest.raises(ValueError):
+        mgr.synthesize("hello", voice="zz_not_a_voice")
+    assert "af_heart" in models.ALLOWED_VOICES   # the default is a member, so it always passes

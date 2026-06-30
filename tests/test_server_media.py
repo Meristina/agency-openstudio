@@ -209,6 +209,23 @@ def test_post_tts_generates_and_serves(monkeypatch, tmp_path):
         httpd.shutdown()
 
 
+def test_post_tts_unknown_voice_400(monkeypatch, tmp_path):
+    """An unlisted voice is rejected at the route with a 400 + the allowlist — an
+    actionable client error, not the generic 500 the manager's ValueError would become."""
+    _stub_media(monkeypatch)
+    httpd, host, port = _start(tmp_path)
+    try:
+        status, body = _request(
+            host, port, "POST", "/api/tts",
+            body=json.dumps({"text": "hello there", "voice": "zz_not_a_voice"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert status == 400
+        assert "zz_not_a_voice" in json.loads(body)["error"]
+    finally:
+        httpd.shutdown()
+
+
 # ── /api/stt ──────────────────────────────────────────────────────────────────
 
 def test_post_stt_transcribes(monkeypatch, tmp_path):

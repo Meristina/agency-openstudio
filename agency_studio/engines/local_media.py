@@ -377,9 +377,17 @@ class ModelManager:
         return TranscriptResult(text=text, seconds=round(time.monotonic() - started, 2))
 
     def synthesize(self, text: str, *, voice: str = TTS_DEFAULT_VOICE) -> SpeechResult:
-        """Synthesize speech from ``text`` and write it under assets/audio/."""
+        """Synthesize speech from ``text`` and write it under assets/audio/.
+
+        ``voice`` must be in ``models.ALLOWED_VOICES`` — an unlisted voice raises
+        ``ValueError`` (the /api/tts route maps it to 400) rather than being forwarded to
+        the backend. This re-validates what the route already checked, so a direct caller
+        can't reach the backend with an unlisted voice (mirrors the model-id double-check
+        in generate_image)."""
         if not text.strip():
             raise ValueError("text must not be empty")
+        if voice not in models.ALLOWED_VOICES:
+            raise ValueError(f"unknown voice {voice!r} (allowed: {sorted(models.ALLOWED_VOICES)})")
         out = self._asset_path("audio", "wav")
         started = time.monotonic()
         with self._lock:

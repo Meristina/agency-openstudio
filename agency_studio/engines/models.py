@@ -194,6 +194,26 @@ def image_models_payload() -> "list[dict]":
     ]
 
 
+# Kokoro-82M v1.0 en-us voices. ``local_media._run_tts_backend`` forces lang="en-us",
+# so only the American/British English voices are offered; the default is af_heart.
+# /api/tts validates a client-supplied voice against this set (an unknown voice is a
+# 400, not forwarded to the backend), and ``ModelManager.synthesize`` re-validates so a
+# direct caller can't reach the backend with an unlisted voice. Mirrors the hexgrad/
+# Kokoro-82M v1.0 voice list (en only).
+ALLOWED_VOICES = frozenset({
+    # American English — female
+    "af_alloy", "af_aoede", "af_bella", "af_heart", "af_jessica", "af_kore",
+    "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky",
+    # American English — male
+    "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael",
+    "am_onyx", "am_puck", "am_santa",
+    # British English — female
+    "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
+    # British English — male
+    "bm_daniel", "bm_fable", "bm_george", "bm_lewis",
+})
+
+
 class IntegrityError(RuntimeError):
     """A downloaded model file failed its pinned SHA-256 check (SECURITY.md #5)."""
 
