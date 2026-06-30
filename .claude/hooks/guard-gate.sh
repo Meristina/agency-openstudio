@@ -47,7 +47,7 @@ prev=$(cat "$MARKER" 2>/dev/null || echo "")
 # Already inside a Stop-hook continuation → don't block again (loop safety).
 [ "$stop_active" = "true" ] && exit 0
 
-emit_block "GUARD GATE (stage 1 of 2) — you produced uncommitted code/doc changes that have not passed the module guard gate. Before you finish:
+emit_block "GUARD GATE (stage 1 of 2) — you produced uncommitted code/doc changes that have not passed the module guard gate. The change set may span the studio repo AND/OR the sibling agency-kit brain checkout it wraps — review whichever actually changed (\`git status\` in each). Before you finish:
 1. Run the \`guard-skills\` skill on the changed files (it routes production code → clean-code-guard, tests → test-guard, docs → docs-guard) AND run \`/code-review\` on the diff.
 2. Enforce this repo's non-negotiables (loopback bind, path_inside, no CORS '*', validated URLs/checksums, MIT-only, stdlib core). Fix every must-fix finding.
 3. When the gate is satisfied, record it so this gate stops blocking:
