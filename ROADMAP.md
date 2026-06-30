@@ -77,6 +77,30 @@ React/Vite GUI (app/studio, 127.0.0.1)
 - **PDF export**: `exporter.export_pdf(mission_id)` via `GET /api/mission/{id}/pdf` (`[pdf]` extra).
 - Rich components (Sidebar, gallery, ModelManager) = **written fresh**.
 
+**Post-review refinements (shipped):**
+- **GUI polish**: cited sources rendered as safe (`noopener noreferrer`) links,
+  history verdict badges, ⌘/Ctrl+Enter submit, live elapsed timer.
+- **Server hardening** (`server.py`): request-body reads bounded by size **and** a
+  socket read-timeout (slowloris); rejects close the socket with `Connection:
+  close` (no keep-alive desync); chunked bodies refused; PDF render error → clean
+  500; SPA fallback 404s a missing hashed asset instead of returning `index.html`
+  as JS. Mission-folder allocation made atomic in agency-kit `serialize_dossier`
+  (TOCTOU).
+- ✅ **Project-scoped history** *(was deferred — done)*: each mission is stamped
+  with its `project_root`; `store.list_missions(project_root=…)` and the server's
+  GET-by-id / PDF scope to the launched `--path`, so the GUI shows only this
+  project's missions (pre-feature unstamped missions stay visible). The
+  `agency missions` CLI still lists all (unchanged).
+- ✅ **Mission "Stop watching"** *(server-side cancellation — resolved)*: the old
+  "Cancel" only stopped the client SSE stream while the mission finished and
+  persisted server-side; it now reads **"Stop watching"** with an honest notice
+  (the run continues, appears in History). **True** server-side termination is
+  intentionally **not** built — at the SSE layer an explicit cancel and a transient
+  disconnect are indistinguishable (killing on disconnect would discard valuable
+  runs), and a real kill needs a control input into `run_mission_cli` that this doc
+  reserves to the observational `on_event` (Art. IX) plus subprocess termination.
+  Left as a future **sanctioned** feature (explicit cancel endpoint + run-id + kill).
+
 ### Wave 2 — Local multimodal inference, hardened *(Mac/Metal — deferred)*
 - **`agency_studio/engines/local_media.py`**: spawn SD/Whisper/Kokoro, **Metal only**,
   **mutually exclusive** image↔LLM loading.
