@@ -16,6 +16,7 @@ env/
 # ── Node / frontend (app/studio) ──────────────────────────────────────────
 **/node_modules/
 app/studio/dist/
+*.tsbuildinfo
 *.local
 
 # ── Local AI models & runtimes (never commit weights/binaries) ────────────
@@ -50,3 +51,9 @@ transcriptions/
 Thumbs.db
 .vscode/
 .idea/
+
+# Guard/healthcheck gate runtime markers (per-checkout review state)
+.claude/.guard-state
+.claude/.healthcheck-state
+.claude/.ultra-state
+.claude/.ultra-armed

@@ -1,0 +1,90 @@
+// Pure folding of the raw MissionEvent stream into a structured timeline model.
+// Kept free of React so it can be unit-tested directly (the SSE event order is
+// the contract that matters, not the rendering).
+
+import type { MissionEvent } from "./types";
+
+export interface DeptStep {
+  dept: string;
+  done: boolean;
+}
+
+export interface SynthStep {
+  iteration: number;
+  done: boolean;
+}
+
+export interface InspectStep {
+  iteration: number;
+  verdict: string | null;
+}
+
+export type Terminal =
+  | { kind: "done"; verdict: string | null; missionId: string | null; path: string; residualRisk: string | null }
+  | { kind: "error"; message: string };
+
+export interface TimelineModel {
+  route: string[] | null;
+  depts: DeptStep[];
+  synth: SynthStep[];
+  inspect: InspectStep[];
+  terminal: Terminal | null;
+}
+
+/** Fold the events received so far into a stable, render-ready model. */
+export function groupTimeline(events: MissionEvent[]): TimelineModel {
+  const model: TimelineModel = { route: null, depts: [], synth: [], inspect: [], terminal: null };
+
+  for (const e of events) {
+    switch (e.phase) {
+      case "route":
+        model.route = e.route;
+        break;
+      case "dept": {
+        const step = model.depts.find((d) => d.dept === e.dept);
+        if (step) step.done = step.done || e.status === "done";
+        else model.depts.push({ dept: e.dept, done: e.status === "done" });
+        break;
+      }
+      case "synth": {
+        const step = model.synth.find((s) => s.iteration === e.iteration);
+        if (step) step.done = step.done || e.status === "done";
+        else model.synth.push({ iteration: e.iteration, done: e.status === "done" });
+        break;
+      }
+      case "inspect": {
+        const step = model.inspect.find((i) => i.iteration === e.iteration);
+        if (step) step.verdict = e.verdict ?? step.verdict;
+        else model.inspect.push({ iteration: e.iteration, verdict: e.verdict ?? null });
+        break;
+      }
+      case "done":
+        model.terminal = {
+          kind: "done",
+          verdict: e.verdict,
+          missionId: e.mission_id,
+          path: e.path,
+          residualRisk: e.residual_risk ?? null,
+        };
+        break;
+      case "error":
+        model.terminal = { kind: "error", message: e.message };
+        break;
+      default: {
+        // Exhaustiveness guard: a new MissionEvent.phase becomes a compile error here.
+        const _exhaustive: never = e;
+        void _exhaustive;
+        break;
+      }
+    }
+  }
+  return model;
+}
+
+/** Coarse run state derived from the events, for the header/status line. */
+export function runStatus(model: TimelineModel): "idle" | "running" | "done" | "error" {
+  if (model.terminal?.kind === "error") return "error";
+  if (model.terminal?.kind === "done") return "done";
+  if (model.route || model.depts.length) return "running";
+  return "idle";
+}

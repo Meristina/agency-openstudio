@@ -30,15 +30,19 @@ Both checks are part of Wave 0's definition of done and must be covered by
 
 ## `path_inside()` reference implementation
 
+Mirrors the shipped guard in `agency_studio/server.py` (the source of truth). It takes the
+GUI root first and the requested URL path second, treats the request as relative to the
+root, and returns the resolved absolute path when it genuinely stays inside the root —
+otherwise `None`, so the caller serves a 404 instead of the file.
+
 ```python
 from pathlib import Path
 
-def path_inside(child: str | Path, parent: str | Path) -> bool:
-    """True if resolved `child` stays under `parent` (anti path-traversal)."""
-    parent = Path(parent).resolve()
-    try:
-        Path(child).resolve().relative_to(parent)
-        return True
-    except ValueError:
-        return False
+def path_inside(root: Path, requested: str) -> Path | None:
+    """Resolve `requested` under `root`; return the path if inside, else None."""
+    root = root.resolve()
+    candidate = (root / requested.lstrip("/")).resolve()
+    if candidate == root or root in candidate.parents:
+        return candidate
+    return None
 ```

@@ -12,7 +12,16 @@ license = { text = "MIT" }
 keywords = ["agentic", "local-llm", "multimodal", "stable-diffusion", "rag", "agency-kit"]
 
 # Core has ZERO runtime dependencies (stdlib http.server, mirrors agency-kit's ethos).
+#
+# agency-kit is NOT listed here as a PyPI dependency: it is the local orchestration
+# brain the studio wraps, installed editable from a sibling checkout
+# (`pip install -e /path/to/agency-kit`). The studio imports `agency_cli` /
+# `agency_kit` at runtime and fails fast with install guidance if they are absent.
 dependencies = []
+
+[project.scripts]
+# Wave 0 — launch the local Mission Console web GUI (stdlib HTTP/SSE server).
+agency-studio = "agency_studio.cli:main"
 
 [project.optional-dependencies]
 # Placeholders — populated when the matching waves are implemented (see ROADMAP.md).
@@ -21,13 +30,18 @@ studio = [
     # "markitdown",      # Wave 4 — MIT, document → markdown ingestion
     # "<embeddings-lib>", # Wave 4 — small local embedding model
 ]
-# PDF export (reused from agency-kit's exporter).
+# PDF export of a mission deliverable (agency-kit's exporter.export_pdf), exposed
+# at GET /api/mission/{id}/pdf. Both imported lazily inside export_pdf, so the
+# server runs fine without them — the endpoint returns 501 until installed.
 pdf = [
-    # "weasyprint",      # Wave 1 — PDF export of dossiers
+    "weasyprint",        # HTML → PDF renderer (pure Python)
+    "markdown",          # deliverable.md → HTML before WeasyPrint
 ]
 dev = [
     "pytest",
 ]
 
-# NOTE: no [project.scripts] / [tool.setuptools] packages yet — this repo is
-# docs + config only (scaffold). They will be added with Wave 0 implementation.
+[tool.setuptools]
+# Wave 0 ships the thin local server package. The React GUI (app/studio/) and the
+# deferred multimodal/RAG modules arrive in later waves.
+packages = ["agency_studio"]
