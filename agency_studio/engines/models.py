@@ -124,6 +124,9 @@ class ImageModel:
     model_path: "str | None" = None  # repo override, or None → mflux's default repo
     steps_default: int = 4         # default num_inference_steps for this model
     steps_max: int = 8             # upper bound the API accepts for this model (compute guard)
+    # -- boogu backend params (None for mflux entries) --
+    base_repo: "str | None" = None  # the Boogu image weights repo (HF)
+    qwen_repo: "str | None" = None  # the Qwen3-VL conditioner repo (HF)
 
 
 DEFAULT_IMAGE_MODEL = "flux-schnell"
@@ -153,6 +156,19 @@ IMAGE_MODELS: "dict[str, ImageModel]" = {
         config_factory="flux2_klein_4b",
         model_path=None,  # default black-forest-labs/FLUX.2-klein-4B is non-gated
         steps_default=4, steps_max=50,  # non-distilled "modern" model — allow quality steps
+    ),
+    # Experimental: Boogu-Image-0.1 (Apache-2.0, #1 on Qwen-Image-Bench) via the
+    # community MLX port (the `[boogu]` extra). Heaviest option — the 10B image model
+    # rides a Qwen3-VL-8B conditioner — and SLOW (~30 steps; minutes/image on a 16 GB
+    # Mac). Validated end-to-end on the target Mac in Wave 2.4. Loaded mutually
+    # exclusive like every other model. Both weight repos are non-gated.
+    "boogu-base": ImageModel(
+        id="boogu-base", label="Boogu-Image 0.1 (experimental)",
+        note="Highest quality · slow · experimental",
+        backend="boogu",
+        base_repo="mlx-community/Boogu-Image-0.1-Base-4bit",
+        qwen_repo="mlx-community/Qwen3-VL-8B-Instruct-4bit",
+        steps_default=16, steps_max=50,
     ),
 }
 

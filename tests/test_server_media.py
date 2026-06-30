@@ -46,7 +46,7 @@ def _stub_media(monkeypatch):
     monkeypatch.setattr(local_media, "_load_stt_backend", lambda: object())
     monkeypatch.setattr(local_media, "_load_tts_backend", lambda: object())
 
-    def _run_image(model, *, prompt, steps, seed, width, height, out_path):
+    def _run_image(entry, model, *, prompt, steps, seed, width, height, out_path):
         out_path.write_bytes(b"\x89PNG\r\n\x1a\nstub")
 
     def _run_tts(model, *, text, voice, out_path):
@@ -149,7 +149,7 @@ def test_post_image_backend_failure_returns_500(monkeypatch, tmp_path):
     client error and could leak an internal model URL/size cap)."""
     _stub_media(monkeypatch)
 
-    def _explode(model, **kwargs):
+    def _explode(entry, model, **kwargs):
         raise RuntimeError("model download exceeded cap: https://internal/url")
 
     monkeypatch.setattr(local_media, "_run_image_backend", _explode)
@@ -252,7 +252,7 @@ def test_models_status_reports_resident(monkeypatch, tmp_path):
         assert payload["resident"] is None
         # New shape: ordered image_models with id/label/note/default; flux-schnell first + default.
         ids = [m["id"] for m in payload["image_models"]]
-        assert ids == ["flux-schnell", "z-image-turbo", "flux2-klein-4b"]
+        assert ids == ["flux-schnell", "z-image-turbo", "flux2-klein-4b", "boogu-base"]
         assert payload["image_models"][0]["default"] is True
         assert payload["image_models"][0]["label"] == "FLUX.1-schnell"
         assert sum(m["default"] for m in payload["image_models"]) == 1  # exactly one default

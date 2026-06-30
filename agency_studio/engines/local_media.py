@@ -112,15 +112,64 @@ def _mflux_load(entry: "models.ImageModel"):
     return cls(model_config=config, model_path=entry.model_path)
 
 
-# Image-backend dispatch table keyed by the registry's ``backend`` discriminator. Adding
-# a non-mflux backend (e.g. "boogu") is a new (probe, load) pair here + entries in the
-# registry — ModelManager and the routes stay untouched.
-_IMAGE_BACKENDS: "dict[str, tuple[Callable, Callable]]" = {
-    "mflux": (_mflux_probe, _mflux_load),
+def _mflux_run(model, entry, *, prompt, steps, seed, width, height, out_path) -> None:
+    # The three mflux generators share generate_image(seed, prompt,
+    # num_inference_steps, width, height) — verified live on the target Mac — so one
+    # run adapter serves every mflux image model.
+    image = model.generate_image(
+        seed=seed, prompt=prompt,
+        num_inference_steps=steps, width=width, height=height,
+    )
+    image.save(path=str(out_path))
+
+
+# ── boogu backend (experimental, the [boogu] extra) ──────────────────────────
+# Boogu-Image-0.1 via the community MLX port (boogu_image_mlx) + a Qwen3-VL
+# conditioner (mlx-vlm). Heaviest + slowest image option; isolated behind its own
+# extra and dispatch so it never touches the lean mflux path.
+_BOOGU_HINT = "install the Boogu extra:  pip install 'agency-studio[boogu]'"
+
+
+def _boogu_probe(entry: "models.ImageModel") -> None:
+    try:
+        import boogu_image_mlx  # noqa: F401
+        import mlx_vlm  # noqa: F401  (Qwen3-VL conditioner)
+    except ImportError as exc:
+        raise MediaUnavailable(f"Boogu image generation needs the [boogu] extra — {_BOOGU_HINT}") from exc
+
+
+def _boogu_load(entry: "models.ImageModel"):
+    """Resolve both weight repos to local dirs and build the Boogu pipeline."""
+    from boogu_image_mlx.pipeline_mlx import BooguImagePipeline
+    from huggingface_hub import snapshot_download
+    base = snapshot_download(entry.base_repo)
+    qwen = snapshot_download(entry.qwen_repo)
+    return BooguImagePipeline.from_pretrained(base, qwen)
+
+
+def _boogu_run(pipe, entry, *, prompt, steps, seed, width, height, out_path) -> None:
+    import numpy as np
+    from PIL import Image
+    arr = np.asarray(pipe.generate(
+        prompt, height=height, width=width, steps=steps, guidance=3.5, seed=seed,
+    ))
+    if arr.ndim == 4:  # drop a leading batch dim if present
+        arr = arr[0]
+    if arr.dtype != np.uint8:  # the port may return float [0,1] or already-uint8 [0,255]
+        arr = (arr.clip(0, 1) * 255).round().astype("uint8") if arr.max() <= 1.0 else arr.clip(0, 255).astype("uint8")
+    Image.fromarray(arr).save(str(out_path))
+
+
+# Image-backend dispatch table keyed by the registry's ``backend`` discriminator. Each
+# entry is a (probe, load, run) triple. Adding a backend is a new triple here + rows in
+# the registry — ModelManager and the routes stay untouched.
+_IMAGE_BACKENDS: "dict[str, tuple[Callable, Callable, Callable]]" = {
+    "mflux": (_mflux_probe, _mflux_load, _mflux_run),
+    "boogu": (_boogu_probe, _boogu_load, _boogu_run),
 }
 
 
-def _image_backend(entry: "models.ImageModel") -> "tuple[Callable, Callable]":
+def _image_backend(entry: "models.ImageModel") -> "tuple[Callable, Callable, Callable]":
     try:
         return _IMAGE_BACKENDS[entry.backend]
     except KeyError:
@@ -139,15 +188,10 @@ def _load_image_backend(entry: "models.ImageModel"):
     return _image_backend(entry)[1](entry)
 
 
-def _run_image_backend(model, *, prompt, steps, seed, width, height, out_path) -> None:
-    # The three mflux generators share generate_image(seed, prompt,
-    # num_inference_steps, width, height) — verified live on the target Mac — so one
-    # run adapter serves every mflux image model.
-    image = model.generate_image(
-        seed=seed, prompt=prompt,
-        num_inference_steps=steps, width=width, height=height,
-    )
-    image.save(path=str(out_path))
+def _run_image_backend(entry: "models.ImageModel", model, *, prompt, steps, seed, width, height, out_path) -> None:
+    """One inference call, dispatched to the model's backend run adapter."""
+    _image_backend(entry)[2](model, entry, prompt=prompt, steps=steps, seed=seed,
+                             width=width, height=height, out_path=out_path)
 
 
 def _probe_stt() -> None:
@@ -300,7 +344,7 @@ class ModelManager:
                 entry.id, lambda: _probe_image(entry), lambda: _load_image_backend(entry),
             )
             _run_image_backend(
-                backend, prompt=prompt, steps=steps, seed=seed,
+                entry, backend, prompt=prompt, steps=steps, seed=seed,
                 width=width, height=height, out_path=out,
             )
         return ImageResult(

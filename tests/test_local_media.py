@@ -169,7 +169,7 @@ def _stub_backends(monkeypatch):
         counters["loaded_models"].append(entry.id)
         return _FakeModel(entry.id)
 
-    def _run_image(model, *, prompt, steps, seed, width, height, out_path):
+    def _run_image(entry, model, *, prompt, steps, seed, width, height, out_path):
         counters["image_run"] += 1
         out_path.write_bytes(b"\x89PNG\r\n")  # token bytes so a real file lands
 
@@ -264,7 +264,7 @@ def test_steps_default_per_model(tmp_path, monkeypatch):
     """When steps is omitted the model's own steps_default is used (8 for Z-Image)."""
     seen = {}
 
-    def _run_image(model, *, prompt, steps, seed, width, height, out_path):
+    def _run_image(entry, model, *, prompt, steps, seed, width, height, out_path):
         seen["steps"] = steps
         out_path.write_bytes(b"\x89PNG\r\n")
 
@@ -273,6 +273,40 @@ def test_steps_default_per_model(tmp_path, monkeypatch):
     mgr = local_media.ModelManager(tmp_path)
     mgr.generate_image("x", model="z-image-turbo")
     assert seen["steps"] == 8  # z-image-turbo's steps_default
+
+
+def test_boogu_backend_registered():
+    """Boogu is wired as a distinct, pluggable backend (not mflux)."""
+    entry = models.image_model("boogu-base")
+    assert entry.backend == "boogu"
+    assert entry.base_repo and entry.qwen_repo  # boogu needs both weight repos
+    assert "boogu" in local_media._IMAGE_BACKENDS
+    assert len(local_media._IMAGE_BACKENDS["boogu"]) == 3  # (probe, load, run) triple
+
+
+def test_generate_image_routes_boogu_through_backend(tmp_path, monkeypatch):
+    """A boogu-base request flows through the manager + dispatch like any model
+    (stubbed at the dispatch level), proving the registry → backend routing."""
+    _stub_backends(monkeypatch)
+    mgr = local_media.ModelManager(tmp_path)
+    result = mgr.generate_image("a red panda surfing", model="boogu-base")
+    assert result.model == "boogu-base"
+    assert result.path.is_file()
+    assert mgr.resident == "boogu-base"
+
+
+def test_boogu_probe_without_extra_raises_media_unavailable():
+    """With the [boogu] extra absent (the test interpreter), the boogu probe raises
+    MediaUnavailable — which the server maps to a clean 501, like the [media] path."""
+    entry = models.image_model("boogu-base")
+    try:
+        import boogu_image_mlx  # noqa: F401
+        import mlx_vlm  # noqa: F401
+    except ImportError:
+        with pytest.raises(local_media.MediaUnavailable):
+            local_media._boogu_probe(entry)
+    else:
+        pytest.skip("[boogu] extra is installed in this interpreter")
 
 
 def test_empty_prompt_rejected(tmp_path, monkeypatch):
