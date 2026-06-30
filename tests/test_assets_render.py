@@ -3,8 +3,8 @@
 Fully offline: a fake ModelManager records calls and returns canned results (no real
 model loads, no GPU). These pin the render contract — document-order manifest, images
 rendered before TTS, never-raises per-asset isolation, cancel→skip, SSE event frames —
-and the cosmetic rewrite (match a rendered block by its prompt/text, leave every other
-block verbatim).
+and the cosmetic rewrite (match a rendered block by its source-block ordinal, leave every
+other block verbatim).
 """
 
 import json
@@ -149,7 +149,7 @@ def _block(payload):
 
 def test_rewrite_swaps_rendered_image_for_an_embed():
     delivered = "Intro\n" + _block({"type": "image", "prompt": "hero"}) + "\nOutro"
-    manifest = [{"type": "image", "status": "ok", "url": "/media/a.png", "prompt": "hero"}]
+    manifest = [{"type": "image", "status": "ok", "url": "/media/a.png", "prompt": "hero", "block": 0}]
     out = assets.rewrite_delivered(delivered, manifest)
     assert "![hero](/media/a.png)" in out
     assert "```asset" not in out
@@ -158,7 +158,7 @@ def test_rewrite_swaps_rendered_image_for_an_embed():
 
 def test_rewrite_swaps_rendered_tts_for_a_caption():
     delivered = _block({"type": "tts", "text": "hello"})
-    manifest = [{"type": "tts", "status": "ok", "url": "/media/a.wav", "text": "hello", "seconds": 2.0}]
+    manifest = [{"type": "tts", "status": "ok", "url": "/media/a.wav", "text": "hello", "seconds": 2.0, "block": 0}]
     out = assets.rewrite_delivered(delivered, manifest)
     assert "/media/a.wav" in out and "```asset" not in out
     assert "audio" in out.lower()  # a reader can't play sound → labelled link
@@ -166,32 +166,33 @@ def test_rewrite_swaps_rendered_tts_for_a_caption():
 
 def test_rewrite_leaves_failed_or_unmatched_blocks_verbatim():
     delivered = _block({"type": "image", "prompt": "hero"})
-    manifest = [{"type": "image", "status": "failed", "reason": "x", "prompt": "hero"}]
+    manifest = [{"type": "image", "status": "failed", "reason": "x", "prompt": "hero", "block": 0}]
     out = assets.rewrite_delivered(delivered, manifest)
     assert "```asset" in out, "only successfully-rendered blocks are swapped"
 
 
-def test_rewrite_matches_by_content_robust_to_order():
+def test_rewrite_pairs_by_block_ordinal_independent_of_manifest_order():
     delivered = (
         "A\n" + _block({"type": "image", "prompt": "first"}) + "\n"
         + _block({"type": "image", "prompt": "second"}) + "\nB"
     )
-    # Manifest order independent of document order — pairing is by prompt, not position.
+    # Manifest order independent of document order — pairing is by the source-block ordinal
+    # (block 0 = "first", block 1 = "second"), not by manifest position or prompt content.
     manifest = [
-        {"type": "image", "status": "ok", "url": "/media/2.png", "prompt": "second"},
-        {"type": "image", "status": "ok", "url": "/media/1.png", "prompt": "first"},
+        {"type": "image", "status": "ok", "url": "/media/2.png", "prompt": "second", "block": 1},
+        {"type": "image", "status": "ok", "url": "/media/1.png", "prompt": "first", "block": 0},
     ]
     out = assets.rewrite_delivered(delivered, manifest)
     assert "![first](/media/1.png)" in out and "![second](/media/2.png)" in out
 
 
-def test_rewrite_dedupes_identical_prompt_blocks_to_distinct_urls():
-    # Two blocks with the SAME prompt must each pair to a DISTINCT manifest entry (the
-    # consumed[] guard) — not both collapse onto the first url.
+def test_rewrite_keeps_identical_prompt_blocks_distinct_by_ordinal():
+    # Two blocks with the SAME prompt each pair to their own entry by block ordinal — they
+    # can never collapse onto one url or cross-match (the old content-matching failure mode).
     delivered = _block({"type": "image", "prompt": "hero"}) + "\n" + _block({"type": "image", "prompt": "hero"})
     manifest = [
-        {"type": "image", "status": "ok", "url": "/media/1.png", "prompt": "hero"},
-        {"type": "image", "status": "ok", "url": "/media/2.png", "prompt": "hero"},
+        {"type": "image", "status": "ok", "url": "/media/1.png", "prompt": "hero", "block": 0},
+        {"type": "image", "status": "ok", "url": "/media/2.png", "prompt": "hero", "block": 1},
     ]
     out = assets.rewrite_delivered(delivered, manifest)
     assert "![hero](/media/1.png)" in out and "![hero](/media/2.png)" in out
@@ -207,7 +208,8 @@ def test_parser_and_rewrite_agree_on_crlf_fences_no_drift():
     delivered = 'Intro\r\n```asset\r\n{"type": "image", "prompt": "hero"}\r\n```\r\nOutro'
     reqs = assets.parse_markers(delivered, ["marketing"])
     assert [r.type for r in reqs] == ["image"], "parser detects the CRLF-fenced block"
-    manifest = [{"type": "image", "status": "ok", "url": "/media/a.png", "prompt": "hero"}]
+    assert reqs[0].block_index == 0, "parser stamps the source-block ordinal"
+    manifest = [{"type": "image", "status": "ok", "url": "/media/a.png", "prompt": "hero", "block": 0}]
     out = assets.rewrite_delivered(delivered, manifest)
     assert "![hero](/media/a.png)" in out and "```asset" not in out, "rewrite swaps the same block"
 
@@ -216,7 +218,7 @@ def test_rewrite_escapes_untrusted_caption_so_it_cannot_inject_a_link():
     # A crafted prompt must not break out of ![alt](url) and splice in an external image.
     evil = "x](http://evil/p.png)![y"
     delivered = _block({"type": "image", "prompt": evil})
-    manifest = [{"type": "image", "status": "ok", "url": "/media/a.png", "prompt": evil}]
+    manifest = [{"type": "image", "status": "ok", "url": "/media/a.png", "prompt": evil, "block": 0}]
     out = assets.rewrite_delivered(delivered, manifest)
     assert "](http://evil/p.png)" not in out  # the injected url never becomes an active ref
     assert out.count("](/media/a.png)") == 1  # the real, server-generated url is the only embed
@@ -229,10 +231,38 @@ def test_rewrite_no_ok_entries_returns_input_unchanged():
     assert assets.rewrite_delivered(delivered, [{"type": "image", "status": "failed"}]) == delivered
 
 
+def test_rewrite_ignores_ok_entry_without_a_block_ordinal():
+    # Defensive: an ok entry that carries no (or a non-int) ``block`` cannot be paired to a
+    # source block safely, so it is ignored rather than guessed onto some block by content.
+    delivered = _block({"type": "image", "prompt": "hero"})
+    manifest = [{"type": "image", "status": "ok", "url": "/media/a.png", "prompt": "hero"}]
+    assert assets.rewrite_delivered(delivered, manifest) == delivered  # block left raw
+
+
+def test_rewrite_does_not_cross_match_a_rejected_block_onto_a_valid_twin():
+    # End-to-end regression: a REJECTED image marker (non-allowlisted model → dropped at
+    # parse, no manifest entry) immediately followed by a VALID marker with the SAME prompt.
+    # The old content-matcher gave the rejected block's slot the rendered url and left the
+    # real block raw. Ordinal pairing keeps the rendered embed on the valid block (#1) only.
+    delivered = (
+        _block({"type": "image", "prompt": "hero", "model": "boogu-base"}) + "\n"
+        + _block({"type": "image", "prompt": "hero", "model": "flux-schnell"})
+    )
+    reqs = assets.parse_markers(delivered, ["marketing"])
+    assert [r.block_index for r in reqs] == [1], "only the valid block survives parse, at ordinal 1"
+    mgr = _FakeManager()
+    manifest = assets.render(mgr, reqs, out_dir="/m", to_url=_to_url)
+    assert manifest[0]["block"] == 1 and manifest[0]["status"] == "ok"
+    out = assets.rewrite_delivered(delivered, manifest)
+    # block 0 (rejected) stays a raw fence; block 1 (valid) becomes the only embed.
+    assert "```asset" in out and '"boogu-base"' in out, "the rejected block is left verbatim"
+    assert out.count("![hero](") == 1, "exactly one embed, on the valid block"
+
+
 def test_rewrite_preserves_trailing_newline_and_prose_byte_faithfully():
     # split("\n")/join round-trip: a swap must not normalize trailing newlines or the
     # surrounding prose (verbatim except the swapped block).
     delivered = "Lead in.\n\n" + _block({"type": "image", "prompt": "hero"}) + "\n\nTail.\n"
-    manifest = [{"type": "image", "status": "ok", "url": "/media/a.png", "prompt": "hero"}]
+    manifest = [{"type": "image", "status": "ok", "url": "/media/a.png", "prompt": "hero", "block": 0}]
     out = assets.rewrite_delivered(delivered, manifest)
     assert out == "Lead in.\n\n![hero](/media/a.png)\n\nTail.\n"
