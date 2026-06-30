@@ -87,6 +87,7 @@ button.ghost { background: transparent; color: var(--text); border: 1px solid va
 
 .muted { color: var(--muted); font-size: 0.88rem; }
 .error { color: var(--error); font-size: 0.88rem; }
+.notice { color: var(--accent); font-size: 0.88rem; line-height: 1.45; }
 .hint { color: var(--muted); font-size: 0.75rem; margin-left: auto; }
 
 /* elapsed-time indicator on the live timeline */
