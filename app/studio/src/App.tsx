@@ -4,11 +4,22 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { cancelMission, getMission, listMissions, runMission } from "./api";
+import { cancelMission, getMission, getModelsStatus, listMissions, runMission } from "./api";
 import Timeline from "./components/Timeline";
 import MissionDetail from "./components/MissionDetail";
+import ImagePanel from "./components/ImagePanel";
+import VoicePanel from "./components/VoicePanel";
+import Gallery from "./components/Gallery";
 import { summaryVerdictClass } from "./types";
-import type { Dossier, MissionEvent, MissionSummary } from "./types";
+import type { Dossier, GalleryItem, MissionEvent, MissionSummary, ModelsStatus } from "./types";
+
+type Tab = "mission" | "image" | "voice";
+
+const TABS: Array<[Tab, string]> = [
+  ["mission", "Mission"],
+  ["image", "Image"],
+  ["voice", "Voice"],
+];
 
 // Single source for the clean-cancel message (a `cancelled` terminal frame means the
 // run was stopped before any persistence). The abort-fallback and raced-finish cases
@@ -26,6 +37,9 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>("mission");
+  const [gallery, setGallery] = useState<GalleryItem[]>([]);
+  const [modelStatus, setModelStatus] = useState<ModelsStatus | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const runIdRef = useRef<string | null>(null);
   const stopRequestedRef = useRef(false);
@@ -67,6 +81,30 @@ export default function App() {
       setDetailLoading(false);
     }
   }, []);
+
+  // Best-effort model-status chip (which local model is warm). Never surfaces an
+  // error: the endpoint is informational and the studio works without it.
+  const refreshModelStatus = useCallback(async () => {
+    try {
+      setModelStatus(await getModelsStatus());
+    } catch {
+      /* informational only — ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshModelStatus();
+  }, [refreshModelStatus]);
+
+  // A panel generated an asset: prepend it to the session gallery (newest first) and
+  // refresh the warm-model chip (the generation just loaded/switched a model).
+  const onGenerated = useCallback(
+    (item: GalleryItem) => {
+      setGallery((prev) => [item, ...prev]);
+      void refreshModelStatus();
+    },
+    [refreshModelStatus],
+  );
 
   const onRun = useCallback(async () => {
     const trimmed = goal.trim();
@@ -123,8 +161,11 @@ export default function App() {
       abortRef.current = null;
       runIdRef.current = null;
       stopRequestedRef.current = false;
+      // A mission run loads the LLM (which evicts any warm media model, per the
+      // mutually-exclusive rule), so refresh the warm-model chip when it ends.
+      void refreshModelStatus();
     }
-  }, [goal, running, refreshMissions, openMission]);
+  }, [goal, running, refreshMissions, openMission, refreshModelStatus]);
 
   // "Stop mission" cancels this exact run via the explicit endpoint (the server then
   // kills the in-flight engine subprocess before persistence). `cancelMission` is
@@ -139,6 +180,21 @@ export default function App() {
     abortRef.current?.abort();
   }, []);
 
+  // Arrow-key roving across the tabs (the ARIA tab pattern: Left/Right move focus
+  // + selection). Wraps around the ends.
+  const onTabKeyDown = useCallback(
+    (ev: KeyboardEvent<HTMLElement>) => {
+      if (ev.key !== "ArrowRight" && ev.key !== "ArrowLeft") return;
+      ev.preventDefault();
+      setTab((current) => {
+        const i = TABS.findIndex(([id]) => id === current);
+        const next = ev.key === "ArrowRight" ? i + 1 : i - 1;
+        return TABS[(next + TABS.length) % TABS.length][0];
+      });
+    },
+    [],
+  );
+
   // ⌘/Ctrl+Enter submits from the goal box (a plain Enter stays a newline).
   const onGoalKeyDown = useCallback(
     (ev: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -150,14 +206,50 @@ export default function App() {
     [onRun],
   );
 
+  const resident = modelStatus?.resident;
+
   return (
     <div className="app">
       <header className="topbar">
         <h1>Agency Studio</h1>
-        <span className="tag">Mission Console</span>
+        <nav className="tabs" role="tablist" aria-label="Studio sections" onKeyDown={onTabKeyDown}>
+          {TABS.map(([id, label]) => (
+            <button
+              key={id}
+              id={`tab-${id}`}
+              role="tab"
+              aria-selected={tab === id}
+              aria-controls={`panel-${id}`}
+              tabIndex={tab === id ? 0 : -1}
+              className={`tab ${tab === id ? "active" : ""}`}
+              onClick={() => setTab(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+        {/* Global Stop: while a mission runs, keep cancellation reachable from every
+            tab (the mission pane's own Stop is hidden when another tab is active). */}
+        {running && tab !== "mission" && (
+          <button className="ghost" onClick={onStopMission}>
+            Stop mission ({elapsed}s)
+          </button>
+        )}
+        <span className={`model-chip ${resident ? "warm" : ""}`} title="Local model currently loaded">
+          {resident ? `${resident} warm` : "no model loaded"}
+        </span>
       </header>
 
-      <main className="layout">
+      {/* All three views stay mounted, toggled by `hidden`, so switching tabs keeps a
+          running mission alive, preserves panel input, and lets an in-flight media
+          request resolve onto a still-mounted panel. */}
+      <main
+        className="layout"
+        id="panel-mission"
+        role="tabpanel"
+        aria-labelledby="tab-mission"
+        hidden={tab !== "mission"}
+      >
         <section className="panel run-panel">
           <h2>New mission</h2>
           <textarea
@@ -225,6 +317,34 @@ export default function App() {
 
         <section className="panel detail-panel">
           <MissionDetail dossier={detail} loading={detailLoading} />
+        </section>
+      </main>
+
+      <main
+        className="studio-layout"
+        id="panel-image"
+        role="tabpanel"
+        aria-labelledby="tab-image"
+        hidden={tab !== "image"}
+      >
+        <ImagePanel onGenerated={onGenerated} />
+        <section className="panel gallery-panel">
+          <h2>Gallery</h2>
+          <Gallery items={gallery.filter((g) => g.kind === "image")} />
+        </section>
+      </main>
+
+      <main
+        className="studio-layout"
+        id="panel-voice"
+        role="tabpanel"
+        aria-labelledby="tab-voice"
+        hidden={tab !== "voice"}
+      >
+        <VoicePanel onGenerated={onGenerated} />
+        <section className="panel gallery-panel">
+          <h2>Gallery</h2>
+          <Gallery items={gallery.filter((g) => g.kind === "audio")} />
         </section>
       </main>
     </div>

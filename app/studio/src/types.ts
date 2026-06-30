@@ -67,6 +67,43 @@ export type MissionEvent =
   | ErrorEvent
   | CancelledEvent;
 
+// ── Wave 2 — local multimodal results (mirror server.py's media endpoints) ──
+
+/** Result of POST /api/image — a generated image served under /media. */
+export interface ImageResult {
+  url: string;
+  prompt: string;
+  seed: number;
+  seconds: number;
+}
+
+/** Result of POST /api/tts — generated speech served under /media. */
+export interface SpeechResult {
+  url: string;
+  voice: string;
+  seconds: number;
+}
+
+/** Result of POST /api/stt — a transcript of an uploaded audio clip. */
+export interface TranscriptResult {
+  text: string;
+  seconds: number;
+}
+
+/** GET /api/models — which model is currently warm + the configured model ids. */
+export interface ModelsStatus {
+  resident: string | null;
+  models: Record<string, string>;
+}
+
+/** One generated asset shown in the session gallery (image or audio). */
+export interface GalleryItem {
+  kind: "image" | "audio";
+  url: string;
+  label: string;
+  seconds: number;
+}
+
 /** A saved mission as returned by `GET /api/missions` (store.list_missions). */
 export interface MissionSummary {
   mission_id: string;
