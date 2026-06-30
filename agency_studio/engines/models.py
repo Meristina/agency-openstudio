@@ -155,12 +155,13 @@ IMAGE_MODELS: "dict[str, ImageModel]" = {
         module="mflux.models.flux2.variants.txt2img.flux2_klein", class_name="Flux2Klein",
         config_factory="flux2_klein_4b",
         model_path=None,  # default black-forest-labs/FLUX.2-klein-4B is non-gated
-        steps_default=4, steps_max=50,  # non-distilled "modern" model — allow quality steps
+        steps_default=4, steps_max=16,  # DISTILLED — high quality in ~4 steps; modest headroom
     ),
     # Experimental: Boogu-Image-0.1 (Apache-2.0, #1 on Qwen-Image-Bench) via the
     # community MLX port (the `[boogu]` extra). Heaviest option — the 10B image model
-    # rides a Qwen3-VL-8B conditioner — and SLOW (~30 steps; minutes/image on a 16 GB
-    # Mac). Validated end-to-end on the target Mac in Wave 2.4. Loaded mutually
+    # rides a Qwen3-VL-8B conditioner — and SLOW: non-distilled, so it needs many steps
+    # (default 16 here; the model recommends ~30 for best quality → minutes/image on a
+    # 16 GB Mac). Validated end-to-end on the target Mac in Wave 2.4. Loaded mutually
     # exclusive like every other model. Both weight repos are non-gated.
     "boogu-base": ImageModel(
         id="boogu-base", label="Boogu-Image 0.1 (experimental)",

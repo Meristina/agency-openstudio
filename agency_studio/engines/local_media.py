@@ -98,7 +98,15 @@ def _import_mflux_class(entry: "models.ImageModel"):
 
 
 def _mflux_probe(entry: "models.ImageModel") -> None:
-    _import_mflux_class(entry)  # cheap: import the class, load no weights
+    # Cover EVERYTHING _mflux_load resolves (class + ModelConfig factory), loading no
+    # weights — so a renamed factory fails the probe (→ MediaUnavailable) BEFORE the
+    # warm model is evicted, never after. (probe-before-evict invariant.)
+    _import_mflux_class(entry)
+    try:
+        from mflux.models.common.config import ModelConfig
+        getattr(ModelConfig, entry.config_factory)
+    except (ImportError, AttributeError) as exc:
+        raise MediaUnavailable(f"image generation needs mflux — {_INSTALL_HINT}") from exc
 
 
 def _mflux_load(entry: "models.ImageModel"):
@@ -131,10 +139,16 @@ _BOOGU_HINT = "install the Boogu extra:  pip install 'agency-studio[boogu]'"
 
 
 def _boogu_probe(entry: "models.ImageModel") -> None:
+    # Validate the SAME symbols _boogu_load uses — the real pipeline class (the WIP
+    # port can drift) + the Qwen3-VL runtime + huggingface_hub — loading no weights, so
+    # a moved/renamed symbol fails the probe (→ MediaUnavailable/501) BEFORE eviction,
+    # not after with a raw 500. Catch AttributeError too (a renamed class import-resolves
+    # the module but not the attr).
     try:
-        import boogu_image_mlx  # noqa: F401
+        from boogu_image_mlx.pipeline_mlx import BooguImagePipeline  # noqa: F401
         import mlx_vlm  # noqa: F401  (Qwen3-VL conditioner)
-    except ImportError as exc:
+        import huggingface_hub  # noqa: F401  (snapshot_download in _boogu_load)
+    except (ImportError, AttributeError) as exc:
         raise MediaUnavailable(f"Boogu image generation needs the [boogu] extra — {_BOOGU_HINT}") from exc
 
 
@@ -155,8 +169,13 @@ def _boogu_run(pipe, entry, *, prompt, steps, seed, width, height, out_path) -> 
     ))
     if arr.ndim == 4:  # drop a leading batch dim if present
         arr = arr[0]
-    if arr.dtype != np.uint8:  # the port may return float [0,1] or already-uint8 [0,255]
-        arr = (arr.clip(0, 1) * 255).round().astype("uint8") if arr.max() <= 1.0 else arr.clip(0, 255).astype("uint8")
+    if np.issubdtype(arr.dtype, np.floating):
+        # Diffusion pipelines emit a normalized [0,1] float image; clip (numerical
+        # overshoot like 1.02 is just noise) and scale. Don't guess [0,255]-by-max:
+        # a [0,1] image with one pixel >1.0 would otherwise collapse to near-black.
+        arr = (arr.clip(0, 1) * 255).round().astype("uint8")
+    else:  # already integer pixels
+        arr = arr.clip(0, 255).astype("uint8")
     Image.fromarray(arr).save(str(out_path))
 
 

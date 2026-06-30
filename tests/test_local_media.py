@@ -285,14 +285,36 @@ def test_boogu_backend_registered():
 
 
 def test_generate_image_routes_boogu_through_backend(tmp_path, monkeypatch):
-    """A boogu-base request flows through the manager + dispatch like any model
-    (stubbed at the dispatch level), proving the registry → backend routing."""
-    _stub_backends(monkeypatch)
+    """Exercise the REAL dispatch: stub the registry's ``_IMAGE_BACKENDS['boogu']``
+    triple (via setitem) — NOT the dispatch functions — so the actual
+    ``_image_backend('boogu')`` lookup + ``_probe_image``/``_load_image_backend``/
+    ``_run_image_backend`` run and call the boogu triple. A mis-wired triple (wrong
+    position, wrong key) would now fail this test."""
+    calls = []
+
+    def _probe(entry):
+        calls.append(("probe", entry.id))
+
+    def _load(entry):
+        calls.append(("load", entry.id))
+        return _FakeModel("boogu")
+
+    def _run(model, entry, *, prompt, steps, seed, width, height, out_path):
+        calls.append(("run", entry.id, steps))
+        out_path.write_bytes(b"\x89PNG\r\n")
+
+    monkeypatch.setitem(local_media._IMAGE_BACKENDS, "boogu", (_probe, _load, _run))
+    monkeypatch.setattr(local_media, "_free_metal_cache", lambda: None)
+
     mgr = local_media.ModelManager(tmp_path)
-    result = mgr.generate_image("a red panda surfing", model="boogu-base")
+    result = mgr.generate_image("a red panda surfing", model="boogu-base", steps=7)
     assert result.model == "boogu-base"
     assert result.path.is_file()
     assert mgr.resident == "boogu-base"
+    # The real dispatch invoked the boogu triple in order, with the entry threaded through.
+    assert ("probe", "boogu-base") in calls
+    assert ("load", "boogu-base") in calls
+    assert ("run", "boogu-base", 7) in calls
 
 
 def test_boogu_probe_without_extra_raises_media_unavailable():
