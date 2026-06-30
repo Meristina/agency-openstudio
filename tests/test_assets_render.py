@@ -199,6 +199,19 @@ def test_rewrite_dedupes_identical_prompt_blocks_to_distinct_urls():
     assert "```asset" not in out
 
 
+def test_parser_and_rewrite_agree_on_crlf_fences_no_drift():
+    # Anti-drift: a block the parser detects (and renders) must be the SAME block rewrite
+    # swaps — including under CRLF. Both now walk one shared scanner; previously the two
+    # used different splitters (splitlines vs split("\n")) and could disagree, leaving raw
+    # JSON of an already-rendered asset visible.
+    delivered = 'Intro\r\n```asset\r\n{"type": "image", "prompt": "hero"}\r\n```\r\nOutro'
+    reqs = assets.parse_markers(delivered, ["marketing"])
+    assert [r.type for r in reqs] == ["image"], "parser detects the CRLF-fenced block"
+    manifest = [{"type": "image", "status": "ok", "url": "/media/a.png", "prompt": "hero"}]
+    out = assets.rewrite_delivered(delivered, manifest)
+    assert "![hero](/media/a.png)" in out and "```asset" not in out, "rewrite swaps the same block"
+
+
 def test_rewrite_escapes_untrusted_caption_so_it_cannot_inject_a_link():
     # A crafted prompt must not break out of ![alt](url) and splice in an external image.
     evil = "x](http://evil/p.png)![y"

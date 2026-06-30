@@ -110,20 +110,28 @@ _FENCE_OPEN = "```asset"
 _FENCE_CLOSE = "```"
 
 
-def _iter_asset_blocks(delivered: str):
-    """Yield the raw body text of each well-formed ```asset fenced block, in order.
+def _scan_asset_blocks(delivered: str):
+    """The single fence scanner shared by the parser and ``rewrite_delivered``, so the two
+    can never drift on what counts as a block. Splits on ``\\n`` (byte-faithful: rewrite
+    rejoins the same way) and matches each *stripped* line — a CRLF's trailing ``\\r`` is
+    dropped by ``.strip()``, so ``\\r\\n`` fences still match. Yields, in document order:
 
-    A block opens on a line that is exactly ``` ``` ``asset`` and closes on the next line
-    that is exactly ``` ``` ``. Deliberately line-oriented rather than a single regex: a
-    non-greedy regex body lets an *unterminated* opener run forward and swallow a later,
-    well-formed block (its opening backticks read as the first opener's closing fence).
-    Here an unterminated opener instead yields nothing and the scan *restarts* at the next
-    opener, so a malformed marker can never consume a valid one that follows it.
+      ``("text", line)``                     — a passthrough line (not part of a block)
+      ``("block", body, [raw lines…])``      — a complete ```asset…``` block: its joined
+                                               body, plus the exact original lines (incl.
+                                               fences) for a verbatim, byte-faithful fallback.
+
+    Deliberately line-oriented rather than one regex: a non-greedy regex body lets an
+    *unterminated* opener run forward and swallow a later, well-formed block (its opening
+    backticks read as the first opener's close). Here an unterminated opener is emitted as
+    plain ``text`` lines and the scan *restarts* at the next opener, so a malformed marker
+    can never consume a valid one that follows it.
     """
-    lines = delivered.splitlines()
+    lines = delivered.split("\n")
     i, n = 0, len(lines)
     while i < n:
         if lines[i].strip() != _FENCE_OPEN:
+            yield ("text", lines[i])
             i += 1
             continue
         body, j = [], i + 1
@@ -131,10 +139,20 @@ def _iter_asset_blocks(delivered: str):
             body.append(lines[j])
             j += 1
         if j < n and lines[j].strip() == _FENCE_CLOSE:
-            yield "\n".join(body)
+            yield ("block", "\n".join(body), lines[i:j + 1])
             i = j + 1  # resume past the closing fence
-        else:
-            i = j  # unterminated: resume *at* the next opener (or EOF), never past it
+        else:  # unterminated: emit as text, resume *at* the next opener (or EOF)
+            for k in range(i, j):
+                yield ("text", lines[k])
+            i = j
+
+
+def _iter_asset_blocks(delivered: str):
+    """Yield the raw body text of each well-formed ```asset block, in order — the parser's
+    view of the shared :func:`_scan_asset_blocks` (it ignores passthrough text)."""
+    for kind, *rest in _scan_asset_blocks(delivered):
+        if kind == "block":
+            yield rest[0]
 
 
 @dataclass(frozen=True)
@@ -383,26 +401,15 @@ def rewrite_delivered(delivered: str, manifest: "Sequence[dict]") -> str:
                 return _reference(entry)
         return None
 
-    # split("\n") (not splitlines) so join("\n") round-trips byte-faithfully — trailing
-    # newlines and \r\n survive verbatim in every non-swapped region (a fence line's
-    # trailing \r is ignored by the .strip() comparison, so detection still works).
-    lines = delivered.split("\n")
+    # Walk the SAME scanner the parser uses (so a block it rendered is a block we swap),
+    # rebuilding the text byte-faithfully: each passthrough line and each non-swapped
+    # block's raw lines are emitted verbatim, and join("\n") round-trips exactly.
     out: "list[str]" = []
-    i, n = 0, len(lines)
-    while i < n:
-        if lines[i].strip() != _FENCE_OPEN:
-            out.append(lines[i])
-            i += 1
+    for kind, *rest in _scan_asset_blocks(delivered):
+        if kind == "text":
+            out.append(rest[0])
             continue
-        body, j = [], i + 1
-        while j < n and lines[j].strip() not in (_FENCE_CLOSE, _FENCE_OPEN):
-            body.append(lines[j])
-            j += 1
-        if j < n and lines[j].strip() == _FENCE_CLOSE:
-            ref = _swap("\n".join(body))
-            out.extend([ref] if ref is not None else lines[i:j + 1])  # swap, else keep verbatim
-            i = j + 1
-        else:
-            out.extend(lines[i:j])  # unterminated opener: keep as-is up to the next opener/EOF
-            i = j
+        body, raw = rest[0], rest[1]
+        ref = _swap(body)
+        out.extend([ref] if ref is not None else raw)  # swap, else keep verbatim
     return "\n".join(out)
