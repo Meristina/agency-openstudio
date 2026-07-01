@@ -4,23 +4,25 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { cancelMission, getGraphStats, getMission, getModelsStatus, getPersonaStats, listMcpServers, listMissions, runMission } from "./api";
+import { cancelMission, getGraphStats, getMission, getModelsStatus, getPersonaStats, listMcpServers, listMissions, listVisual, runMission } from "./api";
 import Timeline from "./components/Timeline";
 import MissionDetail from "./components/MissionDetail";
 import ImagePanel from "./components/ImagePanel";
 import VoicePanel from "./components/VoicePanel";
 import DocsPanel from "./components/DocsPanel";
+import VisualDocsPanel from "./components/VisualDocsPanel";
 import Gallery from "./components/Gallery";
 import { summaryVerdictClass } from "./types";
 import type { Dossier, GalleryItem, MissionEvent, MissionSummary, ModelsStatus } from "./types";
 
-type Tab = "mission" | "image" | "voice" | "docs";
+type Tab = "mission" | "image" | "voice" | "docs" | "visual";
 
 const TABS: Array<[Tab, string]> = [
   ["mission", "Mission"],
   ["image", "Image"],
   ["voice", "Voice"],
   ["docs", "Docs"],
+  ["visual", "Visual"],
 ];
 
 // Single source for the clean-cancel message (a `cancelled` terminal frame means the
@@ -39,6 +41,8 @@ export default function App() {
   const [graphNodes, setGraphNodes] = useState<number | null>(null);
   const [usePersonas, setUsePersonas] = useState(false);
   const [personaCount, setPersonaCount] = useState<number | null>(null);
+  const [useVisual, setUseVisual] = useState(false);
+  const [visualCount, setVisualCount] = useState<number | null>(null);
   const [events, setEvents] = useState<MissionEvent[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -99,6 +103,14 @@ export default function App() {
     getPersonaStats()
       .then((stats) => setPersonaCount(stats.enabled))
       .catch(() => setPersonaCount(null));
+  }, []);
+
+  // How many images are ingested, so the "Use visual RAG" toggle can hint when it's empty.
+  // Best-effort — a failure just leaves it null.
+  useEffect(() => {
+    listVisual()
+      .then((v) => setVisualCount(v.length))
+      .catch(() => setVisualCount(null));
   }, []);
 
   const openMission = useCallback(async (id: string) => {
@@ -164,7 +176,7 @@ export default function App() {
           if (e.phase === "done" && e.mission_id) completedId = e.mission_id;
           if (e.phase === "cancelled") cancelled = true;
         },
-        { signal: ctrl.signal, webSearch, mcp: useMcp, knowledge: useKnowledge, mcpTools: useMcpTools, personas: usePersonas },
+        { signal: ctrl.signal, webSearch, mcp: useMcp, knowledge: useKnowledge, mcpTools: useMcpTools, personas: usePersonas, visual: useVisual },
       );
       // The stream ended on a terminal frame. Always refresh first so a mission that
       // won the cancel race (finished before the stop landed) still shows in History.
@@ -199,7 +211,7 @@ export default function App() {
       // mutually-exclusive rule), so refresh the warm-model chip when it ends.
       void refreshModelStatus();
     }
-  }, [goal, webSearch, useMcp, useKnowledge, useMcpTools, usePersonas, running, refreshMissions, openMission, refreshModelStatus]);
+  }, [goal, webSearch, useMcp, useKnowledge, useMcpTools, usePersonas, useVisual, running, refreshMissions, openMission, refreshModelStatus]);
 
   // "Stop mission" cancels this exact run via the explicit endpoint (the server then
   // kills the in-flight engine subprocess before persistence). `cancelMission` is
@@ -377,6 +389,22 @@ export default function App() {
               />
               Use persona doctrine{personaCount ? ` (${personaCount})` : ""}
             </label>
+            <label
+              className="toggle"
+              title={
+                visualCount === 0
+                  ? "No images ingested yet — upload them in the Visual tab (captioned by a vision model, then embedded)."
+                  : "Retrieve captions of your ingested images as sourced context (opt-in — RAG over images the text pipeline can't read). A pure-local lookup at mission time."
+              }
+            >
+              <input
+                type="checkbox"
+                checked={useVisual}
+                onChange={(ev) => setUseVisual(ev.target.checked)}
+                disabled={running}
+              />
+              Use visual RAG{visualCount ? ` (${visualCount})` : ""}
+            </label>
             <span className="hint">⌘/Ctrl+Enter to run</span>
           </div>
           {error && <p className="error">{error}</p>}
@@ -463,6 +491,16 @@ export default function App() {
         hidden={tab !== "docs"}
       >
         <DocsPanel />
+      </main>
+
+      <main
+        className="studio-layout"
+        id="panel-visual"
+        role="tabpanel"
+        aria-labelledby="tab-visual"
+        hidden={tab !== "visual"}
+      >
+        <VisualDocsPanel />
       </main>
     </div>
   );

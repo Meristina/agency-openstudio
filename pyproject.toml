@@ -104,6 +104,18 @@ kg = [
 personas = [
     "requests>=2,<3",    # Apache-2.0 — HTTP client for the agency-agents import (https-only)
 ]
+# Wave 6 — visual RAG / PixelRAG (see docs/WAVE6-PLAN.md, Brick 4). RAG over IMAGES the text
+# pipeline can't read: a vision-language model (Qwen3-VL) CAPTIONS each image, and the caption
+# flows through the same chunk → embed → store → context_clause pipeline as Wave-4 RAG. Only the
+# INGEST-time captioning needs this extra (the local MLX VLM); it's imported LAZILY inside
+# agency_studio.visual, so the core server boots and missions run with it absent — reading/
+# retrieving an already-captioned store is pure stdlib (no extra), and POST /api/visual returns
+# 501 when it's missing. An OPTIONAL cloud VLM (opt-in per upload, API key from env) is the only
+# off-machine path; the local backend is the default so nothing leaves the machine by default.
+# Visual RAG is opt-in per mission (default off).
+visual = [
+    "mlx-vlm",           # MIT — MLX vision-language models (Qwen3-VL) for on-device captioning
+]
 # PDF export of a mission deliverable (agency-kit's exporter.export_pdf), exposed
 # at GET /api/mission/{id}/pdf. Both imported lazily inside export_pdf, so the
 # server runs fine without them — the endpoint returns 501 until installed.

@@ -38,9 +38,15 @@
 > (`persona_doctrine`, dept+synth only) that weaves the user's **curated per-department personas**
 > (a local `personas/<dept>/*.md` store, the new `[personas]` importer extra) into the DEPARTMENT
 > DOCTRINE + commander prompts; `personas` opt-in flag + `persona` SSE phase + `GET /api/personas` +
-> `POST /api/personas/import` + GUI toggle. All shipped offline-first (live paths need the Mac / a
-> real MCP server / the network). The remaining two Wave-6 plug-ins (visual RAG (PixelRAG), cloud
-> video (seedance)) remain deferred. See `docs/WAVE6-PLAN.md`.
+> `POST /api/personas/import` + GUI toggle. (4) The **visual-RAG brick** (PixelRAG) — RAG over
+> IMAGES the text pipeline can't read: an alternative `rag.Retriever` (`visual.py`) where a
+> vision-language model (Qwen3-VL) CAPTIONS each image and the caption rides the same
+> chunk→embed→`context_clause` pipeline (zero new agency-kit surface); a **pluggable VLM backend**
+> (local MLX default + an opt-in, triple-gated cloud API — the studio's first off-machine flow, at
+> ingest only), the new `[visual]` extra, `visual` opt-in flag + `visual` SSE phase +
+> `POST/GET/DELETE /api/visual` + GUI Visual tab & toggle. All shipped offline-first (live paths
+> need the Mac / a real MCP server / the network). The remaining Wave-6 plug-in (cloud video
+> (seedance)) remains deferred. See `docs/WAVE6-PLAN.md`.
 > Setup for Wave 2: Python 3.10+ venv
 > + `[media]` extra + system `ffmpeg` (STT); image defaults to a non-gated 8-bit
 > FLUX.1-schnell mirror (no HF login).
@@ -294,7 +300,19 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
   + `POST /api/personas/import`, and the GUI "Use persona doctrine" toggle + timeline step. Offline
   suite runs anywhere (importer stubbed); the live import path needs the network, deferred like
   Wave 5.
-- *(deferred)* `PixelRAG` (Apache-2.0): visual RAG **cloud/opt-in** (Qwen3-VL via API).
+- ✅ **Visual RAG (PixelRAG) — BUILT** (offline-first slice; see `docs/WAVE6-PLAN.md` Brick 4).
+  RAG over IMAGES the text pipeline (markitdown) is blind to — the fourth brick lands as
+  **caption-to-text**: a vision-language model (Qwen3-VL) captions each image, and the caption
+  rides the SAME shipped chunk → embed → SQLite → `context_clause` pipeline (an alternative
+  `rag.Retriever` in `agency_studio/visual.py`; **zero new agency-kit surface**). The VLM is a
+  **pluggable `(probe, load, run)` backend**: a **local MLX Qwen3-VL default** (the new `[visual]`
+  extra, lazy → `VisualUnavailable`/501; nothing leaves the machine) plus an **optional cloud API**
+  backend that is the studio's first off-machine flow — fenced by env-only API key + explicit
+  per-upload consent (`?cloud=1`) + https-only, and only at INGEST time (a mission never touches
+  the network). Opt-in per mission (`visual` flag, default off) with a `visual` SSE phase,
+  `POST/GET/DELETE /api/visual`, and the GUI "Visual" tab + "Use visual RAG" toggle + timeline
+  step. Offline suite runs anywhere (VLM + embed stubbed); the live captioning path needs the Mac /
+  the network, deferred like Wave 2/5.
 - *(deferred)* `seedance-2.0` (MIT): **cloud video** modality as a department tool.
 - 📚 `awesome-llm-apps`: inspiration catalog, not a dependency.
 

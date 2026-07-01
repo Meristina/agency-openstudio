@@ -33,6 +33,13 @@ export interface RetrievalStep {
   reason: string | null;
 }
 
+export interface VisualStep {
+  status: "running" | "done" | "skipped";
+  hits: number | null;
+  sources: Array<{ title: string; doc_id: string }>;
+  reason: string | null;
+}
+
 export interface WebSearchStep {
   status: "running" | "done" | "skipped";
   hits: number | null;
@@ -73,6 +80,7 @@ export type Terminal =
 
 export interface TimelineModel {
   retrieval: RetrievalStep | null;
+  visual: VisualStep | null;
   websearch: WebSearchStep | null;
   mcp: McpStep | null;
   mcpTools: McpToolsStep | null;
@@ -101,7 +109,7 @@ function foldStep<S>(
 
 /** Fold the events received so far into a stable, render-ready model. */
 export function groupTimeline(events: MissionEvent[]): TimelineModel {
-  const model: TimelineModel = { retrieval: null, websearch: null, mcp: null, mcpTools: null, graph: null, persona: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null };
+  const model: TimelineModel = { retrieval: null, visual: null, websearch: null, mcp: null, mcpTools: null, graph: null, persona: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null };
 
   for (const e of events) {
     switch (e.phase) {
@@ -113,6 +121,9 @@ export function groupTimeline(events: MissionEvent[]): TimelineModel {
       // most once per mission, so a later frame just replaces the step.
       case "retrieval":
         model.retrieval = foldStep(e);
+        break;
+      case "visual":
+        model.visual = foldStep(e);
         break;
       case "websearch":
         model.websearch = foldStep(e);
@@ -211,6 +222,6 @@ export function runStatus(model: TimelineModel): "idle" | "running" | "done" | "
   if (model.terminal?.kind === "error") return "error";
   if (model.terminal?.kind === "cancelled") return "cancelled";
   if (model.terminal?.kind === "done") return "done";
-  if (model.retrieval || model.websearch || model.mcp || model.mcpTools || model.graph || model.persona || model.route || model.depts.length) return "running";
+  if (model.retrieval || model.visual || model.websearch || model.mcp || model.mcpTools || model.graph || model.persona || model.route || model.depts.length) return "running";
   return "idle";
 }

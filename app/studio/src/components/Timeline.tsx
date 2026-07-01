@@ -25,7 +25,7 @@ export default function Timeline({ events }: { events: MissionEvent[] }) {
   // Re-fold only when the event list itself changes — not on the per-second
   // `elapsed`-tick re-renders App fires during a run.
   const model = useMemo(() => groupTimeline(events), [events]);
-  const empty = !model.retrieval && !model.websearch && !model.mcp && !model.mcpTools && !model.graph && !model.persona && !model.route && model.depts.length === 0 && !model.terminal;
+  const empty = !model.retrieval && !model.visual && !model.websearch && !model.mcp && !model.mcpTools && !model.graph && !model.persona && !model.route && model.depts.length === 0 && !model.terminal;
 
   if (empty) return <p className="muted">No events yet — run a mission to see the live timeline.</p>;
 
@@ -52,6 +52,31 @@ export default function Timeline({ events }: { events: MissionEvent[] }) {
           {model.retrieval.status === "skipped" && (
             <p className="muted">
               retrieval skipped{model.retrieval.reason ? ` — ${model.retrieval.reason}` : ""}
+            </p>
+          )}
+        </section>
+      )}
+      {model.visual && (
+        <section className="phase">
+          <h4>Visual docs</h4>
+          {model.visual.status === "running" && (
+            <p className="muted">retrieving relevant image captions…</p>
+          )}
+          {model.visual.status === "done" && (
+            <>
+              <p>{model.visual.hits} image excerpt{model.visual.hits === 1 ? "" : "s"} matched</p>
+              {model.visual.sources.length > 0 && (
+                <div className="chips">
+                  {model.visual.sources.map((s, i) => (
+                    <span key={`${s.doc_id}-${i}`} className="chip" title={s.doc_id}>{s.title}</span>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+          {model.visual.status === "skipped" && (
+            <p className="muted">
+              visual retrieval skipped{model.visual.reason ? ` — ${model.visual.reason}` : ""}
             </p>
           )}
         </section>

@@ -447,3 +447,30 @@ class ModelManager:
                 lambda: embeddings._load_embed(entry),
             )
             return embeddings._run_embed(backend, entry, texts=texts, kind=kind)
+
+    def caption(
+        self, images: "list[bytes]", *, model: "Optional[str]" = None, cloud: bool = False,
+    ) -> "list[str]":
+        """Caption ``images`` with a vision-language model (Wave 6 — visual RAG). ``cloud`` selects
+        the OPTIONAL off-machine backend for this call — default ``False`` keeps captioning on the
+        local MLX VLM, so nothing leaves the machine unless the caller explicitly opts in.
+
+        Keyed by ``visual:<id>`` so loading the VLM evicts a warm image/embed/voice model (the
+        16 GB mutual-exclusion rule) and repeat calls reuse the warm one. An empty list is a no-op
+        that never touches the device — mirrors ``embed``. The VLM backend is lazy-imported, so a
+        missing ``[visual]`` extra raises ``VisualUnavailable`` (→ 501) from the probe, before any
+        eviction."""
+        if not images:
+            return []
+        from .. import visual  # lazy: keeps [visual] optional + avoids a load-time cycle
+        chosen = model or ("qwen3-vl-cloud" if cloud else visual.DEFAULT_VISUAL_MODEL)
+        entry = visual.visual_model(chosen)   # ValueError on unknown id (re-validated here)
+        probe, load, run = visual._backend(entry)
+        # The local probe takes no args; the cloud probe needs the entry (endpoint + env key).
+        with self._lock:
+            backend = self._ensure(
+                f"visual:{entry.id}",
+                (lambda: probe(entry)) if entry.backend == "cloud" else probe,
+                lambda: load(entry),
+            )
+            return run(backend, entry, images=images)

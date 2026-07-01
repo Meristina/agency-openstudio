@@ -73,6 +73,39 @@ same posture as the media layer (covered by `tests/test_server.py` + `tests/test
   as an additive `context_clause` (see `docs/WAVE4-PLAN.md`); they reach the department +
   synthesis prompts only, never the router or Inspector, and the veto loop is unchanged.
 
+## Wave 6 — Visual RAG / PixelRAG (rules #1, #3, #4, #5, #6, implemented)
+
+Visual RAG captions uploaded images with a vision-language model and stores the caption + its
+vector, so a text goal can retrieve image content the text pipeline is blind to. It reuses the
+Wave-4 store discipline, and adds the **studio's first (opt-in) off-machine data flow** — fenced
+so the default remains fully local (covered by `tests/test_visual.py` + `tests/test_server.py`):
+
+- **The caption store is never web-served.** Captions + embeddings live in a SQLite DB
+  (`visual-<model>.db`) under `<project>/.agency-studio/` — outside `studio_assets/`, so no
+  `/media/...` request can reach an image's derived caption (rule #3, by construction). The raw
+  image is captioned to a short-lived temp file capped at `_MAX_IMAGE_BYTES` (32 MiB), streamed,
+  then deleted — never persisted; the `filename` is reduced to its basename.
+- **Local by default — the mission path can never touch the network.** The default backend is a
+  local MLX Qwen3-VL (the `[visual]` extra); captioning is the ONLY model-bearing step and it
+  happens at **ingest** time (`POST /api/visual`), never during a mission. At mission time the
+  `visual` flag only retrieves already-stored local caption vectors — a pure-local lookup that is
+  structurally incapable of a network call.
+- **The optional cloud VLM is fenced by three independent gates.** It is reachable only when the
+  user (a) supplies an API key in the environment (`AGENCY_STUDIO_VISUAL_API_KEY` — never a
+  request field, never persisted, never returned by an endpoint, never logged), (b) gives
+  **explicit per-upload consent** via `?cloud=1` on the ingest request (a checkbox in the GUI,
+  never a saved default), and (c) has the endpoint pass an **https-only** check before any socket
+  (rule #4). Absent any of these, the cloud backend raises `VisualUnavailable` (→ 501) — a clean
+  error, never a silent network attempt — and the local backend is used. The API key is read from
+  the environment at call time and never appears in an error/SSE frame (rule #6).
+- **The local VLM download is pinned** (rules #4/#5): pulled by repo id through `huggingface_hub`
+  (allowlisted host, content-addressed cache) and pinned to an immutable commit SHA in
+  `agency_studio/visual.py` (`VISUAL_MODELS[...].revision`), like the Wave-2/4 pins. (The pin is
+  finalized during live Mac validation; until then the local backend degrades to a clean 501.)
+- **Retrieval is best-effort and never weakens the gate.** Image captions are injected as an
+  additive `context_clause` (composed after RAG/web/MCP/knowledge); they reach the department +
+  synthesis prompts only, never the router or Inspector, and the veto loop is unchanged.
+
 ## `path_inside()` reference implementation
 
 Mirrors the shipped guard in `agency_studio/server.py` (the source of truth). It takes the

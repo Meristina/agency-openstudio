@@ -87,6 +87,22 @@ export interface RetrievalEvent {
 }
 
 /**
+ * Wave 6 — visual RAG (PixelRAG), streamed once at the start of a mission when the user opted
+ * in (the `visual` flag). Same start→done→skipped shape as `retrieval` — the matched image
+ * captions flow through the same RAG pipeline — so `sources` are the matched captions
+ * {title, doc_id}. `skipped` carries a `reason` (no images ingested, or the [visual] extra
+ * absent). Absent entirely on a run without the flag. This phase is a pure-local vector lookup
+ * (any off-machine captioning happened earlier, at image-upload time).
+ */
+export interface VisualEvent {
+  phase: "visual";
+  status: "start" | "done" | "skipped";
+  hits?: number;
+  sources?: Array<{ title: string; doc_id: string }>;
+  reason?: string;
+}
+
+/**
  * Wave 5 — web search, streamed once at the start of a mission when the user opted in
  * (the `web_search` flag). `start` opens the phase; `done` carries how many results were
  * fetched plus their {title, url}; `skipped` carries a `reason` (missing [web] extra or a
@@ -192,6 +208,7 @@ export type MissionEvent =
   | InspectEvent
   | AssetEvent
   | RetrievalEvent
+  | VisualEvent
   | WebSearchEvent
   | McpEvent
   | McpToolsEvent
@@ -254,6 +271,16 @@ export interface ModelsStatus {
 
 /** One ingested document (GET /api/docs → docs; POST /api/docs returns one). */
 export interface DocMeta {
+  id: string;
+  filename: string;
+  title: string;
+  n_chunks: number;
+  created: number;
+}
+
+/** One ingested image (GET /api/visual → docs; POST /api/visual returns one). Mirrors DocMeta —
+ * the VLM caption is the `title`, retrieved into missions like a document excerpt. */
+export interface VisualMeta {
   id: string;
   filename: string;
   title: string;

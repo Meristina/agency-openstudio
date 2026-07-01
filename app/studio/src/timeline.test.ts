@@ -5,7 +5,7 @@ import type { MissionEvent } from "./types";
 describe("groupTimeline", () => {
   it("returns an empty model for no events", () => {
     const m = groupTimeline([]);
-    expect(m).toEqual({ retrieval: null, websearch: null, mcp: null, mcpTools: null, graph: null, persona: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null });
+    expect(m).toEqual({ retrieval: null, visual: null, websearch: null, mcp: null, mcpTools: null, graph: null, persona: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null });
     expect(runStatus(m)).toBe("idle");
   });
 
@@ -70,7 +70,7 @@ describe("groupTimeline", () => {
       { phase: "route", status: "done", route: ["solve"] },
     ]);
     // The run frame contributes no step; only the route shows.
-    expect(m).toEqual({ retrieval: null, websearch: null, mcp: null, mcpTools: null, graph: null, persona: null, route: ["solve"], depts: [], synth: [], inspect: [], assets: [], terminal: null });
+    expect(m).toEqual({ retrieval: null, visual: null, websearch: null, mcp: null, mcpTools: null, graph: null, persona: null, route: ["solve"], depts: [], synth: [], inspect: [], assets: [], terminal: null });
   });
 
   it("folds an asset render phase: start→done pairs into ok steps with the served url", () => {
@@ -146,6 +146,25 @@ describe("groupTimeline", () => {
       status: "skipped", hits: null, sources: [], reason: "local-docs extra not installed",
     });
     // Retrieval alone (before any route/dept) still reads as a running mission.
+    expect(runStatus(m)).toBe("running");
+  });
+
+  it("folds a visual start→done with matched image captions", () => {
+    const m = groupTimeline([
+      { phase: "visual", status: "start" },
+      { phase: "visual", status: "done", hits: 1, sources: [{ title: "diagram.png", doc_id: "v1" }] },
+      { phase: "route", status: "done", route: ["solve"] },
+    ]);
+    expect(m.visual).toEqual({
+      status: "done", hits: 1, sources: [{ title: "diagram.png", doc_id: "v1" }], reason: null,
+    });
+  });
+
+  it("folds a skipped visual with its reason and reads as running", () => {
+    const m = groupTimeline([
+      { phase: "visual", status: "skipped", reason: "no images ingested" },
+    ]);
+    expect(m.visual).toEqual({ status: "skipped", hits: null, sources: [], reason: "no images ingested" });
     expect(runStatus(m)).toBe("running");
   });
 

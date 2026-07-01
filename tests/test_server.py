@@ -1905,3 +1905,187 @@ def test_import_personas_stubbed_populates_store(monkeypatch, tmp_path):
     # The persona is now on disk and loads back.
     from pathlib import Path as _P
     assert (tmp_path / ".agency-studio" / "personas" / "marketing" / "growth.md").exists()
+
+
+# ── Wave 6 — visual RAG: /api/visual endpoints + opt-in mission injection ─────────
+
+class _FakeVisualRetriever:
+    """In-memory stand-in for VisualRetriever — no VLM, no MLX, no sqlite. Records the cloud
+    consent flag of the last ingest, and returns configured caption hits from retrieve()."""
+
+    def __init__(self, *, hits=None):
+        self._docs = {}
+        self._hits = hits or []
+        self.last_cloud = None
+
+    def ingest(self, doc_bytes, filename, *, cloud=False):
+        from agency_studio.rag import DocMeta
+        import uuid as _uuid
+        self.last_cloud = cloud
+        meta = DocMeta(id=_uuid.uuid4().hex, filename=filename,
+                       title=f"Caption of {filename}", n_chunks=1, created=123.0)
+        self._docs[meta.id] = meta
+        return meta
+
+    def list_docs(self):
+        return list(self._docs.values())
+
+    def delete(self, doc_id):
+        return self._docs.pop(doc_id, None) is not None
+
+    def retrieve(self, query, *, k=5):
+        return self._hits
+
+
+def _use_fake_visual(monkeypatch, fake):
+    monkeypatch.setattr(server.StudioHandler, "_visual_retriever", lambda self: fake)
+
+
+def test_ingest_image_then_list(monkeypatch, tmp_path):
+    _use_fake_visual(monkeypatch, _FakeVisualRetriever())
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _post(host, port, "/api/visual?filename=chart.png", body=b"\x89PNG fake bytes")
+        assert resp.status == 201
+        meta = json.loads(body)
+        assert meta["filename"] == "chart.png" and meta["n_chunks"] == 1
+        resp, body = _get(host, port, "/api/visual")
+        docs = json.loads(body)["docs"]
+        assert len(docs) == 1 and docs[0]["id"] == meta["id"]
+    finally:
+        httpd.shutdown()
+
+
+def test_visual_ingest_empty_body_is_400(monkeypatch, tmp_path):
+    _use_fake_visual(monkeypatch, _FakeVisualRetriever())
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, _ = _post(host, port, "/api/visual?filename=x.png", body=b"")
+        assert resp.status == 400
+    finally:
+        httpd.shutdown()
+
+
+def test_visual_ingest_traversal_filename_is_reduced_to_basename(monkeypatch, tmp_path):
+    # A traversal filename must be reduced to its basename (Path(...).name) so the upload can't
+    # escape the temp dir — mirrors the RAG dot-filename guard.
+    fake = _FakeVisualRetriever()
+    _use_fake_visual(monkeypatch, fake)
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _post(host, port, "/api/visual?filename=../../etc/evil.png", body=b"bytes")
+        assert resp.status == 201
+        assert json.loads(body)["filename"] == "evil.png"   # no path components survive
+    finally:
+        httpd.shutdown()
+
+
+def test_delete_image_is_idempotent(monkeypatch, tmp_path):
+    _use_fake_visual(monkeypatch, _FakeVisualRetriever())
+    httpd, host, port = _start(tmp_path)
+    try:
+        _, body = _post(host, port, "/api/visual?filename=a.png", body=b"bytes")
+        image_id = json.loads(body)["id"]
+        resp, _ = _delete(host, port, f"/api/visual/{image_id}")
+        assert resp.status == 200
+        assert json.loads(_get(host, port, "/api/visual")[1])["docs"] == []
+        resp, _ = _delete(host, port, f"/api/visual/{image_id}")  # already gone
+        assert resp.status == 404
+    finally:
+        httpd.shutdown()
+
+
+def test_ingest_image_cloud_consent_threads_to_ingest(monkeypatch, tmp_path):
+    fake = _FakeVisualRetriever()
+    _use_fake_visual(monkeypatch, fake)
+    httpd, host, port = _start(tmp_path)
+    try:
+        _post(host, port, "/api/visual?filename=a.png", body=b"bytes")          # no consent
+        assert fake.last_cloud is False
+        _post(host, port, "/api/visual?filename=b.png&cloud=1", body=b"bytes")   # explicit consent
+        assert fake.last_cloud is True
+    finally:
+        httpd.shutdown()
+
+
+def test_ingest_image_without_visual_extra_returns_501(monkeypatch, tmp_path):
+    # No stub: the real VisualRetriever + a real ModelManager. mlx-vlm is absent offline, so the
+    # caption backend's lazy import raises VisualUnavailable (ImportError) → 501.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _post(host, port, "/api/visual?filename=x.png", body=b"\x89PNG bytes")
+        assert resp.status == 501
+        assert "visual" in body.decode().lower()
+    finally:
+        httpd.shutdown()
+
+
+def test_mission_with_visual_flag_injects_context_and_emits_phase(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio.rag import Chunk
+    _use_fake_retriever(monkeypatch, _FakeRetriever())   # no docs → RAG contributes nothing
+    fake = _FakeVisualRetriever(hits=[Chunk("v1", 0, "diagram.png", "a network topology diagram", score=0.9)])
+    fake.ingest(b"seed", "diagram.png")   # so _visual_retriever_if_images sees a non-empty store
+    _use_fake_visual(monkeypatch, fake)
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "explain the network topology", "visual": True}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    phase = [e for e in events if e.get("phase") == "visual"]
+    assert any(e["status"] == "done" and e["hits"] == 1 for e in phase)
+    assert captured["context_clause"] is not None
+    assert "network topology diagram" in captured["context_clause"]
+
+
+def test_mission_without_visual_flag_does_no_visual(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _use_fake_retriever(monkeypatch, _FakeRetriever())
+
+    def _boom(self):
+        raise AssertionError("visual retriever must not be resolved when the flag is absent")
+
+    monkeypatch.setattr(server.StudioHandler, "_visual_retriever_if_images", _boom)
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=json.dumps({"goal": "x"}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    assert not [e for e in events if e.get("phase") == "visual"]
+    assert captured["context_clause"] is None
+
+
+def test_visual_store_lives_under_docs_root_not_assets_root(tmp_path):
+    # The captioned-image store must be under the never-web-served docs_root, never assets_root
+    # (the only /media root), so an image's derived caption can't be served. Drive the REAL
+    # accessor (not a hand-built path) and assert the db path IT resolves satisfies the invariant —
+    # so a regression pointing the store at assets_root would fail here.
+    import types
+    httpd, host, port = _start(tmp_path)
+    try:
+        h = types.SimpleNamespace(server=httpd)
+        # Bind the real handler methods the accessor depends on onto our stand-in `self`.
+        h._media_manager = types.MethodType(server.StudioHandler._media_manager, h)
+        retriever = server.StudioHandler._visual_retriever(h)
+        db = retriever._db_path
+        assert httpd.docs_root in db.parents        # under the never-web-served data dir…
+        assert httpd.assets_root not in db.parents  # …never under the /media-served assets root
+    finally:
+        retriever._store.close()
+        httpd.shutdown()

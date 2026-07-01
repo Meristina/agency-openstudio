@@ -1,10 +1,10 @@
 # Wave 6 — Advanced extensions · Implementation Plan
 
 > Wave 6 is a **basket of five independent plug-ins** (knowledge graphs · MCP tool-calling ·
-> persona doctrine · visual RAG · cloud video). This plan tracks the bricks as they land. Three
+> persona doctrine · visual RAG · cloud video). This plan tracks the bricks as they land. Four
 > are **BUILT** so far — the **knowledge-graph** brick (below), the **MCP tool-calling** brick
-> (second section), and the **persona-doctrine** brick (third section); the remaining two
-> (visual RAG, cloud video) stay deferred and are **not** built here.
+> (second section), the **persona-doctrine** brick (third section), and the **visual-RAG** brick
+> (fourth section); the remaining one (cloud video) stays deferred and is **not** built here.
 
 ## Brick 1 — Knowledge graphs (graph-RAG over docs + history)
 
@@ -348,3 +348,102 @@ argv splice** — a third injection class, using Brick 2's *param-threading chai
   finer per-mission selection is a later refinement.
 - **Exposing personas to the inspector or router.** Deliberately withheld (P2), so the Art. IX
   gate inputs are unchanged.
+
+---
+
+## Brick 4 — Visual RAG (PixelRAG: RAG over images the text pipeline can't read)
+
+> Status: **BUILT** — the fourth Wave 6 brick, end-to-end in the **studio repo only** (no
+> agency-kit change — it rides the shipped `context_clause` hook like Wave 4/5). The module
+> (`agency_studio/visual.py`), `ModelManager.caption`, the server wiring (`_resolve_visual_clause`,
+> the `visual` flag + SSE phase, `POST/GET/DELETE /api/visual`, the `[visual]` extra), the GUI
+> (Visual tab + "Use visual RAG" toggle + timeline step), and the offline suite (`tests/test_visual.py`
+> + `tests/test_server.py`; frontend `visual-api`/`VisualDocsPanel`/timeline/api/component tests).
+> The **live captioning path** (a real MLX Qwen3-VL on-device, or the cloud API) is validated on
+> the Apple-Silicon Mac / the network, deferred like Wave-2 runs and Wave-5's live MCP.
+
+### The load-bearing correction
+
+The ROADMAP frames this as *"`PixelRAG` (Apache-2.0): visual RAG **cloud/opt-in** (Qwen3-VL via
+API)."* Two corrections the seam surfaced:
+
+1. **It is an alternative `rag.Retriever`, not a new pipeline.** The `Retriever` protocol
+   (`rag.py`) was built as *"the seam Wave 6 plugs richer retrievers into (visual RAG / knowledge
+   graphs)."* Visual RAG lands as **caption-to-text**: a VLM captions each image → text → the SAME
+   shipped chunk → embed → SQLite → `context_clause` pipeline. The VLM is the ONLY new
+   model-bearing step (stubbed offline like the KG `Extractor`); `VisualRetriever` is a *sibling*
+   of `LocalRetriever` that swaps only the text-extraction front (`markitdown` → VLM caption) and
+   reuses the whole tail. **Zero new agency-kit surface** — it rides `context_clause` (unlike
+   Bricks 2 & 3, which needed engine hooks).
+2. **"Cloud" is one backend, not the architecture.** The studio's identity is local-first,
+   privacy-preserving. So the VLM is a **pluggable `(probe, load, run)` backend** (mirroring the
+   image backend): the **local MLX Qwen3-VL is the default** (nothing leaves the machine), and a
+   **cloud API backend is optional, opt-in, and fenced** — the studio's first off-machine data
+   flow. Critically, the off-machine step is **captioning at INGEST time**, never at mission time,
+   so a mission is structurally incapable of a network call.
+
+### The decisions (final)
+
+- **V1 — the retriever:** `VisualRetriever` (implements `rag.Retriever`) over its OWN store
+  (`visual-<embed-id>.db` under the never-web-served `rag.data_dir()`), reusing
+  `rag.chunk_markdown` / `_VectorStore` / `data_dir` / `build_context_clause` / `MAX_DOC_CHARS`.
+  `ingest(image, filename, *, cloud=False)` = caption → chunk → embed → store; `retrieve` /
+  `list_docs` / `delete` are the RAG tail verbatim. `build_visual_context_clause` reuses
+  `rag.build_context_clause` (None-contract).
+- **V2 — the VLM rides `ModelManager`:** `ModelManager.caption(images, *, cloud=False)` keyed
+  `visual:<id>`, so loading the VLM **evicts** the warm image/embed/voice model (the 16 GB
+  mutual-exclusion rule) and vice-versa. Captioning + the follow-on embed are sequential within one
+  ingest (VLM evicts → embedder loads), correct on 16 GB.
+- **V3 — pluggable backend seam:** `_VISUAL_BACKENDS` = `{local, cloud}`, each a `(probe, load,
+  run)` triple (mirrors `local_media`'s image backend). `local` lazy-imports `mlx_vlm` (the
+  `[visual]` extra) → `VisualUnavailable` (an `ImportError` subclass → 501). The three functions
+  are module-level so the offline suite stubs the boundary; the live MLX/network surface is
+  Mac-deferred.
+- **V4 — the cloud path is triple-gated (SECURITY.md):** reachable only with (a) an env-only API
+  key (`AGENCY_STUDIO_VISUAL_API_KEY`, never a request field / never persisted / never logged /
+  never returned), (b) **explicit per-upload consent** (`?cloud=1`, a GUI checkbox, never a saved
+  default), and (c) an **https-only** endpoint check before any socket. Any missing gate ⇒
+  `VisualUnavailable`, never a silent network attempt. Local is the default so the offline suite is
+  network-free.
+- **V5 — opt-in, default OFF:** a per-mission `visual` flag (a pure-local caption-vector lookup),
+  a `visual` SSE phase (via the shared `_resolve_clause` best-effort resolver — never aborts a
+  mission), `POST/GET/DELETE /api/visual` (ingest 501s when `[visual]` absent, mirroring
+  `/api/docs`), and a GUI "Visual" tab (image upload + the cloud-consent checkbox) + "Use visual
+  RAG" toggle + timeline step. No flag ⇒ byte-identical to today.
+
+### Security (SECURITY.md discipline)
+
+See the new **"Wave 6 — Visual RAG / PixelRAG"** section in `docs/SECURITY.md`: caption store
+never web-served; local-default so the mission path never touches the network; the optional cloud
+VLM fenced by env-key + explicit consent + https-only, with the key never logged/persisted/
+returned; the local VLM weights pinned to a commit SHA (rules #4/#5). Prompt-injection residual is
+the same as any RAG source (context to cite, not to obey), and strictly less exposed than web/MCP
+when local.
+
+### File-by-file (built)
+
+- `agency_studio/visual.py` (NEW) — `VisualUnavailable`; the `VisualModel` registry + backend
+  `(probe, load, run)` triple (local + cloud); `VisualRetriever`; `build_visual_context_clause`.
+- `agency_studio/engines/local_media.py` — `ModelManager.caption` (keyed `visual:<id>`, lazy
+  `from .. import visual`).
+- `agency_studio/server.py` — `_resolve_visual_clause` (composed into `context_clause`), the
+  `visual` flag + `visual` SSE phase, `_visual_retriever` / `_visual_retriever_if_images`,
+  `POST/GET/DELETE /api/visual`, `_MAX_IMAGE_BYTES`, `httpd.visual` state.
+- `pyproject.toml` — the `[visual]` extra (`mlx-vlm`).
+- GUI — `VisualMeta` / `VisualEvent` types, `visual` timeline fold (reuses `foldStep`) + render,
+  the Visual tab (`VisualDocsPanel` with the cloud-consent checkbox), the "Use visual RAG" toggle,
+  `listVisual` / `uploadVisual` / `deleteVisual`.
+- Tests — `tests/test_visual.py` (retriever + backend + cloud gates), `tests/test_server.py`
+  (endpoints, mission injection, flag-off byte-identity, store-location, 501); frontend
+  `visual-api.test.ts`, `VisualDocsPanel.test.tsx`, timeline/api/component tests.
+
+### Non-goals (deferred — do not build here)
+
+- **The live captioning surface.** The backend seam + the cloud gates are built; the actual MLX
+  `mlx_vlm.generate` call and the cloud POST are validated live on the Mac / network (deferred).
+- **A visual gallery / thumbnails.** The store is never web-served, so no image is served back;
+  the GUI is text-only (caption + filename), like the Docs tab. An in-GUI thumbnail would need a
+  `path_inside`-guarded route and is out of scope.
+- **Native visual embeddings (ColPali-style).** The brick is caption-to-text (reuses the text
+  embedder); a multi-vector visual store is a later, larger build.
+- **The last Wave-6 plug-in — cloud video (`seedance-2.0`).** Its own brick.

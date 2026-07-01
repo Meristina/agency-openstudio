@@ -61,6 +61,9 @@ _READ_CHUNK = 1 << 16  # 64 KiB
 # _READ_CHUNK pieces (never held whole in RAM). rag.MAX_DOC_CHARS bounds the extracted text
 # downstream, so this only caps the raw upload.
 _MAX_DOC_BYTES = 64 << 20  # 64 MiB
+# Upper bound on an uploaded image body for visual RAG (POST /api/visual). Bounded + streamed to
+# disk like a document; the caption text is bounded downstream by rag.MAX_DOC_CHARS.
+_MAX_IMAGE_BYTES = 32 << 20  # 32 MiB
 
 # Bounds on image-generation parameters (POST /api/image). The request BYTE size is
 # bounded, but the COMPUTE it triggers is not — an unclamped width/height/steps could
@@ -307,6 +310,26 @@ def _resolve_kg_clause(kg_retriever, goal, emit, should_cancel):
                            unavailable_reason="knowledge-graph extra not installed")
 
 
+def _resolve_visual_clause(visual_retriever, goal, emit, should_cancel):
+    """Visual RAG (Wave 6, opt-in): the goal's nearest captioned-image excerpts → a
+    ``context_clause`` block (or None). Retrieval reads only local caption vectors — it never
+    runs the VLM and never touches the network (the off-machine caption happens at INGEST time,
+    behind explicit consent), so the VisualUnavailable arm is a safety net, not the common path.
+    See ``_resolve_clause`` for the best-effort contract."""
+    if visual_retriever is None:
+        return None
+    from agency_studio.visual import VisualUnavailable, build_visual_context_clause
+
+    def _produce():
+        chunks = visual_retriever.retrieve(goal, k=5)
+        sources = [{"title": c.title, "doc_id": c.doc_id} for c in chunks]
+        return len(chunks), sources, build_visual_context_clause(chunks)
+
+    return _resolve_clause("visual", emit, should_cancel, produce=_produce,
+                           unavailable_exc=VisualUnavailable,
+                           unavailable_reason="visual-RAG extra not installed")
+
+
 def _resolve_mcp_tools(run_kwargs, emit, should_cancel):
     """Wave 6 MCP tool-calling (opt-in): write a ``--mcp-config`` file from the ENABLED servers
     in ``mcp.json``, and thread its path + the allowed ``mcp__*`` tools into ``run_kwargs`` so
@@ -379,11 +402,11 @@ def _resolve_persona_doctrine(run_kwargs, emit, should_cancel, *, root=None):
 
 def _compose_context_clause(*blocks: "Optional[str]") -> "Optional[str]":
     """Join the non-None ``context_clause`` blocks (RAG, web, MCP, and — Wave 6 — the knowledge
-    graph) into the single ``context_clause`` string threaded to ``run_mission_cli``. Returns
-    None when every block is None, so a mission with no injected context is byte-identical to
-    one run without any of these features (the shared default-None contract). Order is
-    caller-defined: the user's own documents (RAG) first, then fresh web results, MCP
-    resources, and the knowledge-graph relations last."""
+    graph and visual RAG) into the single ``context_clause`` string threaded to
+    ``run_mission_cli``. Returns None when every block is None, so a mission with no injected
+    context is byte-identical to one run without any of these features (the shared default-None
+    contract). Order is caller-defined: the user's own documents (RAG) first, then fresh web
+    results, MCP resources, the knowledge-graph relations, and image captions (visual RAG) last."""
     present = [b for b in blocks if b]
     if not present:
         return None
@@ -663,6 +686,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_models_status()
         if path == "/api/docs":
             return self._handle_list_docs()
+        if path == "/api/visual":
+            return self._handle_list_visual()
         if path == "/api/mcp":
             return self._handle_list_mcp_servers()
         if path == "/api/graph":
@@ -692,6 +717,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_transcribe()
         if path == "/api/docs":
             return self._handle_ingest_doc()
+        if path == "/api/visual":
+            return self._handle_ingest_visual()
         if path == "/api/graph/build":
             return self._handle_build_graph()
         if path == "/api/personas/import":
@@ -708,6 +735,8 @@ class StudioHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path.startswith("/api/docs/"):
             return self._handle_delete_doc(path[len("/api/docs/"):])
+        if path.startswith("/api/visual/"):
+            return self._handle_delete_visual(path[len("/api/visual/"):])
         self._reject(404, "not found")
 
     # ── API: list / get saved missions ───────────────────────────────────────
@@ -784,7 +813,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         request = self._parse_mission_request()
         if request is None:
             return  # a 400 was already sent
-        goal, engine, web_search, use_mcp, use_knowledge, use_mcp_tools, use_personas = request
+        goal, engine, web_search, use_mcp, use_knowledge, use_mcp_tools, use_personas, use_visual = request
         self._begin_sse()
         # Register an ephemeral run id BEFORE streaming, and announce it as the first
         # frame, so the GUI can stop this exact run via POST /api/mission/{id}/cancel
@@ -795,7 +824,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         try:
             self._write_sse({"phase": "run", "run_id": run_id})
             result_box = self._stream_mission(goal, engine, cancel_event, web_search, use_mcp,
-                                              use_knowledge, use_mcp_tools, use_personas)
+                                              use_knowledge, use_mcp_tools, use_personas, use_visual)
         finally:
             # Deregister the instant the run is over — BEFORE writing the terminal
             # frame — so a cancel arriving during that (socket-write) window gets a
@@ -833,16 +862,18 @@ class StudioHandler(BaseHTTPRequestHandler):
         cancel_event.set()
         self._send_json({"status": "cancelling", "run_id": run_id}, status=202)
 
-    def _parse_mission_request(self) -> "tuple[str, str, bool, bool, bool, bool, bool] | None":
+    def _parse_mission_request(self) -> "tuple[str, str, bool, bool, bool, bool, bool, bool] | None":
         """Read + validate the JSON body. Returns ``(goal, engine, web_search, use_mcp,
-        use_knowledge, use_mcp_tools, use_personas)``, or ``None`` after sending the matching
-        error: a 400 for bad JSON / a non-object body / missing goal, or the error ``_read_body``
-        already sent (400/408/411/413) for a malformed, withheld, chunked, or oversized body.
-        ``web_search`` / ``use_mcp`` (Wave 5) and ``knowledge`` / ``mcp_tools`` / ``personas``
-        (Wave 6) are the opt-in flags (default false) — any truthy JSON value enables the matching
-        feature; absent/false leaves the mission byte-identical to a run without that feature.
-        ``mcp_tools`` is the tool-calling counterpart to Wave 5's read-only ``mcp`` resources
-        flag; ``personas`` injects the user's curated per-department persona doctrine."""
+        use_knowledge, use_mcp_tools, use_personas, use_visual)``, or ``None`` after sending the
+        matching error: a 400 for bad JSON / a non-object body / missing goal, or the error
+        ``_read_body`` already sent (400/408/411/413) for a malformed, withheld, chunked, or
+        oversized body. ``web_search`` / ``use_mcp`` (Wave 5) and ``knowledge`` / ``mcp_tools`` /
+        ``personas`` / ``visual`` (Wave 6) are the opt-in flags (default false) — any truthy JSON
+        value enables the matching feature; absent/false leaves the mission byte-identical to a run
+        without that feature. ``mcp_tools`` is the tool-calling counterpart to Wave 5's read-only
+        ``mcp`` resources flag; ``personas`` injects the user's curated per-department persona
+        doctrine; ``visual`` retrieves captions of the user's ingested images (a pure-local vector
+        lookup — the off-machine captioning, if any, happened at ingest time)."""
         payload = self._read_json_body()
         if payload is None:
             return None  # _read_json_body already sent the error (and closed if needed)
@@ -853,7 +884,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         return (goal, payload.get("engine") or "claude-code",
                 bool(payload.get("web_search")), bool(payload.get("mcp")),
                 bool(payload.get("knowledge")), bool(payload.get("mcp_tools")),
-                bool(payload.get("personas")))
+                bool(payload.get("personas")), bool(payload.get("visual")))
 
     def _begin_sse(self) -> None:
         """Emit the SSE response headers. The Mission Console consumes this via
@@ -872,7 +903,7 @@ class StudioHandler(BaseHTTPRequestHandler):
     def _stream_mission(
         self, goal: str, engine: str, cancel_event: threading.Event,
         web_search: bool = False, use_mcp: bool = False, use_knowledge: bool = False,
-        use_mcp_tools: bool = False, use_personas: bool = False,
+        use_mcp_tools: bool = False, use_personas: bool = False, use_visual: bool = False,
     ) -> "dict | None":
         """Run the mission on a worker thread and stream its progress events.
 
@@ -905,11 +936,15 @@ class StudioHandler(BaseHTTPRequestHandler):
         # (a cheap stats() check on the handler thread — no extractor, no model). The subgraph
         # retrieval itself runs inside the worker, under the heartbeat + should_cancel.
         kg_retriever = self._kg_retriever_if_built() if use_knowledge else None
+        # Wave 6 — visual RAG: opt-in, and only when images have actually been ingested (a cheap
+        # list_docs check on the handler thread — no VLM, no embed, no network). The caption
+        # vector lookup itself runs inside the worker, under the heartbeat + should_cancel.
+        visual_retriever = self._visual_retriever_if_images() if use_visual else None
 
         def _worker() -> None:
             # Capture only server-scoped values (`project_root` str, `render_assets`,
-            # `retriever`, `kg_retriever`) — never `self`: this daemon thread can outlive the request after a
-            # disconnect, and capturing the handler would pin its dead socket buffers alive.
+            # `retriever`, `kg_retriever`, `visual_retriever`) — never `self`: this daemon thread can outlive the
+            # request after a disconnect, and capturing the handler would pin its dead socket buffers alive.
             import inspect
             from agency_cli import runner_bridge
             from agency_cli.engines.cli_engine import MissionCancelled
@@ -945,10 +980,15 @@ class StudioHandler(BaseHTTPRequestHandler):
                         _resolve_kg_clause(kg_retriever, goal, events.put, cancel_event.is_set)
                         if kg_retriever is not None else None
                     )
-                    context_clause = _compose_context_clause(rag_clause, web_clause, mcp_clause, kg_clause)
+                    visual_clause = (
+                        _resolve_visual_clause(visual_retriever, goal, events.put, cancel_event.is_set)
+                        if visual_retriever is not None else None
+                    )
+                    context_clause = _compose_context_clause(
+                        rag_clause, web_clause, mcp_clause, kg_clause, visual_clause)
                     if context_clause is not None:
                         run_kwargs["context_clause"] = context_clause
-                elif retriever is not None or web_search or use_mcp or use_knowledge:
+                elif retriever is not None or web_search or use_mcp or use_knowledge or use_visual:
                     print("[studio] installed agency-kit lacks the context_clause hook; "
                           "running without RAG / web / MCP / knowledge context")
                 # Wave 6 — MCP tool-calling (opt-in): write a --mcp-config from the enabled
@@ -1133,6 +1173,30 @@ class StudioHandler(BaseHTTPRequestHandler):
         except Exception:  # can't build/open the graph → just run without the KG
             return None
 
+    def _visual_retriever(self):
+        """Lazily build + cache the one visual-RAG retriever for this server. Its SQLite store
+        lives under docs_root (outside assets_root — never web-served), a DISTINCT db from the
+        text-RAG corpus. Shares the warm embed ModelManager (like _retriever); constructing it
+        needs no extra — only ingest() touches the VLM backend ([visual])."""
+        server = self.server  # type: ignore[attr-defined]
+        with server.visual_lock:  # type: ignore[attr-defined]
+            if server.visual is None:  # type: ignore[attr-defined]
+                from agency_studio.visual import VisualRetriever
+                from agency_studio.engines import models as media_models
+                db = server.docs_root / f"visual-{media_models.DEFAULT_EMBED_MODEL}.db"  # type: ignore[attr-defined]
+                server.visual = VisualRetriever(self._media_manager(), db_path=db)  # type: ignore[attr-defined]
+            return server.visual  # type: ignore[attr-defined]
+
+    def _visual_retriever_if_images(self):
+        """Resolve the visual retriever and return it ONLY if it holds captioned images — a cheap
+        list_docs check (pure SQLite, no VLM/embed) on the handler thread, so a mission with no
+        images does zero retrieval work. Returns None if empty or the store can't be opened."""
+        try:
+            retriever = self._visual_retriever()
+            return retriever if retriever.list_docs() else None
+        except Exception:  # can't build/open the store → just run without visual RAG
+            return None
+
     def _handle_graph_stats(self) -> None:
         """Knowledge-graph stats (GET /api/graph): node/edge counts + top entities. Reading the
         store needs no extra, so this works even without [kg] (an un-built graph lists empty)."""
@@ -1265,6 +1329,65 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._send_error_json(404, "unknown document")
         if not self._retriever().delete(doc_id):
             return self._send_error_json(404, "unknown document")
+        self._send_json({"deleted": doc_id})
+
+    def _handle_ingest_visual(self) -> None:
+        """Ingest an uploaded image for visual RAG (POST /api/visual?filename=chart.png, the raw
+        image as the body). The image is captioned by a vision model, then the caption is chunked
+        + embedded + stored (reusing the RAG pipeline). Absent [visual] extra → 501; empty body →
+        400. Captioning is LOCAL by default; ``?cloud=1`` is the explicit per-upload consent to use
+        the off-machine cloud VLM instead (the studio's only network data flow, and only here —
+        never at mission time). Without it the image never leaves the machine."""
+        import shutil
+        import tempfile
+        query = parse_qs(urlparse(self.path).query)
+        filename = Path((query.get("filename", ["image"])[0] or "image")).name or "image"
+        cloud = query.get("cloud", ["0"])[0] in ("1", "true", "yes")   # explicit off-machine consent
+        tmp_dir = Path(tempfile.mkdtemp(prefix="agency-visual-"))
+        try:
+            upload = tmp_dir / filename
+            written = self._stream_body_to_file(upload, max_bytes=_MAX_IMAGE_BYTES)
+            if written is None:
+                return  # _stream_body_to_file already sent the error + cleaned the partial
+            if written == 0:
+                return self._send_error_json(400, "empty image body")
+            try:
+                meta = self._visual_retriever().ingest(upload.read_bytes(), filename, cloud=cloud)
+            except ImportError as exc:  # the VLM backend / [visual] extra absent (VisualUnavailable)
+                return self._send_error_json(501, str(exc))
+            except ValueError as exc:  # the model produced no caption
+                return self._send_error_json(400, str(exc))
+            except Exception:  # caption / embedding failure — clean 500, never a socket drop
+                import traceback
+                traceback.print_exc()
+                return self._send_error_json(500, "image ingestion failed")
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        self._send_json({
+            "id": meta.id, "filename": meta.filename, "title": meta.title,
+            "n_chunks": meta.n_chunks, "created": meta.created,
+        }, status=201)
+
+    def _handle_list_visual(self) -> None:
+        """List ingested images (GET /api/visual). Reading the store needs no extra (the caption
+        vectors are already stored), so this works even without [visual] (an un-built store lists
+        empty)."""
+        docs = self._visual_retriever().list_docs()
+        self._send_json({"docs": [
+            {"id": d.id, "filename": d.filename, "title": d.title,
+             "n_chunks": d.n_chunks, "created": d.created}
+            for d in docs
+        ]})
+
+    def _handle_delete_visual(self, doc_id: str) -> None:
+        """Delete an ingested image and its caption chunks (DELETE /api/visual/{id}). 404 for an
+        unknown id (idempotent)."""
+        if self._read_body() is None:
+            return  # malformed/oversized body already answered
+        if not doc_id or "/" in doc_id:
+            return self._send_error_json(404, "unknown image")
+        if not self._visual_retriever().delete(doc_id):
+            return self._send_error_json(404, "unknown image")
         self._send_json({"deleted": doc_id})
 
     def _retriever_if_docs(self):
@@ -1539,6 +1662,13 @@ def make_server(
     # reading/retrieving does not. knowledge_lock serializes the lazy init.
     httpd.knowledge = None  # type: ignore[attr-defined]
     httpd.knowledge_lock = threading.Lock()  # type: ignore[attr-defined]
+    # Wave 6 — visual RAG (PixelRAG). Captioned images + their vectors live in a SQLite store
+    # under the same never-web-served docs_root (its OWN db, distinct from localdocs / knowledge),
+    # so an image's derived caption is never reachable via /media. Built lazily on the first
+    # /api/visual or opt-in mission retrieval; ingest needs the [visual] extra (the VLM), reading
+    # does not. visual_lock serializes the lazy init.
+    httpd.visual = None  # type: ignore[attr-defined]
+    httpd.visual_lock = threading.Lock()  # type: ignore[attr-defined]
     # Retention cap on studio_assets/: bounds cumulative disk growth (oldest-first eviction).
     # Enforced after each render and once at startup; retention_lock serializes concurrent prunes.
     httpd.media_budget_bytes = media_budget_bytes  # type: ignore[attr-defined]

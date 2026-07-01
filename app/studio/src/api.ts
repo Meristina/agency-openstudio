@@ -10,6 +10,7 @@ import type {
   MissionSummary,
   ModelsStatus,
   SpeechResult,
+  VisualMeta,
   TranscriptResult,
 } from "./types";
 
@@ -114,7 +115,7 @@ export async function cancelMission(runId: string): Promise<boolean> {
 export async function runMission(
   goal: string,
   onEvent: (event: MissionEvent) => void,
-  opts: { engine?: string; signal?: AbortSignal; webSearch?: boolean; mcp?: boolean; knowledge?: boolean; mcpTools?: boolean; personas?: boolean } = {},
+  opts: { engine?: string; signal?: AbortSignal; webSearch?: boolean; mcp?: boolean; knowledge?: boolean; mcpTools?: boolean; personas?: boolean; visual?: boolean } = {},
 ): Promise<void> {
   const res = await fetch("/api/mission", {
     method: "POST",
@@ -130,6 +131,7 @@ export async function runMission(
       knowledge: opts.knowledge ?? false,
       mcp_tools: opts.mcpTools ?? false,
       personas: opts.personas ?? false,
+      visual: opts.visual ?? false,
     }),
     signal: opts.signal,
   });
@@ -236,6 +238,37 @@ export async function ingestDoc(file: File): Promise<DocMeta> {
 export async function deleteDoc(id: string): Promise<void> {
   const res = await fetch(`/api/docs/${encodeURIComponent(id)}`, { method: "DELETE" });
   if (!res.ok) throw new Error(await errorText(res, "DELETE /api/docs"));
+}
+
+// ── Wave 6 — visual RAG (PixelRAG): images captioned by a vision model, then retrieved ──
+/** List the ingested images (GET /api/visual). Works without the [visual] extra (an un-built
+ * store just lists empty). */
+export async function listVisual(): Promise<VisualMeta[]> {
+  const res = await fetch("/api/visual");
+  if (!res.ok) throw new Error(await errorText(res, "GET /api/visual"));
+  const data = (await res.json()) as { docs: VisualMeta[] };
+  return data.docs ?? [];
+}
+
+/** Ingest one image for visual RAG (POST /api/visual?filename=…). The image bytes are the body.
+ * `cloud` is the explicit per-upload consent to caption OFF-MACHINE via the cloud VLM (the
+ * studio's only network data flow) — default false keeps captioning local, so the image never
+ * leaves the machine. A 501 (with an install hint) means the [visual] extra is absent. */
+export async function uploadVisual(file: File, opts: { cloud?: boolean } = {}): Promise<VisualMeta> {
+  const query = `filename=${encodeURIComponent(file.name)}${opts.cloud ? "&cloud=1" : ""}`;
+  const res = await fetch(`/api/visual?${query}`, {
+    method: "POST",
+    headers: { "Content-Type": file.type || "application/octet-stream" },
+    body: file,
+  });
+  if (!res.ok) throw new Error(await errorText(res, "POST /api/visual"));
+  return (await res.json()) as VisualMeta;
+}
+
+/** Delete an ingested image and its caption chunks (DELETE /api/visual/{id}). */
+export async function deleteVisual(id: string): Promise<void> {
+  const res = await fetch(`/api/visual/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await errorText(res, "DELETE /api/visual"));
 }
 
 /** Parse one SSE frame ("data: {...}") into a MissionEvent, or null. */

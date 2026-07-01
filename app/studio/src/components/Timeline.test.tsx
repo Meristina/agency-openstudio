@@ -110,6 +110,26 @@ describe("<Timeline>", () => {
     expect(text).toContain("persona doctrine skipped — no personas curated in the store");
   });
 
+  it("renders the visual RAG phase with matched image captions", () => {
+    const events: MissionEvent[] = [
+      { phase: "visual", status: "start" },
+      { phase: "visual", status: "done", hits: 1, sources: [{ title: "diagram.png", doc_id: "v1" }] },
+      { phase: "route", status: "done", route: ["product"] },
+    ];
+    const text = render(<Timeline events={events} />).container.textContent ?? "";
+    expect(text).toContain("Visual docs");
+    expect(text).toContain("1 image excerpt matched");
+    expect(text).toContain("diagram.png");
+  });
+
+  it("renders a skipped visual RAG phase with its reason", () => {
+    const events: MissionEvent[] = [
+      { phase: "visual", status: "skipped", reason: "no images ingested" },
+    ];
+    const text = render(<Timeline events={events} />).container.textContent ?? "";
+    expect(text).toContain("visual retrieval skipped — no images ingested");
+  });
+
   it("renders both iterations of a VETO→retry (Art. IX, never collapsed)", () => {
     const events: MissionEvent[] = [
       { phase: "route", status: "done", route: ["product"] },

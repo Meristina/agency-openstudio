@@ -45,7 +45,7 @@ a clean web GUI.
 > A shared `context_block.format_context_block` + server `_resolve_clause` back RAG/web/MCP alike;
 > MCP is read-only **resources-as-context** (tool-calling is the `claude --mcp-config` path,
 > deferred). Offline suite runs anywhere; the live web/MCP paths need a network / a real MCP
-> server (deferred like Wave 2). **Wave 6 — advanced extensions — is partly BUILT (three bricks)**,
+> server (deferred like Wave 2). **Wave 6 — advanced extensions — is partly BUILT (four bricks)**,
 > tracked
 > in `docs/WAVE6-PLAN.md`: the **knowledge-graph brick** (offline-first slice; studio PR #30) lands as *graph-RAG*,
 > the exact parallel of Waves 4/5 — `agency_studio/knowledge.py` extracts `(subject, relation,
@@ -77,9 +77,18 @@ a clean web GUI.
 > department; the frozen `payload/agents` snapshot is untouched), an **optional** `agency-agents`
 > importer behind the new **`[personas]`** extra (lazy → `PersonasUnavailable`; **reading a built
 > store needs no extra**), a `personas` opt-in flag + `persona` SSE phase + `GET /api/personas` +
-> `POST /api/personas/import` + GUI toggle. The **remaining two Wave-6 plug-ins** (visual RAG
-> (PixelRAG), cloud video (seedance)) **remain deferred**; see `ROADMAP.md`. Do **not** invent
-> implementation that the roadmap/WAVE-PLANs defer.
+> `POST /api/personas/import` + GUI toggle. The **visual-RAG brick** (Brick 4, PixelRAG) is also
+> BUILT — RAG over **images** the text pipeline can't read, and (like Waves 4/5) it rides the
+> shipped `context_clause` hook with **zero new agency-kit surface**: an alternative `rag.Retriever`
+> (`agency_studio/visual.py`) where a vision-language model (Qwen3-VL) **captions** each image and
+> the caption flows through the same chunk→embed→SQLite→`context_clause` pipeline. The VLM is a
+> **pluggable `(probe, load, run)` backend** — a **local MLX Qwen3-VL default** (the new `[visual]`
+> extra, lazy → `VisualUnavailable`/501) plus an **optional cloud API** that is the studio's first
+> off-machine data flow, **fenced** by an env-only API key + explicit per-upload consent (`?cloud=1`)
+> + https-only, and **only at ingest time** (a mission never touches the network). Opt-in per
+> mission (`visual` flag) + `visual` SSE phase + `POST/GET/DELETE /api/visual` + GUI Visual tab &
+> toggle. The **remaining Wave-6 plug-in** (cloud video (seedance)) **remains deferred**; see
+> `ROADMAP.md`. Do **not** invent implementation that the roadmap/WAVE-PLANs defer.
 >
 > **Running Wave 2 (target Mac):** a **Python 3.10+ venv** with the `[media]` extra
 > (`pip install -e ".[media]"`), plus **`ffmpeg`** on PATH for speech-to-text
@@ -137,10 +146,11 @@ Follow `ROADMAP.md` exactly. Waves **0-1** (stdlib server + event hook + React/V
 Mission Console) are buildable and testable on Linux. **Wave 2** (FLUX/Whisper/Kokoro on
 Metal), **Wave 3** (multimodal as a department deliverable), **Wave 4** (RAG / LocalDocs,
 incl. the GUI "Docs" tab), **Wave 5** (local web search + MCP resources-as-context), and the
-first three **Wave 6** bricks (knowledge graphs + MCP tool-calling + persona doctrine) are
-**shipped** — their unit/HTTP/GUI tests run offline anywhere (backends + network stubbed), but
-the live model / web / MCP-server / import runs require the Apple Silicon Mac. The **remaining
-two Wave-6 plug-ins** (visual RAG (PixelRAG), cloud video (seedance)) remain deferred.
+first four **Wave 6** bricks (knowledge graphs + MCP tool-calling + persona doctrine + visual RAG)
+are **shipped** — their unit/HTTP/GUI tests run offline anywhere (backends + network stubbed), but
+the live model / web / MCP-server / import / captioning runs require the Apple Silicon Mac (or the
+network, for the opt-in cloud VLM). The **remaining Wave-6 plug-in** (cloud video (seedance))
+remains deferred.
 
 ## Conventions
 
