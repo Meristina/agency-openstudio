@@ -82,6 +82,17 @@ web = [
 mcp = [
     "mcp>=1.0,<2",       # MIT — official Model Context Protocol SDK (client: stdio/http)
 ]
+# Wave 6 — knowledge graph as mission context (see docs/WAVE6-PLAN.md). Turns the user's own
+# docs + mission history into a graph of (subject, relation, object) triples, injected as
+# relational context through the same context_clause hook. Only the EXTRACTION step (text →
+# triples) needs this extra; it's imported LAZILY inside agency_studio.knowledge, so the core
+# server still boots and missions still run with it absent — an opted-in mission's graph step
+# is then simply skipped (a `graph: skipped` SSE frame), and POST /api/graph/build returns 501.
+# Reading/retrieving an already-built graph is pure stdlib (no extra). Knowledge graph is
+# opt-in per mission (default off) and reads only local sources (no new network surface).
+kg = [
+    "hyper-extract",     # Apache-2.0 — entity/relation extraction (text → knowledge triples)
+]
 # PDF export of a mission deliverable (agency-kit's exporter.export_pdf), exposed
 # at GET /api/mission/{id}/pdf. Both imported lazily inside export_pdf, so the
 # server runs fine without them — the endpoint returns 501 until installed.

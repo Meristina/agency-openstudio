@@ -44,6 +44,30 @@ describe("<Timeline>", () => {
     expect(text).toContain("failed — no voice");
   });
 
+  it("renders the knowledge-graph phase with matched entities", () => {
+    const events: MissionEvent[] = [
+      { phase: "graph", status: "start" },
+      { phase: "graph", status: "done", hits: 2, sources: [
+        { label: "Widget Engine", kind: "entity" },
+        { label: "Rust Toolchain", kind: "entity" },
+      ] },
+      { phase: "route", status: "done", route: ["product"] },
+    ];
+    const text = render(<Timeline events={events} />).container.textContent ?? "";
+    expect(text).toContain("Knowledge graph");
+    expect(text).toContain("2 entities matched");
+    expect(text).toContain("Widget Engine");
+    expect(text).toContain("Rust Toolchain");
+  });
+
+  it("renders a skipped knowledge-graph phase with its reason", () => {
+    const events: MissionEvent[] = [
+      { phase: "graph", status: "skipped", reason: "knowledge-graph extra not installed" },
+    ];
+    const text = render(<Timeline events={events} />).container.textContent ?? "";
+    expect(text).toContain("knowledge graph skipped — knowledge-graph extra not installed");
+  });
+
   it("renders both iterations of a VETO→retry (Art. IX, never collapsed)", () => {
     const events: MissionEvent[] = [
       { phase: "route", status: "done", route: ["product"] },

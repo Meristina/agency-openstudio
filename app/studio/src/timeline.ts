@@ -47,6 +47,13 @@ export interface McpStep {
   reason: string | null;
 }
 
+export interface KnowledgeStep {
+  status: "running" | "done" | "skipped";
+  hits: number | null;
+  sources: Array<{ label: string; kind: string }>;
+  reason: string | null;
+}
+
 export type Terminal =
   | { kind: "done"; verdict: string | null; missionId: string | null; path: string; residualRisk: string | null }
   | { kind: "error"; message: string }
@@ -56,6 +63,7 @@ export interface TimelineModel {
   retrieval: RetrievalStep | null;
   websearch: WebSearchStep | null;
   mcp: McpStep | null;
+  graph: KnowledgeStep | null;
   route: string[] | null;
   depts: DeptStep[];
   synth: SynthStep[];
@@ -65,7 +73,7 @@ export interface TimelineModel {
 }
 
 /**
- * Fold a best-effort pre-route phase (retrieval / websearch / mcp — all the same
+ * Fold a best-effort pre-route phase (retrieval / websearch / mcp / graph — all the same
  * start→running, done→hits+sources, else→skipped+reason shape) into its single step.
  * Generic over the source element type so each phase keeps its own `sources` typing.
  */
@@ -79,7 +87,7 @@ function foldStep<S>(
 
 /** Fold the events received so far into a stable, render-ready model. */
 export function groupTimeline(events: MissionEvent[]): TimelineModel {
-  const model: TimelineModel = { retrieval: null, websearch: null, mcp: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null };
+  const model: TimelineModel = { retrieval: null, websearch: null, mcp: null, graph: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null };
 
   for (const e of events) {
     switch (e.phase) {
@@ -97,6 +105,9 @@ export function groupTimeline(events: MissionEvent[]): TimelineModel {
         break;
       case "mcp":
         model.mcp = foldStep(e);
+        break;
+      case "graph":
+        model.graph = foldStep(e);
         break;
       case "route":
         model.route = e.route;
@@ -174,6 +185,6 @@ export function runStatus(model: TimelineModel): "idle" | "running" | "done" | "
   if (model.terminal?.kind === "error") return "error";
   if (model.terminal?.kind === "cancelled") return "cancelled";
   if (model.terminal?.kind === "done") return "done";
-  if (model.retrieval || model.websearch || model.mcp || model.route || model.depts.length) return "running";
+  if (model.retrieval || model.websearch || model.mcp || model.graph || model.route || model.depts.length) return "running";
   return "idle";
 }

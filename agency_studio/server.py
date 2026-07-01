@@ -287,12 +287,33 @@ def _resolve_mcp_clause(goal, emit, should_cancel):
                            unavailable_reason="mcp extra not installed")
 
 
+def _resolve_kg_clause(kg_retriever, goal, emit, should_cancel):
+    """Knowledge graph (Wave 6, opt-in): the goal's seed entities + their 1-hop neighbourhood
+    from the built graph → a ``context_clause`` block (or None). Retrieval needs no extra (only
+    a *build* runs the extractor), so the KnowledgeUnavailable arm is a safety net, not the
+    common path. See ``_resolve_clause`` for the best-effort contract."""
+    if kg_retriever is None:
+        return None
+    from agency_studio.knowledge import KnowledgeUnavailable
+
+    def _produce():
+        from agency_studio.knowledge import build_kg_context_clause
+        subgraph = kg_retriever.retrieve(goal)
+        sources = [{"label": n.label, "kind": n.kind} for n in subgraph.nodes]
+        return len(subgraph.nodes), sources, build_kg_context_clause(subgraph)
+
+    return _resolve_clause("graph", emit, should_cancel, produce=_produce,
+                           unavailable_exc=KnowledgeUnavailable,
+                           unavailable_reason="knowledge-graph extra not installed")
+
+
 def _compose_context_clause(*blocks: "Optional[str]") -> "Optional[str]":
-    """Join the non-None ``context_clause`` blocks (RAG, web, and — Brick B — MCP) into the
-    single ``context_clause`` string threaded to ``run_mission_cli``. Returns None when every
-    block is None, so a mission with no injected context is byte-identical to one run without
-    any of these features (the shared default-None contract). Order is caller-defined: the
-    user's own documents (RAG) come first, fresh web results after."""
+    """Join the non-None ``context_clause`` blocks (RAG, web, MCP, and — Wave 6 — the knowledge
+    graph) into the single ``context_clause`` string threaded to ``run_mission_cli``. Returns
+    None when every block is None, so a mission with no injected context is byte-identical to
+    one run without any of these features (the shared default-None contract). Order is
+    caller-defined: the user's own documents (RAG) first, then fresh web results, MCP
+    resources, and the knowledge-graph relations last."""
     present = [b for b in blocks if b]
     if not present:
         return None
@@ -574,6 +595,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_list_docs()
         if path == "/api/mcp":
             return self._handle_list_mcp_servers()
+        if path == "/api/graph":
+            return self._handle_graph_stats()
         if path.startswith("/api/mission/"):
             rest = path[len("/api/mission/"):]
             if rest.endswith("/pdf"):
@@ -597,6 +620,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_transcribe()
         if path == "/api/docs":
             return self._handle_ingest_doc()
+        if path == "/api/graph/build":
+            return self._handle_build_graph()
         if path.startswith("/api/mission/") and path.endswith("/cancel"):
             run_id = path[len("/api/mission/"):-len("/cancel")]
             return self._handle_cancel_mission(run_id)
@@ -685,7 +710,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         request = self._parse_mission_request()
         if request is None:
             return  # a 400 was already sent
-        goal, engine, web_search, use_mcp = request
+        goal, engine, web_search, use_mcp, use_knowledge = request
         self._begin_sse()
         # Register an ephemeral run id BEFORE streaming, and announce it as the first
         # frame, so the GUI can stop this exact run via POST /api/mission/{id}/cancel
@@ -695,7 +720,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         self._register_run(run_id, cancel_event)
         try:
             self._write_sse({"phase": "run", "run_id": run_id})
-            result_box = self._stream_mission(goal, engine, cancel_event, web_search, use_mcp)
+            result_box = self._stream_mission(goal, engine, cancel_event, web_search, use_mcp, use_knowledge)
         finally:
             # Deregister the instant the run is over — BEFORE writing the terminal
             # frame — so a cancel arriving during that (socket-write) window gets a
@@ -733,14 +758,14 @@ class StudioHandler(BaseHTTPRequestHandler):
         cancel_event.set()
         self._send_json({"status": "cancelling", "run_id": run_id}, status=202)
 
-    def _parse_mission_request(self) -> "tuple[str, str, bool, bool] | None":
-        """Read + validate the JSON body. Returns ``(goal, engine, web_search, use_mcp)``, or
-        ``None`` after sending the matching error: a 400 for bad JSON / a non-object body /
-        missing goal, or the error ``_read_body`` already sent (400/408/411/413) for a
-        malformed, withheld, chunked, or oversized body. ``web_search`` and ``use_mcp`` are
-        the Wave-5 opt-in flags (default false) — any truthy JSON value enables the matching
-        best-effort context step; absent/false leaves the mission byte-identical to a
-        pre-Wave-5 run."""
+    def _parse_mission_request(self) -> "tuple[str, str, bool, bool, bool] | None":
+        """Read + validate the JSON body. Returns ``(goal, engine, web_search, use_mcp,
+        use_knowledge)``, or ``None`` after sending the matching error: a 400 for bad JSON / a
+        non-object body / missing goal, or the error ``_read_body`` already sent
+        (400/408/411/413) for a malformed, withheld, chunked, or oversized body.
+        ``web_search`` / ``use_mcp`` (Wave 5) and ``knowledge`` (Wave 6) are the opt-in flags
+        (default false) — any truthy JSON value enables the matching best-effort context step;
+        absent/false leaves the mission byte-identical to a run without that feature."""
         payload = self._read_json_body()
         if payload is None:
             return None  # _read_json_body already sent the error (and closed if needed)
@@ -749,7 +774,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             self._send_error_json(400, "missing 'goal'")
             return None
         return (goal, payload.get("engine") or "claude-code",
-                bool(payload.get("web_search")), bool(payload.get("mcp")))
+                bool(payload.get("web_search")), bool(payload.get("mcp")),
+                bool(payload.get("knowledge")))
 
     def _begin_sse(self) -> None:
         """Emit the SSE response headers. The Mission Console consumes this via
@@ -767,7 +793,7 @@ class StudioHandler(BaseHTTPRequestHandler):
 
     def _stream_mission(
         self, goal: str, engine: str, cancel_event: threading.Event,
-        web_search: bool = False, use_mcp: bool = False,
+        web_search: bool = False, use_mcp: bool = False, use_knowledge: bool = False,
     ) -> "dict | None":
         """Run the mission on a worker thread and stream its progress events.
 
@@ -792,10 +818,14 @@ class StudioHandler(BaseHTTPRequestHandler):
         # under the heartbeat loop and observes should_cancel. It's a server-scoped object, so
         # the worker still closes over no handler state.
         retriever = self._retriever_if_docs()
+        # Wave 6 — knowledge graph: opt-in, and only when a graph has actually been built
+        # (a cheap stats() check on the handler thread — no extractor, no model). The subgraph
+        # retrieval itself runs inside the worker, under the heartbeat + should_cancel.
+        kg_retriever = self._kg_retriever_if_built() if use_knowledge else None
 
         def _worker() -> None:
             # Capture only server-scoped values (`project_root` str, `render_assets`,
-            # `retriever`) — never `self`: this daemon thread can outlive the request after a
+            # `retriever`, `kg_retriever`) — never `self`: this daemon thread can outlive the request after a
             # disconnect, and capturing the handler would pin its dead socket buffers alive.
             import inspect
             from agency_cli import runner_bridge
@@ -826,12 +856,16 @@ class StudioHandler(BaseHTTPRequestHandler):
                         _resolve_mcp_clause(goal, events.put, cancel_event.is_set)
                         if use_mcp else None
                     )
-                    context_clause = _compose_context_clause(rag_clause, web_clause, mcp_clause)
+                    kg_clause = (
+                        _resolve_kg_clause(kg_retriever, goal, events.put, cancel_event.is_set)
+                        if kg_retriever is not None else None
+                    )
+                    context_clause = _compose_context_clause(rag_clause, web_clause, mcp_clause, kg_clause)
                     if context_clause is not None:
                         run_kwargs["context_clause"] = context_clause
-                elif retriever is not None or web_search or use_mcp:
+                elif retriever is not None or web_search or use_mcp or use_knowledge:
                     print("[studio] installed agency-kit lacks the context_clause hook; "
-                          "running without RAG / web / MCP context")
+                          "running without RAG / web / MCP / knowledge context")
                 result_box["result"] = runner_bridge.run(**run_kwargs)
             except MissionCancelled:
                 # Stopped before any persistence. Recorded so that — when the client
@@ -960,6 +994,62 @@ class StudioHandler(BaseHTTPRequestHandler):
                 db = server.docs_root / f"localdocs-{media_models.DEFAULT_EMBED_MODEL}.db"  # type: ignore[attr-defined]
                 server.retriever = LocalRetriever(self._media_manager(), db_path=db)  # type: ignore[attr-defined]
             return server.retriever  # type: ignore[attr-defined]
+
+    def _kg_retriever(self):
+        """Lazily build + cache the one knowledge-graph retriever for this server. Its SQLite
+        graph lives under docs_root (outside assets_root — never web-served), co-located with
+        the RAG store it derives from. Constructing it needs no extra (the HyperExtractor is
+        only touched by a build); retrieval + stats work with [kg] absent."""
+        server = self.server  # type: ignore[attr-defined]
+        with server.knowledge_lock:  # type: ignore[attr-defined]
+            if server.knowledge is None:  # type: ignore[attr-defined]
+                from agency_studio.knowledge import GraphRetriever
+                db = server.docs_root / "knowledge.db"  # type: ignore[attr-defined]
+                server.knowledge = GraphRetriever(db_path=db)  # type: ignore[attr-defined]
+            return server.knowledge  # type: ignore[attr-defined]
+
+    def _kg_retriever_if_built(self):
+        """Resolve the KG retriever and return it ONLY if the graph holds nodes — a cheap
+        stats() check (pure SQLite COUNT, no extractor/model) run on the handler thread so an
+        empty-graph mission does zero retrieval work. Returns None if the graph is empty or the
+        store can't be opened."""
+        try:
+            retriever = self._kg_retriever()
+            return retriever if retriever.stats().get("nodes") else None
+        except Exception:  # can't build/open the graph → just run without the KG
+            return None
+
+    def _handle_graph_stats(self) -> None:
+        """Knowledge-graph stats (GET /api/graph): node/edge counts + top entities. Reading the
+        store needs no extra, so this works even without [kg] (an un-built graph lists empty)."""
+        try:
+            self._send_json(self._kg_retriever().stats())
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            self._send_error_json(500, "could not read knowledge graph")
+
+    def _handle_build_graph(self) -> None:
+        """(Re)build the knowledge graph from the user's docs + mission history (POST
+        /api/graph/build). Runs the extractor, so it needs the [kg] extra → 501 when absent
+        (mirrors /api/docs ingestion). Returns the resulting stats."""
+        if self._read_body() is None:
+            return  # malformed/oversized body already answered
+        server = self.server  # type: ignore[attr-defined]
+        try:
+            from agency_kit import store
+            retriever = self._kg_retriever()
+            n_docs = retriever.build_from_docs(self._retriever())
+            n_hist = retriever.build_from_history(store, project_root=server.project_root)  # type: ignore[attr-defined]
+        except ImportError as exc:  # [kg] (hyper-extract) — or [studio] for the docs source
+            return self._send_error_json(501, str(exc))
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            return self._send_error_json(500, "knowledge-graph build failed")
+        stats = retriever.stats()
+        stats["extracted"] = n_docs + n_hist
+        self._send_json(stats, status=201)
 
     def _handle_ingest_doc(self) -> None:
         """Ingest an uploaded document for RAG (POST /api/docs?filename=report.pdf, the raw
@@ -1295,6 +1385,12 @@ def make_server(
     httpd.docs_root = Path(project_root).resolve() / ".agency-studio"  # type: ignore[attr-defined]
     httpd.retriever = None  # type: ignore[attr-defined]
     httpd.retriever_lock = threading.Lock()  # type: ignore[attr-defined]
+    # Wave 6 — knowledge graph. The graph (nodes/edges) lives in a SQLite store under the same
+    # never-web-served docs_root, co-located with the RAG corpus it derives from. Built lazily
+    # on the first /api/graph or opt-in mission retrieval; a build needs the [kg] extra, but
+    # reading/retrieving does not. knowledge_lock serializes the lazy init.
+    httpd.knowledge = None  # type: ignore[attr-defined]
+    httpd.knowledge_lock = threading.Lock()  # type: ignore[attr-defined]
     # Retention cap on studio_assets/: bounds cumulative disk growth (oldest-first eviction).
     # Enforced after each render and once at startup; retention_lock serializes concurrent prunes.
     httpd.media_budget_bytes = media_budget_bytes  # type: ignore[attr-defined]

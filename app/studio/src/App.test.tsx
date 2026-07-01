@@ -9,6 +9,7 @@ vi.mock("./api", () => ({
   getMission: vi.fn(),
   getModelsStatus: vi.fn().mockResolvedValue({ resident: null, image_models: [], models: {} }),
   listMcpServers: vi.fn().mockResolvedValue([]),
+  getGraphStats: vi.fn().mockResolvedValue({ nodes: 0, edges: 0, top_entities: [] }),
   runMission: vi.fn(),
   cancelMission: vi.fn(),
 }));

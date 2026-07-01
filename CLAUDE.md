@@ -45,8 +45,21 @@ a clean web GUI.
 > A shared `context_block.format_context_block` + server `_resolve_clause` back RAG/web/MCP alike;
 > MCP is read-only **resources-as-context** (tool-calling is the `claude --mcp-config` path,
 > deferred). Offline suite runs anywhere; the live web/MCP paths need a network / a real MCP
-> server (deferred like Wave 2). **Wave 6 remains deferred** (advanced extensions; visual RAG /
-> knowledge graphs); see `ROADMAP.md`. Do **not** invent implementation that the roadmap/WAVE-PLANs defer.
+> server (deferred like Wave 2). **Wave 6 — advanced extensions — is now partly BUILT**, tracked
+> in `docs/WAVE6-PLAN.md`: the **knowledge-graph brick** (offline-first slice) lands as *graph-RAG*,
+> the exact parallel of Waves 4/5 — `agency_studio/knowledge.py` extracts `(subject, relation,
+> object)` triples from the user's own **docs + mission history** into a pure-stdlib SQLite graph
+> (`nodes`/`edges`, upsert-dedup + weight; `rag.LocalRetriever.all_chunks` feeds the doc source),
+> then at mission time seeds on the goal → 1-hop **neighbourhood** → injects the subgraph through
+> the **same additive `context_clause` hook** (`build_kg_context_clause` + the server's
+> `_resolve_kg_clause`, composed after RAG/web/MCP). The `Extractor` seam's live impl wraps
+> `hyper-extract` (Apache-2.0, the new **`[kg]`** extra, lazy → `KnowledgeUnavailable`); **querying
+> an already-built graph needs no extra**. Opt-in per mission (`knowledge` flag, default off) with
+> a `graph` SSE phase, `GET /api/graph` + `POST /api/graph/build`, and the GUI "Use knowledge graph"
+> toggle + timeline step. Its offline suite runs anywhere (extractor stubbed); the live extraction
+> path needs the Apple Silicon Mac (deferred like Wave 2). The **other four Wave-6 plug-ins**
+> (persona doctrine, visual RAG (PixelRAG), cloud video (seedance), MCP tool-calling) **remain
+> deferred**; see `ROADMAP.md`. Do **not** invent implementation that the roadmap/WAVE-PLANs defer.
 >
 > **Running Wave 2 (target Mac):** a **Python 3.10+ venv** with the `[media]` extra
 > (`pip install -e ".[media]"`), plus **`ffmpeg`** on PATH for speech-to-text

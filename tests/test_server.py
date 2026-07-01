@@ -1488,3 +1488,144 @@ def test_get_mcp_malformed_config_is_400(monkeypatch, tmp_path):
         assert resp.status == 400
     finally:
         httpd.shutdown()
+
+
+# ── Wave 6 — knowledge graph: opt-in relational context + /api/graph ─────────────
+
+class _StubExtractor:
+    """Deterministic text→triples stand-in (the live hyper-extract path, stubbed)."""
+
+    def __init__(self, triples):
+        self._triples = triples
+
+    def extract(self, text, source_ref):
+        return list(self._triples)
+
+
+def _prebuild_graph(tmp_path, triples):
+    """Build the server's on-disk graph (docs_root/knowledge.db) with a stub extractor, so the
+    server later opens the SAME file and retrieves from it — a real store, no model."""
+    from agency_studio.knowledge import GraphRetriever
+    db = tmp_path / ".agency-studio" / "knowledge.db"
+    gr = GraphRetriever(_StubExtractor(triples), db_path=db)
+    gr.build_from_texts([("seed", "doc:seed")])
+    gr.close()
+
+
+def test_mission_with_knowledge_flag_injects_graph_context_and_emits_phase(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio.knowledge import Triple
+    _use_fake_retriever(monkeypatch, _FakeRetriever())  # no docs → RAG contributes nothing
+    _prebuild_graph(tmp_path, [
+        Triple("Widget Engine", "depends on", "Rust Toolchain"),
+        Triple("Beta Labs", "builds", "Widget Engine"),
+    ])
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "roadmap for the Widget Engine", "knowledge": True}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    graph = [e for e in events if e.get("phase") == "graph"]
+    assert any(e["status"] == "done" and e["hits"] >= 1 for e in graph)
+    assert "KNOWLEDGE GRAPH" in captured["context_clause"]
+    assert "Rust Toolchain" in captured["context_clause"]
+
+
+def test_mission_without_knowledge_flag_does_no_graph(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio.knowledge import Triple
+    _use_fake_retriever(monkeypatch, _FakeRetriever())
+    _prebuild_graph(tmp_path, [Triple("Widget Engine", "depends on", "Rust Toolchain")])
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=json.dumps({"goal": "Widget Engine plan"}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    assert not [e for e in events if e.get("phase") == "graph"]
+    assert captured["context_clause"] is None   # no docs, no flag → nothing injected
+
+
+def test_mission_composes_rag_web_mcp_then_graph(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio.rag import Chunk
+    from agency_studio.websearch import WebResult
+    from agency_studio.mcp_client import McpResource
+    from agency_studio.knowledge import Triple
+    fake = _FakeRetriever(hits=[Chunk("d1", 0, "Solar", "panels", score=0.9)])
+    fake.ingest(b"seed", "solar.md")
+    _use_fake_retriever(monkeypatch, fake)
+    _stub_web_search(monkeypatch, [WebResult("Fresh", "https://n.example", "latest")])
+    _stub_mcp_resources(monkeypatch, [McpResource("wiki", "u://1", "Wiki", "note")])
+    _prebuild_graph(tmp_path, [Triple("Solar Plan", "cites", "Panel Spec")])
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "solar plan", "web_search": True,
+                                      "mcp": True, "knowledge": True}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    clause = captured["context_clause"]
+    # RAG → web → MCP → knowledge graph, in that order.
+    assert (clause.index("REFERENCE DOCUMENTS") < clause.index("WEB SEARCH RESULTS")
+            < clause.index("MCP RESOURCES") < clause.index("KNOWLEDGE GRAPH"))
+
+
+def test_get_graph_stats_empty_then_built(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio.knowledge import Triple
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _get(host, port, "/api/graph")
+        assert resp.status == 200 and json.loads(body)["nodes"] == 0
+    finally:
+        httpd.shutdown()
+
+    _prebuild_graph(tmp_path, [Triple("A", "rel", "B")])
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _get(host, port, "/api/graph")
+        stats = json.loads(body)
+        assert stats["nodes"] == 2 and stats["edges"] == 1
+    finally:
+        httpd.shutdown()
+
+
+def test_build_graph_without_kg_extra_returns_501(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio.rag import Chunk
+
+    class _RetrieverWithChunks:
+        def all_chunks(self):
+            return [Chunk("d1", 0, "T", "some corpus text to extract")]
+
+    # A real GraphRetriever (real HyperExtractor); hyper_extract is absent offline → 501.
+    monkeypatch.setattr(server.StudioHandler, "_retriever", lambda self: _RetrieverWithChunks())
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _post(host, port, "/api/graph/build", body=b"")
+        assert resp.status == 501
+        assert "kg" in body.decode().lower()
+    finally:
+        httpd.shutdown()

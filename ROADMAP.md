@@ -27,8 +27,12 @@
 > official MIT SDK, `[mcp]`) itself and injects them through the **same additive
 > `context_clause` hook** as Wave 4 (no new agency-kit surface), each **opt-in per mission**
 > (default off — the Claude path already searches / speaks MCP). Offline suite runs anywhere;
-> the live web/MCP paths need a network / a real MCP server (deferred like Wave 2). **Wave 6**
-> (advanced extensions; visual RAG (PixelRAG) / knowledge graphs (Hyper-Extract)) remains deferred.
+> the live web/MCP paths need a network / a real MCP server (deferred like Wave 2). **Wave 6 —
+> advanced extensions — is now partly BUILT: the knowledge-graph brick** (`knowledge.py`, graph-RAG
+> over docs + history via Hyper-Extract, the `[kg]` extra, `knowledge` flag + `graph` SSE phase +
+> `GET/POST /api/graph` + GUI toggle) shipped offline-first (live extraction needs the Mac); the
+> other four Wave-6 plug-ins (persona doctrine, visual RAG (PixelRAG), cloud video (seedance),
+> MCP tool-calling) remain deferred. See `docs/WAVE6-PLAN.md`.
 > Setup for Wave 2: Python 3.10+ venv
 > + `[media]` extra + system `ffmpeg` (STT); image defaults to a non-gated 8-bit
 > FLUX.1-schnell mirror (no HF login).
@@ -244,12 +248,25 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
 - Shared: `context_block.format_context_block` (one home for the `[n]`-citation convention) and
   the server's `_resolve_clause` scaffold, used by RAG + web + MCP alike.
 
-### Wave 6 — Advanced extensions (plug-ins behind flags, MIT/Apache) *(deferred)*
-- `hyper-extract` (Apache-2.0) → `agency_studio/knowledge.py`: knowledge graphs over docs + history.
-- `agency-agents` (MIT): **curated** import of personas as additional doctrine (respect
-  `DEPT_NAMES` + the payload drift guard).
-- `PixelRAG` (Apache-2.0): visual RAG **cloud/opt-in** (Qwen3-VL via API).
-- `seedance-2.0` (MIT): **cloud video** modality as a department tool.
+### Wave 6 — Advanced extensions (plug-ins behind flags, MIT/Apache) *(mostly deferred)*
+- ✅ **Knowledge graphs — BUILT** (offline-first slice; see `docs/WAVE6-PLAN.md`). The first
+  Wave-6 brick lands as **graph-RAG**, the exact parallel of Waves 4/5: `agency_studio/knowledge.py`
+  extracts `(subject, relation, object)` triples from the user's own **docs + mission history**
+  into a pure-stdlib SQLite graph (`nodes`/`edges`, upsert-dedup with weight), and at mission
+  time seeds on the goal → 1-hop **neighbourhood** → injects the subgraph through the **same
+  additive `context_clause` hook** (via `context_block.format_context_block` + the server's
+  `_resolve_kg_clause`). The `Extractor` seam's live impl wraps `hyper-extract` (Apache-2.0, the
+  new **`[kg]`** extra, lazy → `KnowledgeUnavailable`); **querying an already-built graph needs
+  no extra**. Opt-in per mission (`knowledge` flag, default off) with a `graph` SSE phase, plus
+  `GET /api/graph` / `POST /api/graph/build` and the GUI "Use knowledge graph" toggle + timeline
+  step. Offline suite runs anywhere (extractor stubbed); the live extraction path needs the Mac,
+  deferred like Wave 2.
+- *(deferred)* `agency-agents` (MIT): **curated** import of personas as additional doctrine
+  (respect `DEPT_NAMES` + the payload drift guard).
+- *(deferred)* `PixelRAG` (Apache-2.0): visual RAG **cloud/opt-in** (Qwen3-VL via API).
+- *(deferred)* `seedance-2.0` (MIT): **cloud video** modality as a department tool.
+- *(deferred)* **MCP agentic tool-calling** (the `claude --mcp-config` path) — beyond Wave 5's
+  read-only resources-as-context.
 - 📚 `awesome-llm-apps`: inspiration catalog, not a dependency.
 
 ---

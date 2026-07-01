@@ -116,6 +116,21 @@ export interface McpEvent {
   reason?: string;
 }
 
+/**
+ * Wave 6 — knowledge graph, streamed once at the start of a mission when the user opted in
+ * (the `knowledge` flag). `start` opens the phase; `done` carries how many entities the goal
+ * matched plus their {label, kind}; `skipped` carries a `reason` (missing [kg] extra or a
+ * read failure — the graph is best-effort, the mission still runs). Absent entirely on a
+ * mission run without the flag.
+ */
+export interface KnowledgeEvent {
+  phase: "graph";
+  status: "start" | "done" | "skipped";
+  hits?: number;
+  sources?: Array<{ label: string; kind: string }>;
+  reason?: string;
+}
+
 /** Terminal frame the server appends once the worker returns. */
 export interface DoneEvent {
   phase: "done";
@@ -151,6 +166,7 @@ export type MissionEvent =
   | RetrievalEvent
   | WebSearchEvent
   | McpEvent
+  | KnowledgeEvent
   | DoneEvent
   | ErrorEvent
   | CancelledEvent;

@@ -51,6 +51,20 @@ export async function listMcpServers(): Promise<McpServer[]> {
   return data.servers ?? [];
 }
 
+/** Knowledge-graph size (GET /api/graph). Reading needs no [kg] extra — an un-built graph
+ * reports zero. The "Use knowledge graph" toggle uses `nodes` to gate + hint. */
+export interface GraphStats {
+  nodes: number;
+  edges: number;
+  top_entities: Array<{ label: string; kind: string; weight: number }>;
+}
+
+export async function getGraphStats(): Promise<GraphStats> {
+  const res = await fetch("/api/graph");
+  if (!res.ok) throw new Error(`GET /api/graph → ${res.status}`);
+  return (await res.json()) as GraphStats;
+}
+
 // Load one saved dossier by id (used by the history click-through in App.tsx).
 export async function getMission(id: string): Promise<Dossier> {
   const res = await fetch(`/api/mission/${encodeURIComponent(id)}`);
@@ -86,18 +100,20 @@ export async function cancelMission(runId: string): Promise<boolean> {
 export async function runMission(
   goal: string,
   onEvent: (event: MissionEvent) => void,
-  opts: { engine?: string; signal?: AbortSignal; webSearch?: boolean; mcp?: boolean } = {},
+  opts: { engine?: string; signal?: AbortSignal; webSearch?: boolean; mcp?: boolean; knowledge?: boolean } = {},
 ): Promise<void> {
   const res = await fetch("/api/mission", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    // web_search + mcp (Wave 5) are opt-in per mission; both default false, so the request
-    // stays byte-identical to a pre-Wave-5 launch unless the user enabled them.
+    // web_search + mcp (Wave 5) and knowledge (Wave 6) are opt-in per mission; all default
+    // false, so the request stays byte-identical to a pre-Wave-5 launch unless the user
+    // enabled them.
     body: JSON.stringify({
       goal,
       engine: opts.engine ?? "claude-code",
       web_search: opts.webSearch ?? false,
       mcp: opts.mcp ?? false,
+      knowledge: opts.knowledge ?? false,
     }),
     signal: opts.signal,
   });

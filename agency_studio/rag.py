@@ -233,6 +233,15 @@ class _VectorStore:
             ).fetchall()
         return [DocMeta(r["id"], r["filename"], r["title"], r["n_chunks"], r["created"]) for r in rows]
 
+    def all_chunks(self) -> "List[Chunk]":
+        """Every stored chunk (score 0), doc/ordinal-ordered. The seam Wave-6 knowledge-graph
+        extraction reads the corpus through — retrieval-free, so it needs no embed model."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT doc_id, ord, title, text FROM chunks ORDER BY doc_id, ord"
+            ).fetchall()
+        return [Chunk(r["doc_id"], r["ord"], r["title"], r["text"]) for r in rows]
+
     def delete(self, doc_id: str) -> bool:
         with self._lock:
             cur = self.conn.cursor()
@@ -363,6 +372,10 @@ class LocalRetriever:
 
     def list_docs(self) -> "List[DocMeta]":
         return self._store.list_docs()
+
+    def all_chunks(self) -> "List[Chunk]":
+        """Every stored chunk — read by the Wave-6 knowledge-graph builder (build_from_docs)."""
+        return self._store.all_chunks()
 
     def delete(self, doc_id: str) -> bool:
         return self._store.delete(doc_id)

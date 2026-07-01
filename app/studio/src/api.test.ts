@@ -69,7 +69,7 @@ describe("runMission SSE parsing", () => {
     await expect(runMission("g", () => {})).rejects.toThrow(/no response body/);
   });
 
-  it("sends web_search/mcp false by default and true when opted in", async () => {
+  it("sends web_search/mcp/knowledge false by default and true when opted in", async () => {
     // A fresh stream per call — a ReadableStream can only be read once.
     const fetchMock = vi.fn().mockImplementation(() =>
       Promise.resolve({ ok: true, status: 200, body: sseStream([]) }),
@@ -78,12 +78,12 @@ describe("runMission SSE parsing", () => {
 
     await runMission("g", () => {});
     expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toMatchObject({
-      goal: "g", web_search: false, mcp: false,
+      goal: "g", web_search: false, mcp: false, knowledge: false,
     });
 
-    await runMission("g", () => {}, { webSearch: true, mcp: true });
+    await runMission("g", () => {}, { webSearch: true, mcp: true, knowledge: true });
     expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toMatchObject({
-      web_search: true, mcp: true,
+      web_search: true, mcp: true, knowledge: true,
     });
   });
 });

@@ -5,7 +5,7 @@ import type { MissionEvent } from "./types";
 describe("groupTimeline", () => {
   it("returns an empty model for no events", () => {
     const m = groupTimeline([]);
-    expect(m).toEqual({ retrieval: null, websearch: null, mcp: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null });
+    expect(m).toEqual({ retrieval: null, websearch: null, mcp: null, graph: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null });
     expect(runStatus(m)).toBe("idle");
   });
 
@@ -70,7 +70,7 @@ describe("groupTimeline", () => {
       { phase: "route", status: "done", route: ["solve"] },
     ]);
     // The run frame contributes no step; only the route shows.
-    expect(m).toEqual({ retrieval: null, websearch: null, mcp: null, route: ["solve"], depts: [], synth: [], inspect: [], assets: [], terminal: null });
+    expect(m).toEqual({ retrieval: null, websearch: null, mcp: null, graph: null, route: ["solve"], depts: [], synth: [], inspect: [], assets: [], terminal: null });
   });
 
   it("folds an asset render phase: start→done pairs into ok steps with the served url", () => {
@@ -194,6 +194,34 @@ describe("groupTimeline", () => {
     ]);
     expect(m.mcp).toEqual({
       status: "skipped", hits: null, sources: [], reason: "mcp extra not installed",
+    });
+    expect(runStatus(m)).toBe("running");
+  });
+
+  it("folds a graph start→done with entities and sources", () => {
+    const m = groupTimeline([
+      { phase: "run", run_id: "e".repeat(32) },
+      { phase: "graph", status: "start" },
+      { phase: "graph", status: "done", hits: 2, sources: [
+        { label: "Widget Engine", kind: "entity" },
+        { label: "Rust Toolchain", kind: "entity" },
+      ] },
+      { phase: "route", status: "done", route: ["solve"] },
+    ]);
+    expect(m.graph).toEqual({
+      status: "done", hits: 2, sources: [
+        { label: "Widget Engine", kind: "entity" },
+        { label: "Rust Toolchain", kind: "entity" },
+      ], reason: null,
+    });
+  });
+
+  it("folds a skipped graph with its reason and reads as running", () => {
+    const m = groupTimeline([
+      { phase: "graph", status: "skipped", reason: "knowledge-graph extra not installed" },
+    ]);
+    expect(m.graph).toEqual({
+      status: "skipped", hits: null, sources: [], reason: "knowledge-graph extra not installed",
     });
     expect(runStatus(m)).toBe("running");
   });

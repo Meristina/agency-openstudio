@@ -25,7 +25,7 @@ export default function Timeline({ events }: { events: MissionEvent[] }) {
   // Re-fold only when the event list itself changes — not on the per-second
   // `elapsed`-tick re-renders App fires during a run.
   const model = useMemo(() => groupTimeline(events), [events]);
-  const empty = !model.retrieval && !model.websearch && !model.mcp && !model.route && model.depts.length === 0 && !model.terminal;
+  const empty = !model.retrieval && !model.websearch && !model.mcp && !model.graph && !model.route && model.depts.length === 0 && !model.terminal;
 
   if (empty) return <p className="muted">No events yet — run a mission to see the live timeline.</p>;
 
@@ -111,6 +111,31 @@ export default function Timeline({ events }: { events: MissionEvent[] }) {
           {model.mcp.status === "skipped" && (
             <p className="muted">
               MCP skipped{model.mcp.reason ? ` — ${model.mcp.reason}` : ""}
+            </p>
+          )}
+        </section>
+      )}
+      {model.graph && (
+        <section className="phase">
+          <h4>Knowledge graph</h4>
+          {model.graph.status === "running" && (
+            <p className="muted">querying the knowledge graph…</p>
+          )}
+          {model.graph.status === "done" && (
+            <>
+              <p>{model.graph.hits} entit{model.graph.hits === 1 ? "y" : "ies"} matched</p>
+              {model.graph.sources.length > 0 && (
+                <div className="chips">
+                  {model.graph.sources.map((s, i) => (
+                    <span key={`${s.label}-${i}`} className="chip" title={s.kind}>{s.label}</span>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+          {model.graph.status === "skipped" && (
+            <p className="muted">
+              knowledge graph skipped{model.graph.reason ? ` — ${model.graph.reason}` : ""}
             </p>
           )}
         </section>

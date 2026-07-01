@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { cancelMission, getMission, getModelsStatus, listMcpServers, listMissions, runMission } from "./api";
+import { cancelMission, getGraphStats, getMission, getModelsStatus, listMcpServers, listMissions, runMission } from "./api";
 import Timeline from "./components/Timeline";
 import MissionDetail from "./components/MissionDetail";
 import ImagePanel from "./components/ImagePanel";
@@ -34,6 +34,8 @@ export default function App() {
   const [webSearch, setWebSearch] = useState(false);
   const [useMcp, setUseMcp] = useState(false);
   const [mcpCount, setMcpCount] = useState<number | null>(null);
+  const [useKnowledge, setUseKnowledge] = useState(false);
+  const [graphNodes, setGraphNodes] = useState<number | null>(null);
   const [events, setEvents] = useState<MissionEvent[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,6 +80,14 @@ export default function App() {
     listMcpServers()
       .then((servers) => setMcpCount(servers.filter((s) => s.enabled).length))
       .catch(() => setMcpCount(null));
+  }, []);
+
+  // Whether a knowledge graph has been built (node count), so the "Use knowledge graph"
+  // toggle can hint when it's empty. Best-effort — a failure just leaves it null.
+  useEffect(() => {
+    getGraphStats()
+      .then((stats) => setGraphNodes(stats.nodes))
+      .catch(() => setGraphNodes(null));
   }, []);
 
   const openMission = useCallback(async (id: string) => {
@@ -143,7 +153,7 @@ export default function App() {
           if (e.phase === "done" && e.mission_id) completedId = e.mission_id;
           if (e.phase === "cancelled") cancelled = true;
         },
-        { signal: ctrl.signal, webSearch, mcp: useMcp },
+        { signal: ctrl.signal, webSearch, mcp: useMcp, knowledge: useKnowledge },
       );
       // The stream ended on a terminal frame. Always refresh first so a mission that
       // won the cancel race (finished before the stop landed) still shows in History.
@@ -178,7 +188,7 @@ export default function App() {
       // mutually-exclusive rule), so refresh the warm-model chip when it ends.
       void refreshModelStatus();
     }
-  }, [goal, webSearch, useMcp, running, refreshMissions, openMission, refreshModelStatus]);
+  }, [goal, webSearch, useMcp, useKnowledge, running, refreshMissions, openMission, refreshModelStatus]);
 
   // "Stop mission" cancels this exact run via the explicit endpoint (the server then
   // kills the in-flight engine subprocess before persistence). `cancelMission` is
@@ -307,6 +317,22 @@ export default function App() {
                 disabled={running}
               />
               Use MCP{mcpCount ? ` (${mcpCount})` : ""}
+            </label>
+            <label
+              className="toggle"
+              title={
+                graphNodes === 0
+                  ? "No knowledge graph built yet — build it from your docs + history (POST /api/graph/build)."
+                  : "Inject relations from your knowledge graph (built from your docs + past missions) as sourced context (opt-in)."
+              }
+            >
+              <input
+                type="checkbox"
+                checked={useKnowledge}
+                onChange={(ev) => setUseKnowledge(ev.target.checked)}
+                disabled={running}
+              />
+              Use knowledge graph{graphNodes ? ` (${graphNodes})` : ""}
             </label>
             <span className="hint">⌘/Ctrl+Enter to run</span>
           </div>
