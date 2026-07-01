@@ -1,6 +1,6 @@
 # Roadmap — Agency Studio
 
-> **Status: Waves 0-2 shipped.** Core (0-1): the stdlib server + `on_event`/
+> **Status: Waves 0-3 shipped.** Core (0-1): the stdlib server + `on_event`/
 > `should_cancel` hooks and the React Mission Console (live SSE timeline, project-scoped
 > history, PDF export, full "Stop mission"). **Wave 2 — local multimodal (image / STT /
 > TTS) on Apple Silicon (Metal)** is built, reviewed, and **validated live on the target

@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 multimodal layer** (image generation, speech-to-text, text-to-speech, document RAG) and
 a clean web GUI.
 
-> **Current status: Waves 0-2 shipped.** Core (Wave 0-1): the stdlib HTTP/SSE server
+> **Current status: Waves 0-3 shipped.** Core (Wave 0-1): the stdlib HTTP/SSE server
 > (`agency_studio/server.py`), the `agency-studio` CLI (`agency_studio/cli.py`), the React
 > Mission Console (`app/studio/`: live SSE timeline, project-scoped history, PDF export,
 > full "Stop mission"), `tests/`, and `pyproject.toml`. **Wave 2 — local multimodal
