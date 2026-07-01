@@ -43,12 +43,28 @@ Legend: ✅ real path works · ⚠️ works-with-caveat / honest gap · ⛔ bloc
 
 | Element | Live test | Result |
 |---|---|---|
-| Image (FLUX.1-schnell 8-bit) | `POST /api/image` → 1024² 8-bit PNG (~4.5 min on 16 GB) | ✅ |
 | TTS (Kokoro) | `POST /api/tts` → `.wav` in ~2.4 s | ✅ |
 | STT (Whisper large-v3-turbo) | `POST /api/stt` on the TTS output → transcript in ~3.4 s | ✅ |
 | `GET /api/models` | warm-model status + registries | ✅ |
 | Warm / mutual-exclusion residency | resident switched `tts → stt → embed:…` across calls | ✅ |
-| **Image (boogu-base)** | loads base + a Qwen3-VL-8B conditioner **co-resident** → does not fit 16 GB → **swap-thrash (~19.7 GB swap), no diffusion step after ~9 min** | ⛔ **[#39]** |
+
+#### Every registered model, individually
+
+The image + embed registries each carry more than one model. All were exercised on the real
+machine (not just the default):
+
+| Kind | Model | Live test | Result |
+|---|---|---|---|
+| image | `flux-schnell` (default, 8-bit) | `POST /api/image` → 1024² PNG (~4.5 min) | ✅ |
+| image | `flux2-klein-4b` (quantize-on-load) | `POST /api/image` → 1024² 8-bit PNG in **~85 s** | ✅ |
+| image | `boogu-base` (experimental) | base + Qwen3-VL-8B conditioner **co-resident** → doesn't fit 16 GB → **swap-thrash (~19.7 GB swap), no diffusion step after ~9 min** | ⛔ **[#39]** |
+| embed | `nomic-text-v1.5` (default, 768-dim) | `POST /api/docs` / `/api/visual` → real vectors | ✅ |
+| embed | `bge-m3` (1024-dim, multilingual) | `ModelManager.embed(model="bge-m3")` → 2 vectors, **dim 1024**, resident `embed:bge-m3` | ✅ |
+| stt | `whisper-large-v3-turbo` | `POST /api/stt` | ✅ |
+| tts | `kokoro-v1.0` | `POST /api/tts` | ✅ |
+
+So **6 of the 7 registered models work live**; only `boogu-base` fails, and only because it
+exceeds the 16 GB memory budget (**[#39]**) — a hardware limit, not a code defect.
 
 ### Wave 4 — RAG / LocalDocs
 
@@ -64,12 +80,12 @@ Legend: ✅ real path works · ⚠️ works-with-caveat / honest gap · ⛔ bloc
 | Caption (Qwen2.5-VL, local MLX) | probe + `POST /api/visual` → accurate caption of a generated image | ✅ (fixed by **[#37]**) |
 | **Visual RAG ingest** (`POST /api/visual`) | caption → embed → store → **`201`** (`lake.png`, 1 chunk) | ✅ |
 | `GET /api/graph` · `/api/personas` · `/api/mcp` · `/api/visual` | read-side stats, no extra needed | ✅ (all `200`) |
-| Mission flag **`web_search`** | SSE `websearch: skipped` ("web-search extra not installed") | ✅ graceful skip |
-| Mission flag **`mcp`** (resources) | SSE `mcp: done`, hits 0 (no servers) | ✅ |
-| Mission flag **`visual`** (PixelRAG) | SSE `visual: done`, **hits 1 → `lake.png`** — the goal ("mountain lakes at sunrise") retrieved the ingested image's caption as context | ✅✅ full pipeline live |
-| Mission flag **`mcp_tools`** | SSE `mcp_tools: skipped` ("no enabled MCP servers configured") | ✅ skip |
-| Mission flag **`personas`** | SSE `persona: skipped` ("no personas curated in the store") | ✅ skip |
-| Mission flag **`knowledge`** / doc `retrieval` | no phase emitted (no graph built / no docs in this store) — correct opt-in behaviour | ✅ |
+| Mission flag **`visual`** (PixelRAG) | SSE `visual: done`, **hits 1 → `lake.png`** — the goal ("mountain lakes at sunrise") retrieved the ingested image's caption as context | ✅✅ **fully proven** live |
+| Mission flag **`web_search`** | SSE `websearch: skipped` ("web-search extra not installed") | ⚠️ **skip-only** (the `[web]` backend was absent — the *active* fetch path is NOT proven, only the degrade) |
+| Mission flag **`mcp`** (resources) | SSE `mcp: done`, hits 0 (no MCP servers configured) | ⚠️ **empty-only** (no server → 0 resources; the *active* read path is NOT proven) |
+| Mission flag **`mcp_tools`** | SSE `mcp_tools: skipped` ("no enabled MCP servers configured") | ⚠️ **skip-only** (needs a real MCP server) |
+| Mission flag **`personas`** | SSE `persona: skipped` ("no personas curated in the store") | ⚠️ **skip-only** (needs a curated persona store) |
+| Mission flag **`knowledge`** / doc `retrieval` | no phase emitted (no graph built / no docs in this store) | ⚠️ **not-exercised** (correct opt-in gate, but the *active* retrieval was never run) |
 | Mission flag **`video`** (seedance) | `POST /api/video` → `404` (video is mission-only, not a standalone endpoint); render bridge + gates proven offline. In the live marketing mission **the departments did not emit an `asset` marker**, so no render fired — the `asset_clause` is optional ("Omit when no asset is warranted"). | ⚠️ wiring proven offline; **no marker emitted by the mission in the time budget** |
 
 ## Bugs found and fixed (this live pass)
@@ -98,10 +114,25 @@ so the suite is green whether or not the optional extras are present.
 - **The cloud paths** — seedance video render (`_run_cloud`) and the optional cloud VLM — remain
   network-deferred (no live endpoint / API key), as designed.
 
-## Verdict
+## Verdict — and an honest coverage split
 
-Every buildable element across Waves 0–6 was exercised on the real machine. The core — server,
-GUI, the full `route → departments → synthesis → inspector` loop **including a real veto → revise →
-PASS-WITH-FIXES cycle**, Stop-with-no-persistence, security guards, local media, RAG, and visual
-RAG — works on the live path. The live pass paid for itself by catching two real bugs (#37, #40)
-and one hardware limit (#39) the 387-test offline suite could not surface.
+Not everything is "green". Being precise about what the live pass actually proved:
+
+- **Proven working on the live path** — server + GUI, history, dossier load, the full `route →
+  departments → synthesis → inspector` loop **including a real veto → revise → PASS-WITH-FIXES
+  cycle**, Stop-with-no-persistence, the security guards, TTS, STT, **6 of 7 models** (both FLUX
+  image models + both embed models + Whisper + Kokoro), doc RAG ingest, and the **`visual`** flag
+  end-to-end (real caption → embed → retrieval into a mission).
+- **Only seen degrading, NOT proven functional** — the `web_search`, `mcp`, `mcp_tools`,
+  `knowledge`, and `personas` flags. Their backends (`[web]`, a real MCP server, a built graph,
+  a curated persona store) were not set up, so only the skip / empty path ran. A ✅ on these means
+  "degrades correctly", **not** "the feature works".
+- **Not exercised live** — an `asset` marker actually emitted-then-rendered inside a mission (no
+  department chose to emit one), the real PDF render (`[pdf]` absent → 501), and the cloud paths
+  (seedance render / cloud VLM, network-deferred by design).
+- **Failed** — `boogu-base` (OOM / swap on 16 GB, **[#39]**).
+
+The live pass paid for itself by catching two real bugs (#37, #40) and one hardware limit (#39)
+the 387-test offline suite could not surface. But "the offline suite is green" and "every feature
+is proven on real hardware" are **different claims** — this report is the honest boundary between
+them.
