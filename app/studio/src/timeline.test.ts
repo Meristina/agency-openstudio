@@ -5,7 +5,7 @@ import type { MissionEvent } from "./types";
 describe("groupTimeline", () => {
   it("returns an empty model for no events", () => {
     const m = groupTimeline([]);
-    expect(m).toEqual({ route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null });
+    expect(m).toEqual({ retrieval: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null });
     expect(runStatus(m)).toBe("idle");
   });
 
@@ -70,7 +70,7 @@ describe("groupTimeline", () => {
       { phase: "route", status: "done", route: ["solve"] },
     ]);
     // The run frame contributes no step; only the route shows.
-    expect(m).toEqual({ route: ["solve"], depts: [], synth: [], inspect: [], assets: [], terminal: null });
+    expect(m).toEqual({ retrieval: null, route: ["solve"], depts: [], synth: [], inspect: [], assets: [], terminal: null });
   });
 
   it("folds an asset render phase: start→done pairs into ok steps with the served url", () => {
@@ -120,5 +120,32 @@ describe("groupTimeline", () => {
     ]);
     expect(m.terminal).toEqual({ kind: "cancelled" });
     expect(runStatus(m)).toBe("cancelled");
+  });
+
+  it("folds a retrieval start→done with hits and sources", () => {
+    const m = groupTimeline([
+      { phase: "run", run_id: "c".repeat(32) },
+      { phase: "retrieval", status: "start" },
+      { phase: "retrieval", status: "done", hits: 2, sources: [
+        { title: "Solar", doc_id: "d1" }, { title: "Costs", doc_id: "d1" },
+      ] },
+      { phase: "route", status: "done", route: ["solve"] },
+    ]);
+    expect(m.retrieval).toEqual({
+      status: "done", hits: 2,
+      sources: [{ title: "Solar", doc_id: "d1" }, { title: "Costs", doc_id: "d1" }],
+      reason: null,
+    });
+  });
+
+  it("folds a skipped retrieval with its reason", () => {
+    const m = groupTimeline([
+      { phase: "retrieval", status: "skipped", reason: "local-docs extra not installed" },
+    ]);
+    expect(m.retrieval).toEqual({
+      status: "skipped", hits: null, sources: [], reason: "local-docs extra not installed",
+    });
+    // Retrieval alone (before any route/dept) still reads as a running mission.
+    expect(runStatus(m)).toBe("running");
   });
 });

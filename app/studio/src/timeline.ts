@@ -26,12 +26,20 @@ export interface AssetStep {
   reason: string | null;
 }
 
+export interface RetrievalStep {
+  status: "running" | "done" | "skipped";
+  hits: number | null;
+  sources: Array<{ title: string; doc_id: string }>;
+  reason: string | null;
+}
+
 export type Terminal =
   | { kind: "done"; verdict: string | null; missionId: string | null; path: string; residualRisk: string | null }
   | { kind: "error"; message: string }
   | { kind: "cancelled" };
 
 export interface TimelineModel {
+  retrieval: RetrievalStep | null;
   route: string[] | null;
   depts: DeptStep[];
   synth: SynthStep[];
@@ -42,13 +50,25 @@ export interface TimelineModel {
 
 /** Fold the events received so far into a stable, render-ready model. */
 export function groupTimeline(events: MissionEvent[]): TimelineModel {
-  const model: TimelineModel = { route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null };
+  const model: TimelineModel = { retrieval: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null };
 
   for (const e of events) {
     switch (e.phase) {
       case "run":
         // The run-id frame is a control handle (used for the cancel endpoint), not
         // a visible timeline step — fold nothing.
+        break;
+      case "retrieval":
+        // RAG retrieval happens once, before routing. `start` opens it; `done` carries
+        // the hit count + source labels; `skipped` carries why (best-effort). Fold into a
+        // single step (there is only ever one retrieval phase per mission).
+        if (e.status === "start") {
+          model.retrieval = { status: "running", hits: null, sources: [], reason: null };
+        } else if (e.status === "done") {
+          model.retrieval = { status: "done", hits: e.hits ?? 0, sources: e.sources ?? [], reason: null };
+        } else {
+          model.retrieval = { status: "skipped", hits: null, sources: [], reason: e.reason ?? null };
+        }
         break;
       case "route":
         model.route = e.route;
@@ -126,6 +146,6 @@ export function runStatus(model: TimelineModel): "idle" | "running" | "done" | "
   if (model.terminal?.kind === "error") return "error";
   if (model.terminal?.kind === "cancelled") return "cancelled";
   if (model.terminal?.kind === "done") return "done";
-  if (model.route || model.depts.length) return "running";
+  if (model.retrieval || model.route || model.depts.length) return "running";
   return "idle";
 }

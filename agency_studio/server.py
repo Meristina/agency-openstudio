@@ -31,7 +31,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterable
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -55,6 +55,12 @@ _MAX_AUDIO_BYTES = 32 << 20  # 32 MiB
 
 # Chunk size for streaming a large request body to disk (STT upload).
 _READ_CHUNK = 1 << 16  # 64 KiB
+
+# Upper bound on an uploaded document body for RAG ingestion (POST /api/docs). Documents
+# (PDF/docx/pptx) are larger than an audio clip; still bounded, still streamed to disk in
+# _READ_CHUNK pieces (never held whole in RAM). rag.MAX_DOC_CHARS bounds the extracted text
+# downstream, so this only caps the raw upload.
+_MAX_DOC_BYTES = 64 << 20  # 64 MiB
 
 # Bounds on image-generation parameters (POST /api/image). The request BYTE size is
 # bounded, but the COMPUTE it triggers is not — an unclamped width/height/steps could
@@ -203,6 +209,33 @@ def _build_render_assets(server, events: "queue.Queue", cancel_event: threading.
         if manifest:
             _prune_assets_best_effort(server, keep={str(dossier.get("mission_id"))})
     return render_assets
+
+
+def _resolve_context_clause(retriever, goal, emit, should_cancel):
+    """Retrieve RAG context for ``goal`` → a ``context_clause`` string (or None). Runs on the
+    mission worker thread: it emits its ``retrieval`` SSE frames through ``emit`` (events.put)
+    so the handler's heartbeat loop writes them and stays responsive during a possibly-slow
+    first-run embed-model load, and it bails on ``should_cancel`` before the embed. Best-effort
+    — a missing [studio] extra or any store failure is surfaced as a ``skipped`` frame WITH a
+    reason (never swallowed silently) and returns None, so the mission still runs. Module-level
+    (not a handler method) so the worker closes over no handler state."""
+    if retriever is None or should_cancel():
+        return None
+    try:
+        emit({"phase": "retrieval", "status": "start"})
+        from agency_studio.rag import build_context_clause
+        chunks = retriever.retrieve(goal, k=5)
+        emit({"phase": "retrieval", "status": "done", "hits": len(chunks),
+              "sources": [{"title": c.title, "doc_id": c.doc_id} for c in chunks]})
+        return build_context_clause(chunks)
+    except ImportError:  # [studio] extra absent though docs exist — run without RAG
+        emit({"phase": "retrieval", "status": "skipped", "reason": "local-docs extra not installed"})
+        return None
+    except Exception as exc:  # non-fatal — surface WHY, then run the mission without RAG
+        import traceback
+        traceback.print_exc()
+        emit({"phase": "retrieval", "status": "skipped", "reason": str(exc)[:200]})
+        return None
 
 
 def _prune_assets_best_effort(server, *, keep: "Iterable[str]" = ()) -> None:
@@ -463,7 +496,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             return
         self.send_response(204)
         self._cors()
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -476,6 +509,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_list_missions()
         if path == "/api/models":
             return self._handle_models_status()
+        if path == "/api/docs":
+            return self._handle_list_docs()
         if path.startswith("/api/mission/"):
             rest = path[len("/api/mission/"):]
             if rest.endswith("/pdf"):
@@ -497,10 +532,20 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_synthesize()
         if path == "/api/stt":
             return self._handle_transcribe()
+        if path == "/api/docs":
+            return self._handle_ingest_doc()
         if path.startswith("/api/mission/") and path.endswith("/cancel"):
             run_id = path[len("/api/mission/"):-len("/cancel")]
             return self._handle_cancel_mission(run_id)
         # Unknown POST: the body is never read, so close to avoid a keep-alive desync.
+        self._reject(404, "not found")
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        if not self._host_allowed():
+            return
+        path = urlparse(self.path).path
+        if path.startswith("/api/docs/"):
+            return self._handle_delete_doc(path[len("/api/docs/"):])
         self._reject(404, "not found")
 
     # ── API: list / get saved missions ───────────────────────────────────────
@@ -674,24 +719,38 @@ class StudioHandler(BaseHTTPRequestHandler):
         project_root = self.server.project_root  # type: ignore[attr-defined]
         # Built over the server (never `self`) so the daemon worker doesn't pin the handler.
         render_assets = _build_render_assets(self.server, events, cancel_event)  # type: ignore[attr-defined]
+        # Wave 4 — RAG: resolve the retriever on the handler thread (cheap: build + list_docs,
+        # no embed), but do the actual retrieval INSIDE the worker so the embed/model-load runs
+        # under the heartbeat loop and observes should_cancel. It's a server-scoped object, so
+        # the worker still closes over no handler state.
+        retriever = self._retriever_if_docs()
 
         def _worker() -> None:
-            # Capture only `project_root` (a str) + `render_assets` (closed over the server,
-            # not `self`): this daemon thread can outlive the request after a disconnect, and
-            # capturing the handler would pin its dead socket buffers alive until the worker
-            # reaches a boundary.
+            # Capture only server-scoped values (`project_root` str, `render_assets`,
+            # `retriever`) — never `self`: this daemon thread can outlive the request after a
+            # disconnect, and capturing the handler would pin its dead socket buffers alive.
+            import inspect
             from agency_cli import runner_bridge
             from agency_cli.engines.cli_engine import MissionCancelled
             try:
-                result_box["result"] = runner_bridge.run(
-                    goal,
-                    project_root=project_root,
-                    engine=engine,
-                    on_event=events.put,
-                    should_cancel=cancel_event.is_set,
-                    asset_clause=ASSET_CLAUSE,
-                    render_assets=render_assets,
+                context_clause = _resolve_context_clause(
+                    retriever, goal, events.put, cancel_event.is_set
                 )
+                run_kwargs = dict(
+                    goal=goal, project_root=project_root, engine=engine,
+                    on_event=events.put, should_cancel=cancel_event.is_set,
+                    asset_clause=ASSET_CLAUSE, render_assets=render_assets,
+                )
+                # Forward the RAG context only if the installed agency-kit actually has the
+                # additive context_clause hook — a mismatched (older) agency-kit would else
+                # TypeError on the unexpected kwarg and break EVERY mission. Degrade gracefully.
+                if context_clause is not None:
+                    if "context_clause" in inspect.signature(runner_bridge.run).parameters:
+                        run_kwargs["context_clause"] = context_clause
+                    else:
+                        print("[studio] installed agency-kit lacks the context_clause hook; "
+                              "running without RAG context")
+                result_box["result"] = runner_bridge.run(**run_kwargs)
             except MissionCancelled:
                 # Stopped before any persistence. Recorded so that — when the client
                 # is still connected (an explicit endpoint cancel) — the drain loop
@@ -805,6 +864,90 @@ class StudioHandler(BaseHTTPRequestHandler):
                 from agency_studio.engines.local_media import ModelManager
                 server.media = ModelManager(server.assets_root)
             return server.media
+
+    def _retriever(self):
+        """Lazily build + cache the one local-docs retriever for this server. Created on
+        the first /api/docs request (or the first mission retrieval), so the [studio] extra
+        is only needed when RAG is actually used. Bound to the default embed model; its
+        SQLite store lives under docs_root (outside assets_root — never web-served)."""
+        server = self.server  # type: ignore[attr-defined]
+        with server.retriever_lock:  # type: ignore[attr-defined]
+            if server.retriever is None:  # type: ignore[attr-defined]
+                from agency_studio.rag import LocalRetriever
+                from agency_studio.engines import models as media_models
+                db = server.docs_root / f"localdocs-{media_models.DEFAULT_EMBED_MODEL}.db"  # type: ignore[attr-defined]
+                server.retriever = LocalRetriever(self._media_manager(), db_path=db)  # type: ignore[attr-defined]
+            return server.retriever  # type: ignore[attr-defined]
+
+    def _handle_ingest_doc(self) -> None:
+        """Ingest an uploaded document for RAG (POST /api/docs?filename=report.pdf, the raw
+        file as the body). The body is streamed to a short-lived temp file (bounded, never
+        held whole in RAM), converted + chunked + embedded + stored, then the temp removed.
+        Absent [studio] extra → 501; unreadable/empty document → 400."""
+        import shutil
+        import tempfile
+        query = parse_qs(urlparse(self.path).query)
+        # Basename only (strip any path), and fall back to 'upload' for a name that reduces
+        # to empty — Path('.').name and Path('..').name are both '', which would otherwise
+        # make ``upload`` resolve to the temp DIR and raise IsADirectoryError on open().
+        filename = Path((query.get("filename", ["upload"])[0] or "upload")).name or "upload"
+        tmp_dir = Path(tempfile.mkdtemp(prefix="agency-doc-"))
+        try:
+            upload = tmp_dir / filename
+            written = self._stream_body_to_file(upload, max_bytes=_MAX_DOC_BYTES)
+            if written is None:
+                return  # _stream_body_to_file already sent the error + cleaned the partial
+            if written == 0:
+                return self._send_error_json(400, "empty document body")
+            try:
+                meta = self._retriever().ingest(upload.read_bytes(), filename)
+            except ImportError as exc:  # markitdown / mlx-embedding-models absent ([studio])
+                return self._send_error_json(501, str(exc))
+            except ValueError as exc:  # no extractable text
+                return self._send_error_json(400, str(exc))
+            except Exception:  # conversion / embedding failure — clean 500, never a socket drop
+                import traceback
+                traceback.print_exc()
+                return self._send_error_json(500, "document ingestion failed")
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)  # remove the transient upload + its dir
+        self._send_json({
+            "id": meta.id, "filename": meta.filename, "title": meta.title,
+            "n_chunks": meta.n_chunks, "created": meta.created,
+        }, status=201)
+
+    def _handle_list_docs(self) -> None:
+        """List ingested documents (GET /api/docs). Reading the store needs no extra, so
+        this works even without [studio] (an un-built store simply lists empty)."""
+        docs = self._retriever().list_docs()
+        self._send_json({"docs": [
+            {"id": d.id, "filename": d.filename, "title": d.title,
+             "n_chunks": d.n_chunks, "created": d.created}
+            for d in docs
+        ]})
+
+    def _handle_delete_doc(self, doc_id: str) -> None:
+        """Delete an ingested document and its chunks (DELETE /api/docs/{id}). 404 for an
+        unknown id (idempotent — a second delete is just another 404)."""
+        if self._read_body() is None:
+            return  # malformed/oversized body already answered
+        if not doc_id or "/" in doc_id:
+            return self._send_error_json(404, "unknown document")
+        if not self._retriever().delete(doc_id):
+            return self._send_error_json(404, "unknown document")
+        self._send_json({"deleted": doc_id})
+
+    def _retriever_if_docs(self):
+        """Resolve the retriever and return it ONLY if it holds documents — a cheap check
+        (build + list_docs, no embed model touched) run on the handler thread so a docs-free
+        mission does zero retrieval work and loads no model. Returns None if there are no
+        docs or the store can't even be opened. The actual embed/retrieve runs later in the
+        worker (see ``_resolve_context_clause``) so it stays under the heartbeat + cancel."""
+        try:
+            retriever = self._retriever()
+            return retriever if retriever.list_docs() else None
+        except Exception:  # can't build/open the store → just run without RAG
+            return None
 
     def _read_json_body(self) -> "dict | None":
         """Read + parse a small JSON object body. Returns the dict, or ``None`` after
@@ -937,6 +1080,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         self._send_json({
             "resident": mgr.resident if mgr is not None else None,
             "image_models": media_models.image_models_payload(),
+            "embed_models": media_models.embed_models_payload(),
             "models": {
                 "stt": media_models.STT_HF_REPO,
                 "tts": "kokoro-v1.0",
@@ -1051,6 +1195,14 @@ def make_server(
     httpd.assets_root = Path(project_root).resolve() / "studio_assets"  # type: ignore[attr-defined]
     httpd.media = None  # type: ignore[attr-defined]
     httpd.media_lock = threading.Lock()  # type: ignore[attr-defined]
+    # Wave 4 — RAG / LocalDocs. Ingested documents + their vectors live in a SQLite store
+    # under <project>/.agency-studio/ — deliberately OUTSIDE assets_root, so the document
+    # text is NEVER reachable through the /media route (which serves assets_root). Built
+    # lazily on the first /api/docs or mission-retrieval request (the [studio] extra is only
+    # needed then). retriever_lock serializes the lazy init.
+    httpd.docs_root = Path(project_root).resolve() / ".agency-studio"  # type: ignore[attr-defined]
+    httpd.retriever = None  # type: ignore[attr-defined]
+    httpd.retriever_lock = threading.Lock()  # type: ignore[attr-defined]
     # Retention cap on studio_assets/: bounds cumulative disk growth (oldest-first eviction).
     # Enforced after each render and once at startup; retention_lock serializes concurrent prunes.
     httpd.media_budget_bytes = media_budget_bytes  # type: ignore[attr-defined]

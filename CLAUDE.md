@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 multimodal layer** (image generation, speech-to-text, text-to-speech, document RAG) and
 a clean web GUI.
 
-> **Current status: Waves 0-3 shipped.** Core (Wave 0-1): the stdlib HTTP/SSE server
+> **Current status: Waves 0-4 shipped.** Core (Wave 0-1): the stdlib HTTP/SSE server
 > (`agency_studio/server.py`), the `agency-studio` CLI (`agency_studio/cli.py`), the React
 > Mission Console (`app/studio/`: live SSE timeline, project-scoped history, PDF export,
 > full "Stop mission"), `tests/`, and `pyproject.toml`. **Wave 2 — local multimodal
@@ -28,9 +28,17 @@ a clean web GUI.
 > hook + `## Assets`; `assets.render`/`rewrite_delivered` + server wiring + SSE `asset`
 > phase; and the GUI asset timeline + per-mission gallery (`AssetGallery`) + the PDF
 > `/media`→on-disk fix (`exporter._localize_assets`). Its offline suite runs anywhere; the
-> live render path needs the Apple Silicon Mac. **Waves 4-6 remain deferred** (RAG, web
-> search, MCP, advanced extensions); see `ROADMAP.md`. Do **not** invent implementation
-> that the roadmap/WAVE3-PLAN defers.
+> live render path needs the Apple Silicon Mac. **Wave 4 — RAG / LocalDocs — core is
+> SHIPPED** (offline-first slice), tracked in `docs/WAVE4-PLAN.md`: the `mlx_embedding_models`
+> embed engine (`engines/embeddings.py` + `ModelManager.embed`, mutually exclusive with the
+> media models), `agency_studio/rag.py` (markitdown → chunk → embed → **`sqlite-vec`** store
+> with a pure-Python cosine fallback, behind a pluggable `Retriever`), agency-kit's additive
+> **`context_clause`** hook (twin of `asset_clause`), and the `POST/GET/DELETE /api/docs`
+> endpoints + best-effort mission retrieval injection with a `retrieval` SSE phase, and the
+> **GUI "Docs" tab** (upload / list / delete + the retrieval timeline). Offline suite runs
+> anywhere; the live embedding path needs the Apple Silicon Mac. **Waves 5-6 remain
+> deferred** (web search, MCP, extensions; plus Wave-6 visual RAG / knowledge graphs); see
+> `ROADMAP.md`. Do **not** invent implementation that the roadmap/WAVE-PLANs defer.
 >
 > **Running Wave 2 (target Mac):** a **Python 3.10+ venv** with the `[media]` extra
 > (`pip install -e ".[media]"`), plus **`ffmpeg`** on PATH for speech-to-text
@@ -86,10 +94,11 @@ Agency Studio does **not** reimplement agency-kit's mission loop. It wraps it:
 
 Follow `ROADMAP.md` exactly. Waves **0-1** (stdlib server + event hook + React/Vite
 Mission Console) are buildable and testable on Linux. **Wave 2** (FLUX/Whisper/Kokoro on
-Metal) is **shipped** — its unit/HTTP tests run offline anywhere (backends + network
-stubbed), but the live model runs require the Apple Silicon Mac. Waves **3-6** (multimodal
-as a department deliverable, RAG with model downloads, web search, MCP, advanced
-extensions) remain deferred.
+Metal), **Wave 3** (multimodal as a department deliverable), and **Wave 4** (RAG / LocalDocs,
+incl. the GUI "Docs" tab) are **shipped** — their unit/HTTP/GUI tests run offline anywhere
+(backends + network stubbed), but the live model runs require the Apple Silicon Mac. Waves
+**5-6** (web search, MCP, advanced extensions — plus Wave-6 visual RAG / knowledge graphs)
+remain deferred.
 
 ## Conventions
 

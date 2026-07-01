@@ -9,16 +9,18 @@ import Timeline from "./components/Timeline";
 import MissionDetail from "./components/MissionDetail";
 import ImagePanel from "./components/ImagePanel";
 import VoicePanel from "./components/VoicePanel";
+import DocsPanel from "./components/DocsPanel";
 import Gallery from "./components/Gallery";
 import { summaryVerdictClass } from "./types";
 import type { Dossier, GalleryItem, MissionEvent, MissionSummary, ModelsStatus } from "./types";
 
-type Tab = "mission" | "image" | "voice";
+type Tab = "mission" | "image" | "voice" | "docs";
 
 const TABS: Array<[Tab, string]> = [
   ["mission", "Mission"],
   ["image", "Image"],
   ["voice", "Voice"],
+  ["docs", "Docs"],
 ];
 
 // Single source for the clean-cancel message (a `cancelled` terminal frame means the
@@ -346,6 +348,16 @@ export default function App() {
           <h2>Gallery</h2>
           <Gallery items={gallery.filter((g) => g.kind === "audio")} />
         </section>
+      </main>
+
+      <main
+        className="studio-layout"
+        id="panel-docs"
+        role="tabpanel"
+        aria-labelledby="tab-docs"
+        hidden={tab !== "docs"}
+      >
+        <DocsPanel />
       </main>
     </div>
   );

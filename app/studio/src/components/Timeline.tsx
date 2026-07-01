@@ -25,12 +25,38 @@ export default function Timeline({ events }: { events: MissionEvent[] }) {
   // Re-fold only when the event list itself changes — not on the per-second
   // `elapsed`-tick re-renders App fires during a run.
   const model = useMemo(() => groupTimeline(events), [events]);
-  const empty = !model.route && model.depts.length === 0 && !model.terminal;
+  const empty = !model.retrieval && !model.route && model.depts.length === 0 && !model.terminal;
 
   if (empty) return <p className="muted">No events yet — run a mission to see the live timeline.</p>;
 
   return (
     <div className="timeline-grid">
+      {model.retrieval && (
+        <section className="phase">
+          <h4>Local docs</h4>
+          {model.retrieval.status === "running" && (
+            <p className="muted">retrieving relevant excerpts…</p>
+          )}
+          {model.retrieval.status === "done" && (
+            <>
+              <p>{model.retrieval.hits} excerpt{model.retrieval.hits === 1 ? "" : "s"} retrieved</p>
+              {model.retrieval.sources.length > 0 && (
+                <div className="chips">
+                  {model.retrieval.sources.map((s, i) => (
+                    <span key={`${s.doc_id}-${i}`} className="chip" title={s.doc_id}>{s.title}</span>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+          {model.retrieval.status === "skipped" && (
+            <p className="muted">
+              retrieval skipped{model.retrieval.reason ? ` — ${model.retrieval.reason}` : ""}
+            </p>
+          )}
+        </section>
+      )}
+
       {model.route && (
         <section className="phase">
           <h4>Route</h4>
