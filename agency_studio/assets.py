@@ -116,10 +116,17 @@ def _scan_asset_blocks(delivered: str):
     rejoins the same way) and matches each *stripped* line — a CRLF's trailing ``\\r`` is
     dropped by ``.strip()``, so ``\\r\\n`` fences still match. Yields, in document order:
 
-      ``("text", line)``                     — a passthrough line (not part of a block)
-      ``("block", body, [raw lines…])``      — a complete ```asset…``` block: its joined
-                                               body, plus the exact original lines (incl.
-                                               fences) for a verbatim, byte-faithful fallback.
+      ``("text", line)``    — a passthrough line (not part of a well-formed block)
+      ``("block", body)``   — a complete ```asset…``` block (opener + close both seen), as its
+                              joined body; both consumers replace the whole block — the parser
+                              with a request, ``rewrite_delivered`` with a reference /
+                              placeholder / nothing — so a well-formed block's fences are
+                              never re-emitted.
+
+    An *unterminated* opener (no closing fence, or a second opener before the close) can't be
+    bounded, so — by the anti-swallow rule below — its lines are yielded as ``text`` and pass
+    through unchanged; that one malformed case is the sole way an ``asset`` fence can survive
+    a rewrite (see :func:`rewrite_delivered`).
 
     Deliberately line-oriented rather than one regex: a non-greedy regex body lets an
     *unterminated* opener run forward and swallow a later, well-formed block (its opening
@@ -139,7 +146,7 @@ def _scan_asset_blocks(delivered: str):
             body.append(lines[j])
             j += 1
         if j < n and lines[j].strip() == _FENCE_CLOSE:
-            yield ("block", "\n".join(body), lines[i:j + 1])
+            yield ("block", "\n".join(body))
             i = j + 1  # resume past the closing fence
         else:  # unterminated: emit as text, resume *at* the next opener (or EOF)
             for k in range(i, j):
@@ -382,39 +389,84 @@ def _reference(entry: dict) -> str:
     return f"[Generated audio narration]({url}){dur}"
 
 
+def _placeholder(entry: dict) -> str:
+    """The neutral inline marker that replaces an ``asset`` block whose render was *attempted*
+    but produced no usable file — ``status`` ``failed`` (a backend crash / missing weight) or
+    ``skipped`` (the mission was Stopped mid-render). Unlike a parse-dropped block (which is
+    removed outright), an attempted-then-failed asset was legitimately expected, and the
+    surrounding prose may reference it ("see the image below"); a small neutral breadcrumb
+    keeps that reference from dangling at nothing, without leaking the raw JSON fence."""
+    kind = entry.get("type")
+    if kind == "image":
+        return "_[image unavailable]_"
+    if kind == "tts":
+        return "_[audio narration unavailable]_"
+    return "_[asset unavailable]_"
+
+
 def rewrite_delivered(delivered: str, manifest: "Sequence[dict]") -> str:
-    """Cosmetically replace each successfully-rendered ```asset block with a clean reference
-    (image embed / audio caption), leaving blocks that were dropped, failed, or skipped
-    verbatim. Pairs a block to a manifest entry by its ``block`` ordinal — the source
-    block's position, stamped by :func:`parse_markers` and carried through :func:`render` —
-    so two markers sharing a prompt/text (e.g. a rejected block immediately followed by a
-    valid one) can never cross-match and splice a render URL onto the wrong block. Pure:
-    no I/O, never raises; a block with no matching ``ok`` entry is left untouched.
+    """Rewrite every well-formed ```asset block out of ``delivered`` so no raw marker fence
+    survives into the deliverable, the persisted dossier, or the exported PDF. Each block is
+    paired to its manifest entry by the ``block`` ordinal — the source block's position,
+    stamped by :func:`parse_markers` and carried through :func:`render` — so two markers
+    sharing a prompt/text (e.g. a rejected block immediately followed by a valid one) can
+    never cross-match. By that pairing a block becomes one of three things:
+
+      * a clean **reference** (image embed / audio caption) when its render succeeded (``ok``);
+      * a neutral **placeholder** (``_[… unavailable]_``) when a render was *attempted* but
+        ``failed`` / was ``skipped`` — the entry carries a ``reason``, so the asset was
+        legitimately expected and the prose around it may point at it;
+      * **nothing** (the fence is stripped, and one blank line it would leave behind is
+        collapsed) when the block has *no* manifest entry at all — it was dropped at the parse
+        boundary (off-route, over-cap, non-allowlisted model, malformed): an illegitimate
+        marker the reader should never have seen.
+
+    The one exception is an *unterminated* opener (a ```asset with no closing fence, or a
+    second opener before the close): :func:`_scan_asset_blocks` can't bound it, so — to avoid
+    deleting the unbounded tail of real prose that follows — it is left as passthrough text and
+    its fence is *not* stripped. That is a malformed-model-output edge, documented in
+    ``docs/WAVE3-PLAN.md``, not the parse-dropped / failed / skipped cases this fixes.
+
+    Pure: no I/O, never raises.
     """
     if not isinstance(delivered, str) or not delivered:
         return delivered
-    # Index the successful renders by their source-block ordinal. An entry without a valid
-    # ``block`` is ignored (it can't be paired safely) rather than guessed by content.
+    # Fast path: no line can equal the ``asset`` opener if its info-string isn't even present.
+    # Keeps the common no-marker deliverable free of a needless split/rejoin.
+    if _FENCE_OPEN not in delivered:
+        return delivered
+    # Index every *pairable* manifest entry by its source-block ordinal (``ok`` → reference,
+    # ``failed``/``skipped`` → placeholder). An entry without a valid int ``block`` can't be
+    # paired safely, so it's left out — its block then falls through to the strip path rather
+    # than being guessed onto some block by content.
     by_block = {
         m["block"]: m
         for m in (manifest or [])
-        if isinstance(m, dict) and m.get("status") == "ok" and isinstance(m.get("block"), int)
+        if isinstance(m, dict) and isinstance(m.get("block"), int)
     }
-    if not by_block:
-        return delivered
 
     # Walk the SAME scanner the parser used, counting blocks in the SAME order, so the Nth
-    # block here is the request parse_markers stamped block_index=N. Rebuild byte-faithfully:
-    # passthrough lines and every non-swapped block's raw lines are emitted verbatim, and
-    # join("\n") round-trips exactly.
+    # block here is the request parse_markers stamped block_index=N. Passthrough lines round-
+    # trip byte-faithfully; every ```asset block is replaced (reference / placeholder / removed).
     out: "list[str]" = []
     block_ordinal = -1
+    swallow_blank = False  # after stripping a block, drop one blank line it would leave behind
     for kind, *rest in _scan_asset_blocks(delivered):
         if kind == "text":
-            out.append(rest[0])
+            line = rest[0]
+            # A stripped block sat between blank lines (the markdown norm): emitting nothing
+            # would fuse those two blanks into a double gap. Swallow exactly one to avoid it.
+            if swallow_blank and not line.strip():
+                swallow_blank = False
+                continue
+            swallow_blank = False
+            out.append(line)
             continue
         block_ordinal += 1
-        raw = rest[1]
         entry = by_block.get(block_ordinal)
-        out.extend([_reference(entry)] if entry is not None else raw)  # swap, else verbatim
+        if entry is None:
+            swallow_blank = True  # parse-dropped (no manifest entry) → strip the fence entirely
+            continue
+        swallow_blank = False
+        out.append(_reference(entry) if entry.get("status") == "ok" else _placeholder(entry))
     return "\n".join(out)

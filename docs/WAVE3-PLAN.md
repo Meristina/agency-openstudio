@@ -90,11 +90,13 @@ Parse rules (all enforced in `assets.py`):
   are **dropped at the parse boundary** — silently, exactly like malformed / off-route /
   unparseable markers. The manifest only ever contains entries for markers that were
   actually rendered/attempted, so a dropped marker never reaches the manifest or the GUI
-  gallery. (Note the limit: `rewrite_delivered` only swaps *rendered* blocks; a block with
-  no `ok` entry — dropped, off-route, over-cap, or failed at render — is left **verbatim**
-  in `delivered`, so its raw ```asset fence still appears in the deliverable/PDF. That is
-  the existing, tested behavior; cleaning those residual fences is a separate change, not
-  part of this safety surface.)
+  gallery. (Resolved in #19: `rewrite_delivered` now clears **every** `asset` fence, so no
+  raw JSON block survives into the deliverable/PDF — a rendered block becomes its clean
+  reference (`ok`), an *attempted-then-failed* block (`failed`/`skipped`, which has a
+  manifest entry with a `reason`) becomes a neutral `_[… unavailable]_` placeholder, and a
+  parse-dropped block — off-route / over-cap / non-allowlisted / malformed, with **no**
+  manifest entry — is stripped outright. `_build_render_assets` runs the rewrite even when
+  zero markers parse, so a pure off-route fence is stripped without touching the GPU.)
 - Route gate: drop `image` markers unless `marketing ∈ dossier['route']`; drop `tts`
   unless `comms ∈ dossier['route']`.
 
@@ -222,6 +224,13 @@ Parse rules (all enforced in `assets.py`):
   asset-bytes cap or a retention note (in scope for this wave, not deferred silently).
 - **Resume regenerates** assets under a fresh mission id (no reuse) — consistent with
   how resume already re-runs the whole mission. Documented, not a bug.
+- **An unterminated `asset` opener survives rewrite.** `rewrite_delivered` (#19) strips every
+  *well-formed* (properly closed) `asset` fence, but a malformed opener with **no** closing
+  fence can't be bounded by `_scan_asset_blocks` (which, by its anti-swallow rule, emits it as
+  passthrough text so it can't consume a following valid block). Its fence is therefore left
+  in place: stripping would mean deleting the unbounded tail of real prose after it — a worse
+  failure than a stray fence. This is a model-output error (the Inspector-passed text emitted
+  an unclosed marker), not the parse-dropped / failed / skipped cases #19 resolves.
 
 ## Build order
 

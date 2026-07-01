@@ -946,6 +946,29 @@ def test_build_render_assets_no_markers_is_a_noop(tmp_path):
     assert "assets" not in dossier  # nothing parsed → nothing attached, delivered untouched
 
 
+def test_build_render_assets_strips_off_route_fence_without_touching_gpu(tmp_path):
+    # Repro from #19: a marketing-only mission whose model emits a `tts` marker → dropped
+    # off-route → zero valid requests. No manager is touched (media would raise if used), but
+    # the raw fence must still be stripped from `delivered` so it never reaches the PDF.
+    from types import SimpleNamespace
+    import queue
+
+    class _BoomMgr:  # any attribute access is a test failure — render must not run
+        def __getattr__(self, name):
+            raise AssertionError("the warm manager must not be touched with no valid requests")
+
+    fake_server = SimpleNamespace(media_lock=threading.Lock(), media=_BoomMgr(), assets_root=tmp_path)
+    render_assets = server._build_render_assets(fake_server, queue.Queue(), threading.Event())
+    dossier = {
+        "mission_id": "001-x", "route": ["marketing"],  # comms did NOT run → tts is off-route
+        "delivered": "Intro\n```asset\n" + json.dumps({"type": "tts", "text": "hi"}) + "\n```\nOutro",
+    }
+    render_assets(dossier)
+    assert "```asset" not in dossier["delivered"], "the off-route fence is stripped"
+    assert dossier["delivered"] == "Intro\nOutro"
+    assert "assets" not in dossier  # nothing rendered/attempted → no manifest attached
+
+
 def test_post_mission_passes_asset_hook_to_runner(monkeypatch, tmp_path):
     # The worker must forward ASSET_CLAUSE + a render_assets callable into runner_bridge.run.
     monkeypatch.setenv("HOME", str(tmp_path))
