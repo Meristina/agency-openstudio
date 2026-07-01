@@ -211,6 +211,33 @@ def _build_render_assets(server, events: "queue.Queue", cancel_event: threading.
     return render_assets
 
 
+def _resolve_context_clause(retriever, goal, emit, should_cancel):
+    """Retrieve RAG context for ``goal`` → a ``context_clause`` string (or None). Runs on the
+    mission worker thread: it emits its ``retrieval`` SSE frames through ``emit`` (events.put)
+    so the handler's heartbeat loop writes them and stays responsive during a possibly-slow
+    first-run embed-model load, and it bails on ``should_cancel`` before the embed. Best-effort
+    — a missing [studio] extra or any store failure is surfaced as a ``skipped`` frame WITH a
+    reason (never swallowed silently) and returns None, so the mission still runs. Module-level
+    (not a handler method) so the worker closes over no handler state."""
+    if retriever is None or should_cancel():
+        return None
+    try:
+        emit({"phase": "retrieval", "status": "start"})
+        from agency_studio.rag import build_context_clause
+        chunks = retriever.retrieve(goal, k=5)
+        emit({"phase": "retrieval", "status": "done", "hits": len(chunks),
+              "sources": [{"title": c.title, "doc_id": c.doc_id} for c in chunks]})
+        return build_context_clause(chunks)
+    except ImportError:  # [studio] extra absent though docs exist — run without RAG
+        emit({"phase": "retrieval", "status": "skipped", "reason": "local-docs extra not installed"})
+        return None
+    except Exception as exc:  # non-fatal — surface WHY, then run the mission without RAG
+        import traceback
+        traceback.print_exc()
+        emit({"phase": "retrieval", "status": "skipped", "reason": str(exc)[:200]})
+        return None
+
+
 def _prune_assets_best_effort(server, *, keep: "Iterable[str]" = ()) -> None:
     """Run the retention cap over the server's assets root under ``retention_lock`` (so two
     finishing missions can't prune concurrently), protecting recently-touched assets via a
@@ -469,7 +496,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             return
         self.send_response(204)
         self._cors()
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -692,29 +719,38 @@ class StudioHandler(BaseHTTPRequestHandler):
         project_root = self.server.project_root  # type: ignore[attr-defined]
         # Built over the server (never `self`) so the daemon worker doesn't pin the handler.
         render_assets = _build_render_assets(self.server, events, cancel_event)  # type: ignore[attr-defined]
-        # Wave 4 — RAG: retrieve sourced excerpts from the user's docs BEFORE the run, on
-        # the handler thread (the retrieval SSE frame precedes route/dept). Best-effort and
-        # captured as a plain string, so the daemon worker closes over no handler state.
-        context_clause = self._retrieve_context(goal)
+        # Wave 4 — RAG: resolve the retriever on the handler thread (cheap: build + list_docs,
+        # no embed), but do the actual retrieval INSIDE the worker so the embed/model-load runs
+        # under the heartbeat loop and observes should_cancel. It's a server-scoped object, so
+        # the worker still closes over no handler state.
+        retriever = self._retriever_if_docs()
 
         def _worker() -> None:
-            # Capture only `project_root` (a str) + `render_assets` (closed over the server,
-            # not `self`): this daemon thread can outlive the request after a disconnect, and
-            # capturing the handler would pin its dead socket buffers alive until the worker
-            # reaches a boundary.
+            # Capture only server-scoped values (`project_root` str, `render_assets`,
+            # `retriever`) — never `self`: this daemon thread can outlive the request after a
+            # disconnect, and capturing the handler would pin its dead socket buffers alive.
+            import inspect
             from agency_cli import runner_bridge
             from agency_cli.engines.cli_engine import MissionCancelled
             try:
-                result_box["result"] = runner_bridge.run(
-                    goal,
-                    project_root=project_root,
-                    engine=engine,
-                    on_event=events.put,
-                    should_cancel=cancel_event.is_set,
-                    asset_clause=ASSET_CLAUSE,
-                    render_assets=render_assets,
-                    context_clause=context_clause,
+                context_clause = _resolve_context_clause(
+                    retriever, goal, events.put, cancel_event.is_set
                 )
+                run_kwargs = dict(
+                    goal=goal, project_root=project_root, engine=engine,
+                    on_event=events.put, should_cancel=cancel_event.is_set,
+                    asset_clause=ASSET_CLAUSE, render_assets=render_assets,
+                )
+                # Forward the RAG context only if the installed agency-kit actually has the
+                # additive context_clause hook — a mismatched (older) agency-kit would else
+                # TypeError on the unexpected kwarg and break EVERY mission. Degrade gracefully.
+                if context_clause is not None:
+                    if "context_clause" in inspect.signature(runner_bridge.run).parameters:
+                        run_kwargs["context_clause"] = context_clause
+                    else:
+                        print("[studio] installed agency-kit lacks the context_clause hook; "
+                              "running without RAG context")
+                result_box["result"] = runner_bridge.run(**run_kwargs)
             except MissionCancelled:
                 # Stopped before any persistence. Recorded so that — when the client
                 # is still connected (an explicit endpoint cancel) — the drain loop
@@ -851,11 +887,14 @@ class StudioHandler(BaseHTTPRequestHandler):
         import shutil
         import tempfile
         query = parse_qs(urlparse(self.path).query)
-        filename = Path((query.get("filename", ["upload"])[0] or "upload")).name
+        # Basename only (strip any path), and fall back to 'upload' for a name that reduces
+        # to empty — Path('.').name and Path('..').name are both '', which would otherwise
+        # make ``upload`` resolve to the temp DIR and raise IsADirectoryError on open().
+        filename = Path((query.get("filename", ["upload"])[0] or "upload")).name or "upload"
         tmp_dir = Path(tempfile.mkdtemp(prefix="agency-doc-"))
-        upload = tmp_dir / filename
-        written = self._stream_body_to_file(upload, max_bytes=_MAX_DOC_BYTES)
         try:
+            upload = tmp_dir / filename
+            written = self._stream_body_to_file(upload, max_bytes=_MAX_DOC_BYTES)
             if written is None:
                 return  # _stream_body_to_file already sent the error + cleaned the partial
             if written == 0:
@@ -898,30 +937,16 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._send_error_json(404, "unknown document")
         self._send_json({"deleted": doc_id})
 
-    def _retrieve_context(self, goal: str) -> "str | None":
-        """Best-effort RAG retrieval for a mission goal → the ``context_clause`` string (or
-        None). Emits a ``retrieval`` SSE phase frame. Never fatal: no ingested docs is an
-        instant no-op (no model load); a missing [studio] extra or any failure skips RAG so
-        the mission still runs (the deliverable just won't cite local docs)."""
+    def _retriever_if_docs(self):
+        """Resolve the retriever and return it ONLY if it holds documents — a cheap check
+        (build + list_docs, no embed model touched) run on the handler thread so a docs-free
+        mission does zero retrieval work and loads no model. Returns None if there are no
+        docs or the store can't even be opened. The actual embed/retrieve runs later in the
+        worker (see ``_resolve_context_clause``) so it stays under the heartbeat + cancel."""
         try:
             retriever = self._retriever()
-            if not retriever.list_docs():
-                return None  # no docs → nothing to retrieve, no embed model loaded
-            self._write_sse({"phase": "retrieval", "status": "start"})
-            from agency_studio.rag import build_context_clause
-            chunks = retriever.retrieve(goal, k=5)
-            self._write_sse({
-                "phase": "retrieval", "status": "done", "hits": len(chunks),
-                "sources": [{"title": c.title, "doc_id": c.doc_id} for c in chunks],
-            })
-            return build_context_clause(chunks)
-        except ImportError:  # [studio] extra absent though docs exist — run without RAG
-            self._write_sse({"phase": "retrieval", "status": "skipped"})
-            return None
-        except Exception:  # any retrieval failure is non-fatal — the mission must still run
-            import traceback
-            traceback.print_exc()
-            self._write_sse({"phase": "retrieval", "status": "skipped"})
+            return retriever if retriever.list_docs() else None
+        except Exception:  # can't build/open the store → just run without RAG
             return None
 
     def _read_json_body(self) -> "dict | None":

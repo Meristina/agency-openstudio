@@ -65,6 +65,12 @@ class Chunk:
 
 
 # ── chunking (pure, offline-testable) ─────────────────────────────────────────
+def _is_heading(stripped_line: str) -> bool:
+    """True for an ATX markdown heading (``# ``…``###### ``). A bare ``#`` or ``#word``
+    (no space after the hashes) is not a heading."""
+    return stripped_line.startswith("#") and stripped_line.lstrip("#").startswith(" ")
+
+
 def chunk_markdown(md: str, *, target_words: int = 220, overlap_words: int = 40) -> "List[tuple[str, str]]":
     """Split markdown into heading-aware chunks of ~``target_words`` words with
     ``overlap_words`` carried between consecutive chunks of the same section (so a fact
@@ -74,21 +80,19 @@ def chunk_markdown(md: str, *, target_words: int = 220, overlap_words: int = 40)
     Pure text work — no imports, no model — so the suite tests it directly."""
     if overlap_words >= target_words:
         raise ValueError("overlap_words must be smaller than target_words")
+    step = target_words - overlap_words   # words advanced per full chunk (keeps the overlap)
     chunks: "List[tuple[str, str]]" = []
     title = ""
     buf: "List[str]" = []       # words accumulated for the current chunk
 
-    def flush() -> None:
-        if buf:
-            chunks.append((title, " ".join(buf).strip()))
-
     for raw in md.splitlines():
         line = raw.rstrip()
         stripped = line.lstrip()
-        if stripped.startswith("#") and stripped.lstrip("#").startswith(" "):
+        if _is_heading(stripped):
             # A heading starts a new section: flush the current chunk, adopt the heading,
             # and start fresh (no overlap across a heading — a new section is a new topic).
-            flush()
+            if buf:
+                chunks.append((title, " ".join(buf).strip()))
             buf = []
             title = stripped.lstrip("#").strip()
             continue
@@ -96,10 +100,15 @@ def chunk_markdown(md: str, *, target_words: int = 220, overlap_words: int = 40)
         if not words:
             continue
         buf.extend(words)
-        if len(buf) >= target_words:
-            flush()
-            buf = buf[-overlap_words:] if overlap_words else []
-    flush()
+        # Emit as many FULL target-sized chunks as ``buf`` now holds, carrying the overlap
+        # forward. The inner loop (not a single flush) is what subdivides a single very long
+        # line — markitdown emits each PDF/docx paragraph as ONE line, so without this a big
+        # paragraph would become one oversized chunk the embedder then truncates.
+        while len(buf) >= target_words:
+            chunks.append((title, " ".join(buf[:target_words]).strip()))
+            buf = buf[step:]
+    if buf:
+        chunks.append((title, " ".join(buf).strip()))
     return chunks
 
 
@@ -193,6 +202,15 @@ class _VectorStore:
                 f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks "
                 f"USING vec0(embedding float[{self._dim}])"
             )
+            # Self-heal: back-fill the vec index from any chunks that were ingested while the
+            # extension was unavailable (has_vec=False then — only chunks.embedding written).
+            # chunks.embedding is the source of truth; vec_chunks is a rebuildable index, so a
+            # corpus never goes invisible after switching to a Python where sqlite-vec loads.
+            self.conn.execute(
+                "INSERT INTO vec_chunks(rowid, embedding) "
+                "SELECT id, embedding FROM chunks "
+                "WHERE id NOT IN (SELECT rowid FROM vec_chunks)"
+            )
         self.conn.commit()
 
     def add_document(self, meta: DocMeta, chunks: "List[tuple[str, str]]", vectors: "List[List[float]]") -> None:
@@ -236,16 +254,30 @@ class _VectorStore:
     def knn(self, query_vec: "List[float]", k: int) -> "List[Chunk]":
         with self._lock:
             if self.has_vec:
-                rows = self.conn.execute(
-                    "SELECT c.doc_id, c.ord, c.title, c.text, v.distance AS distance "
-                    "FROM vec_chunks v JOIN chunks c ON c.id = v.rowid "
-                    "WHERE v.embedding MATCH ? ORDER BY v.distance LIMIT ?",
+                # Run the vec0 KNN against vec_chunks ALONE — a MATCH + LIMIT inside a JOIN
+                # is a known sqlite-vec gotcha (the LIMIT may not reach the virtual table's
+                # planner). Get the top-k rowids + distances first, then fetch the chunk rows
+                # by id and re-attach them in KNN order.
+                hits = self.conn.execute(
+                    "SELECT rowid, distance FROM vec_chunks "
+                    "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
                     (_pack(query_vec), k),
                 ).fetchall()
-                return [
-                    Chunk(r["doc_id"], r["ord"], r["title"], r["text"], score=-float(r["distance"]))
-                    for r in rows
-                ]
+                if not hits:
+                    return []
+                ids = [h["rowid"] for h in hits]
+                placeholders = ",".join("?" * len(ids))
+                by_id = {r["id"]: r for r in self.conn.execute(
+                    f"SELECT id, doc_id, ord, title, text FROM chunks WHERE id IN ({placeholders})",
+                    ids,
+                ).fetchall()}
+                out: "List[Chunk]" = []
+                for h in hits:  # preserve KNN (nearest-first) order
+                    r = by_id.get(h["rowid"])
+                    if r is not None:
+                        out.append(Chunk(r["doc_id"], r["ord"], r["title"], r["text"],
+                                         score=-float(h["distance"])))
+                return out
             # Fallback: cosine (== dot, vectors are normalized) over every stored chunk. Fine
             # for a single-user corpus; the sqlite-vec path takes over at scale on the Mac.
             rows = self.conn.execute(
@@ -323,8 +355,12 @@ class LocalRetriever:
         pairs = chunk_markdown(text)
         if not pairs:
             raise ValueError(f"no extractable text in {filename!r}")
-        vectors = self._manager.embed([t for _, t in pairs], model=self._entry.id, kind="document")
         title = _title_from(text, filename)
+        # Chunks before the first heading carry an empty section title; fall back to the
+        # document title (its first heading, else the filename) so a citation is never a
+        # bare uuid in the deliverable.
+        pairs = [(t or title, txt) for t, txt in pairs]
+        vectors = self._manager.embed([t for _, t in pairs], model=self._entry.id, kind="document")
         meta = DocMeta(
             id=uuid.uuid4().hex, filename=filename, title=title,
             n_chunks=len(pairs), created=time.time(),
@@ -349,6 +385,6 @@ def _title_from(text: str, filename: str) -> str:
     """A human label for a document: its first markdown heading, else its filename."""
     for line in text.splitlines():
         s = line.lstrip()
-        if s.startswith("#") and s.lstrip("#").startswith(" "):
+        if _is_heading(s):
             return s.lstrip("#").strip()
     return filename

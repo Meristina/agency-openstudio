@@ -506,7 +506,7 @@ def test_options_preflight_grants_loopback_cors(tmp_path):
         resp.read()
         assert resp.status == 204
         assert resp.getheader("Access-Control-Allow-Origin") == "http://127.0.0.1:5173"
-        assert resp.getheader("Access-Control-Allow-Methods") == "GET, POST, OPTIONS"
+        assert resp.getheader("Access-Control-Allow-Methods") == "GET, POST, DELETE, OPTIONS"
         assert resp.getheader("Access-Control-Allow-Headers") == "Content-Type"
     finally:
         httpd.shutdown()
@@ -1135,6 +1135,20 @@ def test_ingest_document_then_list(monkeypatch, tmp_path):
         resp, body = _get(host, port, "/api/docs")
         docs = json.loads(body)["docs"]
         assert len(docs) == 1 and docs[0]["id"] == meta["id"]
+    finally:
+        httpd.shutdown()
+
+
+def test_ingest_dot_filename_does_not_crash(monkeypatch, tmp_path):
+    # filename '.' reduces to an empty basename; without the 'upload' fallback the upload
+    # path would be the temp DIR and open() would raise IsADirectoryError out of the handler
+    # (dropped connection + leaked temp dir). The fallback makes it a normal ingest.
+    _use_fake_retriever(monkeypatch, _FakeRetriever())
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _post(host, port, "/api/docs?filename=.", body=b"some content")
+        assert resp.status == 201
+        assert json.loads(body)["filename"] == "upload"
     finally:
         httpd.shutdown()
 

@@ -38,6 +38,15 @@ def test_chunk_markdown_splits_long_section_with_overlap():
     assert tail == head
 
 
+def test_chunk_markdown_subdivides_a_single_long_line():
+    # markitdown emits each PDF/docx paragraph as ONE physical line; a long one must be
+    # split into target-sized chunks (not one oversized chunk the embedder would truncate).
+    one_long_line = " ".join(f"w{i}" for i in range(500))
+    chunks = rag.chunk_markdown("# Doc\n" + one_long_line, target_words=200, overlap_words=40)
+    assert len(chunks) >= 3
+    assert all(len(text.split()) <= 200 for _, text in chunks)  # none exceeds the budget
+
+
 def test_chunk_markdown_rejects_overlap_ge_target():
     with pytest.raises(ValueError):
         rag.chunk_markdown("# x\nbody", target_words=50, overlap_words=50)
@@ -118,6 +127,16 @@ def test_ingest_then_retrieve_returns_the_relevant_chunk(local_retriever):
     assert len(hits) == 1
     assert hits[0].title == "Solar"
     assert "sunlight" in hits[0].text.lower()
+
+
+def test_headingless_doc_cites_by_filename_not_uuid(local_retriever):
+    # A document with no leading markdown heading yields empty section titles; the citation
+    # label must fall back to the filename (a human label), never a bare uuid doc_id.
+    local_retriever.ingest(b"plain text about wind turbines, no heading at all", "energy.txt")
+    hits = local_retriever.retrieve("wind turbines", k=1)
+    assert hits and hits[0].title == "energy.txt"
+    clause = rag.build_context_clause(hits)
+    assert "[1] energy.txt" in clause
 
 
 def test_retrieve_is_empty_when_no_docs(local_retriever):
