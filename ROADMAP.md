@@ -19,9 +19,9 @@
 > (offline-first slice), tracked in `docs/WAVE4-PLAN.md`: the `mlx_embedding_models` embed
 > engine, `agency_studio/rag.py` (markitdown → chunk → embed → `sqlite-vec` store, behind a
 > pluggable `Retriever`), agency-kit's additive `context_clause` hook, and the `/api/docs`
-> endpoints + best-effort mission retrieval injection with a `retrieval` SSE phase. Its
-> offline suite runs anywhere; the live embedding path needs the Apple Silicon Mac, and the
-> **GUI "Docs" tab is a tracked follow-up**. Waves **5-6** (web search, MCP, extensions) —
+> endpoints + best-effort mission retrieval injection with a `retrieval` SSE phase, and the
+> **GUI "Docs" tab** (upload / list / delete + retrieval timeline). Its offline suite runs
+> anywhere; the live embedding path needs the Apple Silicon Mac. Waves **5-6** (web search, MCP, extensions) —
 > plus Wave-6 visual RAG (PixelRAG) / knowledge graphs (Hyper-Extract) — remain deferred.
 > Setup for Wave 2: Python 3.10+ venv
 > + `[media]` extra + system `ffmpeg` (STT); image defaults to a non-gated 8-bit
@@ -213,15 +213,15 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
   loop · ✅ step 6 GUI asset timeline + per-mission gallery (`AssetGallery`) + PDF
   `/media`→on-disk localization (`exporter._localize_assets`). **Wave 3 complete.**
 
-### Wave 4 — RAG / LocalDocs *(core SHIPPED — see `docs/WAVE4-PLAN.md`; GUI deferred)*
+### Wave 4 — RAG / LocalDocs *(SHIPPED — see `docs/WAVE4-PLAN.md`)*
 - **Ingestion via `microsoft/markitdown`** (MIT) → Markdown. In the `[studio]` extra. ✅
 - **`agency_studio/rag.py`**: markitdown → chunking → embeddings (**nomic-embed via MLX**, not
   llama.cpp — MLX is ~50% faster on embeddings and matches the rest of the local layer) →
   **`sqlite-vec` SQLite vector store** (pure-Python cosine fallback for extension-less builds),
   behind a pluggable `Retriever`. Endpoint `/api/docs` + inject relevant chunks via the additive
   `context_clause` hook. ✅
+- **GUI "Docs" tab** — upload / list / delete + the retrieval timeline (source chips). ✅
 - ❌ Not `chunkr` (AGPL + Rust/Docker/Postgres too heavy). ❌ Not `Blaizzy/mlx-embeddings` (GPL).
-- ⏳ **Deferred to a follow-up:** the GUI "Docs" tab (upload / list / delete / per-mission sources).
 
 ### Wave 5 — Local web search + MCP *(deferred)*
 - **`agency_studio/websearch.py`** (DuckDuckGo, fresh code): sourcing for the optional local

@@ -1,7 +1,7 @@
 # Wave 4 — RAG / LocalDocs · Implementation Plan
 
-> Status: **SHIPPED** (offline-first slice — all engine/store/hook/server steps landed;
-> the GUI "Docs" tab is a tracked follow-up). Produced after a read-only investigation
+> Status: **SHIPPED** (engine/store/hook/server steps + the GUI "Docs" tab all landed).
+> Produced after a read-only investigation
 > pass + fresh web research on the 2026 local-embedding / vector-store landscape, with
 > decisions locked with the maintainer. This plan supersedes the naive sketch in
 > `ROADMAP.md §Wave 4` with the corrections that research surfaced.
@@ -87,9 +87,17 @@
   the deliverable cites sourced excerpts; Wave-3 image rendering still works after (the
   mutual-exclusion eviction path).
 
+## GUI (shipped)
+
+The Mission Console "Docs" tab: upload (`POST /api/docs`), list (`GET /api/docs`), delete
+(`DELETE /api/docs/{id}`), and a "Local docs" step in the mission timeline that folds the
+`retrieval` SSE phase (retrieving… / N excerpts + source chips / skipped + reason).
+`app/studio/src/components/DocsPanel.tsx` + `api.ts` (`listDocs`/`ingestDoc`/`deleteDoc`) +
+`timeline.ts` (`RetrievalStep`); covered by `docs-api.test.ts`, `DocsPanel.test.tsx`, and the
+timeline retrieval-folding tests.
+
 ## Non-goals (deferred — do not build here)
 
-- GUI "Docs" tab → follow-up PR (upload / list / delete / per-mission "sources used").
 - Visual RAG (PixelRAG) + knowledge graphs (Hyper-Extract) → **Wave 6** (the `Retriever`
   protocol is the seam).
 - Reranking / hybrid search / LanceDB → unneeded for a single-user local corpus.

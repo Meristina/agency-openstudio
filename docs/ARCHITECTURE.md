@@ -1,11 +1,11 @@
 # Architecture — Agency Studio
 
-> Target state. Waves 0-3 are implemented: the stdlib server + `on_event` hook, the React
+> Target state. Waves 0-4 are implemented: the stdlib server + `on_event` hook, the React
 > Mission Console, the **local multimodal layer (image / STT / TTS on Metal)** — validated
 > live on an M4 — and **multimodal as a department deliverable** (assets rendered into the
-> dossier + gallery + PDF). **Wave 4 (RAG / LocalDocs) core is implemented** — `/api/docs`
-> ingestion, `rag.py` (markitdown → embeddings → `sqlite-vec`), and the `context_clause`
-> retrieval hook (GUI "Docs" tab deferred). The remaining layers (Waves 5-6: web search, MCP,
+> dossier + gallery + PDF). **Wave 4 (RAG / LocalDocs) is implemented** — `/api/docs`
+> ingestion, `rag.py` (markitdown → embeddings → `sqlite-vec`), the `context_clause`
+> retrieval hook, and the GUI "Docs" tab. The remaining layers (Waves 5-6: web search, MCP,
 > extensions; plus Wave-6 visual RAG / knowledge graphs) are still deferred. See `ROADMAP.md`.
 
 ## Stacked view
