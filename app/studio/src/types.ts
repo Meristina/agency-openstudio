@@ -71,6 +71,21 @@ export interface AssetManifestItem {
   text?: string;
 }
 
+/**
+ * Wave 4 — RAG retrieval, streamed once at the start of a mission when the user has
+ * ingested documents. `start` opens the phase; `done` carries how many chunks were
+ * retrieved plus their source labels; `skipped` carries a `reason` (missing extra or a
+ * store failure — retrieval is best-effort, the mission still runs). Absent entirely on a
+ * mission run with no ingested documents.
+ */
+export interface RetrievalEvent {
+  phase: "retrieval";
+  status: "start" | "done" | "skipped";
+  hits?: number;
+  sources?: Array<{ title: string; doc_id: string }>;
+  reason?: string;
+}
+
 /** Terminal frame the server appends once the worker returns. */
 export interface DoneEvent {
   phase: "done";
@@ -103,6 +118,7 @@ export type MissionEvent =
   | SynthEvent
   | InspectEvent
   | AssetEvent
+  | RetrievalEvent
   | DoneEvent
   | ErrorEvent
   | CancelledEvent;
@@ -140,12 +156,31 @@ export interface ImageModelInfo {
   default?: boolean;
 }
 
+/** One selectable embedding model in the registry (GET /api/models → embed_models). */
+export interface EmbedModelInfo {
+  id: string;
+  label: string;
+  note: string;
+  ndim: number;
+  default?: boolean;
+}
+
 /** GET /api/models — which model is currently warm, the selectable image-model
- * registry, and the configured stt/tts model ids. */
+ * registry, the embedding-model registry, and the configured stt/tts model ids. */
 export interface ModelsStatus {
   resident: string | null;
   image_models: ImageModelInfo[];
+  embed_models?: EmbedModelInfo[];
   models: Record<string, string>;
+}
+
+/** One ingested document (GET /api/docs → docs; POST /api/docs returns one). */
+export interface DocMeta {
+  id: string;
+  filename: string;
+  title: string;
+  n_chunks: number;
+  created: number;
 }
 
 /** One generated asset shown in the session gallery (image or audio). */

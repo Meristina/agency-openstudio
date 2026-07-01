@@ -3,6 +3,7 @@
 // same-origin because server.py serves dist/.
 
 import type {
+  DocMeta,
   Dossier,
   ImageResult,
   MissionEvent,
@@ -147,6 +148,36 @@ export async function getModelsStatus(): Promise<ModelsStatus> {
   const res = await fetch("/api/models");
   if (!res.ok) throw new Error(await errorText(res, "GET /api/models"));
   return (await res.json()) as ModelsStatus;
+}
+
+// ── Wave 4 — RAG / LocalDocs ─────────────────────────────────────────────────
+
+/** List the ingested documents (GET /api/docs). Works without the [studio] extra
+ * (an un-built store just lists empty). */
+export async function listDocs(): Promise<DocMeta[]> {
+  const res = await fetch("/api/docs");
+  if (!res.ok) throw new Error(await errorText(res, "GET /api/docs"));
+  const data = (await res.json()) as { docs: DocMeta[] };
+  return data.docs ?? [];
+}
+
+/** Ingest one document for RAG (POST /api/docs?filename=…). The file's bytes are the
+ * request body; the filename rides in the query so the server picks the right converter.
+ * A 501 (with an install hint) means the [studio] extra is absent. */
+export async function ingestDoc(file: File): Promise<DocMeta> {
+  const res = await fetch(`/api/docs?filename=${encodeURIComponent(file.name)}`, {
+    method: "POST",
+    headers: { "Content-Type": file.type || "application/octet-stream" },
+    body: file,
+  });
+  if (!res.ok) throw new Error(await errorText(res, "POST /api/docs"));
+  return (await res.json()) as DocMeta;
+}
+
+/** Delete an ingested document and its chunks (DELETE /api/docs/{id}). */
+export async function deleteDoc(id: string): Promise<void> {
+  const res = await fetch(`/api/docs/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await errorText(res, "DELETE /api/docs"));
 }
 
 /** Parse one SSE frame ("data: {...}") into a MissionEvent, or null. */

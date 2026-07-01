@@ -238,6 +238,12 @@ button.ghost { background: transparent; color: var(--text); border: 1px solid va
 .mission-item-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .goal-text { color: var(--muted); font-size: 0.82rem; }
 
+/* Docs tab: an ingested-document row is info (not a button) + a Delete action beside it. */
+.missions li:has(> .doc-item) { display: flex; align-items: stretch; gap: 0.4rem; }
+.doc-item { flex: 1; cursor: default; }
+.doc-item:hover { border-color: var(--border); }
+.doc-file { color: var(--muted); font-size: 0.75rem; }
+
 /* ── detail ───────────────────────────────────────────────────────────── */
 .detail-head { border-bottom: 1px solid var(--border); padding-bottom: 0.6rem; margin-bottom: 0.6rem; }
 .detail-head h3 { margin: 0 0 0.4rem; font-size: 1.05rem; }
