@@ -32,6 +32,25 @@ export async function listMissions(): Promise<MissionSummary[]> {
   return data.missions ?? [];
 }
 
+/** A configured MCP server, as read from mcp.json by the server (GET /api/mcp). */
+export interface McpServer {
+  name: string;
+  transport: "stdio" | "http";
+  enabled: boolean;
+  command: string | null;
+  args: string[];
+  url: string | null;
+}
+
+/** The MCP servers configured in mcp.json. Empty when none are configured (or the [mcp]
+ * feature is simply unused); throws on a 400 (a malformed mcp.json). */
+export async function listMcpServers(): Promise<McpServer[]> {
+  const res = await fetch("/api/mcp");
+  if (!res.ok) throw new Error(`GET /api/mcp → ${res.status}`);
+  const data = (await res.json()) as { servers: McpServer[] };
+  return data.servers ?? [];
+}
+
 // Load one saved dossier by id (used by the history click-through in App.tsx).
 export async function getMission(id: string): Promise<Dossier> {
   const res = await fetch(`/api/mission/${encodeURIComponent(id)}`);
@@ -67,12 +86,19 @@ export async function cancelMission(runId: string): Promise<boolean> {
 export async function runMission(
   goal: string,
   onEvent: (event: MissionEvent) => void,
-  opts: { engine?: string; signal?: AbortSignal } = {},
+  opts: { engine?: string; signal?: AbortSignal; webSearch?: boolean; mcp?: boolean } = {},
 ): Promise<void> {
   const res = await fetch("/api/mission", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ goal, engine: opts.engine ?? "claude-code" }),
+    // web_search + mcp (Wave 5) are opt-in per mission; both default false, so the request
+    // stays byte-identical to a pre-Wave-5 launch unless the user enabled them.
+    body: JSON.stringify({
+      goal,
+      engine: opts.engine ?? "claude-code",
+      web_search: opts.webSearch ?? false,
+      mcp: opts.mcp ?? false,
+    }),
     signal: opts.signal,
   });
   if (!res.ok || !res.body) {

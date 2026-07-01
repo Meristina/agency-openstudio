@@ -86,6 +86,36 @@ export interface RetrievalEvent {
   reason?: string;
 }
 
+/**
+ * Wave 5 — web search, streamed once at the start of a mission when the user opted in
+ * (the `web_search` flag). `start` opens the phase; `done` carries how many results were
+ * fetched plus their {title, url}; `skipped` carries a `reason` (missing [web] extra or a
+ * network failure — web search is best-effort, the mission still runs). Absent entirely on
+ * a mission run without the flag.
+ */
+export interface WebSearchEvent {
+  phase: "websearch";
+  status: "start" | "done" | "skipped";
+  hits?: number;
+  sources?: Array<{ title: string; url: string }>;
+  reason?: string;
+}
+
+/**
+ * Wave 5 — MCP resources, streamed once at the start of a mission when the user opted in
+ * (the `mcp` flag). `start` opens the phase; `done` carries how many resources were read
+ * plus their {name, server}; `skipped` carries a `reason` (no config, missing [mcp] extra,
+ * or a connection failure — MCP is best-effort, the mission still runs). Absent entirely on
+ * a mission run without the flag.
+ */
+export interface McpEvent {
+  phase: "mcp";
+  status: "start" | "done" | "skipped";
+  hits?: number;
+  sources?: Array<{ name: string; server: string }>;
+  reason?: string;
+}
+
 /** Terminal frame the server appends once the worker returns. */
 export interface DoneEvent {
   phase: "done";
@@ -119,6 +149,8 @@ export type MissionEvent =
   | InspectEvent
   | AssetEvent
   | RetrievalEvent
+  | WebSearchEvent
+  | McpEvent
   | DoneEvent
   | ErrorEvent
   | CancelledEvent;

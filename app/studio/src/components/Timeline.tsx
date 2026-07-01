@@ -25,7 +25,7 @@ export default function Timeline({ events }: { events: MissionEvent[] }) {
   // Re-fold only when the event list itself changes — not on the per-second
   // `elapsed`-tick re-renders App fires during a run.
   const model = useMemo(() => groupTimeline(events), [events]);
-  const empty = !model.retrieval && !model.route && model.depts.length === 0 && !model.terminal;
+  const empty = !model.retrieval && !model.websearch && !model.mcp && !model.route && model.depts.length === 0 && !model.terminal;
 
   if (empty) return <p className="muted">No events yet — run a mission to see the live timeline.</p>;
 
@@ -52,6 +52,65 @@ export default function Timeline({ events }: { events: MissionEvent[] }) {
           {model.retrieval.status === "skipped" && (
             <p className="muted">
               retrieval skipped{model.retrieval.reason ? ` — ${model.retrieval.reason}` : ""}
+            </p>
+          )}
+        </section>
+      )}
+      {model.websearch && (
+        <section className="phase">
+          <h4>Web search</h4>
+          {model.websearch.status === "running" && (
+            <p className="muted">searching the web…</p>
+          )}
+          {model.websearch.status === "done" && (
+            <>
+              <p>{model.websearch.hits} result{model.websearch.hits === 1 ? "" : "s"} fetched</p>
+              {model.websearch.sources.length > 0 && (
+                <div className="chips">
+                  {model.websearch.sources.map((s, i) => (
+                    <a
+                      key={`${s.url}-${i}`}
+                      className="chip"
+                      href={s.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={s.url}
+                    >
+                      {s.title || s.url}
+                    </a>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+          {model.websearch.status === "skipped" && (
+            <p className="muted">
+              web search skipped{model.websearch.reason ? ` — ${model.websearch.reason}` : ""}
+            </p>
+          )}
+        </section>
+      )}
+      {model.mcp && (
+        <section className="phase">
+          <h4>MCP resources</h4>
+          {model.mcp.status === "running" && (
+            <p className="muted">reading MCP resources…</p>
+          )}
+          {model.mcp.status === "done" && (
+            <>
+              <p>{model.mcp.hits} resource{model.mcp.hits === 1 ? "" : "s"} read</p>
+              {model.mcp.sources.length > 0 && (
+                <div className="chips">
+                  {model.mcp.sources.map((s, i) => (
+                    <span key={`${s.server}-${i}`} className="chip" title={s.server}>{s.name}</span>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+          {model.mcp.status === "skipped" && (
+            <p className="muted">
+              MCP skipped{model.mcp.reason ? ` — ${model.mcp.reason}` : ""}
             </p>
           )}
         </section>

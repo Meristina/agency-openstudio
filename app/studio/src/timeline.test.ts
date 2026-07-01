@@ -5,7 +5,7 @@ import type { MissionEvent } from "./types";
 describe("groupTimeline", () => {
   it("returns an empty model for no events", () => {
     const m = groupTimeline([]);
-    expect(m).toEqual({ retrieval: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null });
+    expect(m).toEqual({ retrieval: null, websearch: null, mcp: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null });
     expect(runStatus(m)).toBe("idle");
   });
 
@@ -70,7 +70,7 @@ describe("groupTimeline", () => {
       { phase: "route", status: "done", route: ["solve"] },
     ]);
     // The run frame contributes no step; only the route shows.
-    expect(m).toEqual({ retrieval: null, route: ["solve"], depts: [], synth: [], inspect: [], assets: [], terminal: null });
+    expect(m).toEqual({ retrieval: null, websearch: null, mcp: null, route: ["solve"], depts: [], synth: [], inspect: [], assets: [], terminal: null });
   });
 
   it("folds an asset render phase: start→done pairs into ok steps with the served url", () => {
@@ -146,6 +146,55 @@ describe("groupTimeline", () => {
       status: "skipped", hits: null, sources: [], reason: "local-docs extra not installed",
     });
     // Retrieval alone (before any route/dept) still reads as a running mission.
+    expect(runStatus(m)).toBe("running");
+  });
+
+  it("folds a websearch start→done with hits and sources", () => {
+    const m = groupTimeline([
+      { phase: "run", run_id: "d".repeat(32) },
+      { phase: "websearch", status: "start" },
+      { phase: "websearch", status: "done", hits: 2, sources: [
+        { title: "Solar 101", url: "https://a.example" }, { title: "", url: "https://b.example" },
+      ] },
+      { phase: "route", status: "done", route: ["solve"] },
+    ]);
+    expect(m.websearch).toEqual({
+      status: "done", hits: 2,
+      sources: [{ title: "Solar 101", url: "https://a.example" }, { title: "", url: "https://b.example" }],
+      reason: null,
+    });
+  });
+
+  it("folds a skipped websearch with its reason", () => {
+    const m = groupTimeline([
+      { phase: "websearch", status: "skipped", reason: "web-search extra not installed" },
+    ]);
+    expect(m.websearch).toEqual({
+      status: "skipped", hits: null, sources: [], reason: "web-search extra not installed",
+    });
+    // Web search alone (before any route/dept) still reads as a running mission.
+    expect(runStatus(m)).toBe("running");
+  });
+
+  it("folds an mcp start→done with hits and sources", () => {
+    const m = groupTimeline([
+      { phase: "run", run_id: "e".repeat(32) },
+      { phase: "mcp", status: "start" },
+      { phase: "mcp", status: "done", hits: 1, sources: [{ name: "Onboarding", server: "wiki" }] },
+      { phase: "route", status: "done", route: ["solve"] },
+    ]);
+    expect(m.mcp).toEqual({
+      status: "done", hits: 1, sources: [{ name: "Onboarding", server: "wiki" }], reason: null,
+    });
+  });
+
+  it("folds a skipped mcp with its reason", () => {
+    const m = groupTimeline([
+      { phase: "mcp", status: "skipped", reason: "mcp extra not installed" },
+    ]);
+    expect(m.mcp).toEqual({
+      status: "skipped", hits: null, sources: [], reason: "mcp extra not installed",
+    });
     expect(runStatus(m)).toBe("running");
   });
 });

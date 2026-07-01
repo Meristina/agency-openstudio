@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { cancelMission, getMission, getModelsStatus, listMissions, runMission } from "./api";
+import { cancelMission, getMission, getModelsStatus, listMcpServers, listMissions, runMission } from "./api";
 import Timeline from "./components/Timeline";
 import MissionDetail from "./components/MissionDetail";
 import ImagePanel from "./components/ImagePanel";
@@ -31,6 +31,9 @@ const STOPPED_NOTICE = "Mission stopped — cancelled before it was saved.";
 export default function App() {
   const [missions, setMissions] = useState<MissionSummary[]>([]);
   const [goal, setGoal] = useState("");
+  const [webSearch, setWebSearch] = useState(false);
+  const [useMcp, setUseMcp] = useState(false);
+  const [mcpCount, setMcpCount] = useState<number | null>(null);
   const [events, setEvents] = useState<MissionEvent[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +71,14 @@ export default function App() {
   useEffect(() => {
     void refreshMissions();
   }, [refreshMissions]);
+
+  // How many MCP servers are configured (mcp.json), so the "Use MCP resources" toggle can
+  // show a count and hint when none are set up. Best-effort — a failure just leaves it null.
+  useEffect(() => {
+    listMcpServers()
+      .then((servers) => setMcpCount(servers.filter((s) => s.enabled).length))
+      .catch(() => setMcpCount(null));
+  }, []);
 
   const openMission = useCallback(async (id: string) => {
     setSelectedId(id);
@@ -132,7 +143,7 @@ export default function App() {
           if (e.phase === "done" && e.mission_id) completedId = e.mission_id;
           if (e.phase === "cancelled") cancelled = true;
         },
-        { signal: ctrl.signal },
+        { signal: ctrl.signal, webSearch, mcp: useMcp },
       );
       // The stream ended on a terminal frame. Always refresh first so a mission that
       // won the cancel race (finished before the stop landed) still shows in History.
@@ -167,7 +178,7 @@ export default function App() {
       // mutually-exclusive rule), so refresh the warm-model chip when it ends.
       void refreshModelStatus();
     }
-  }, [goal, running, refreshMissions, openMission, refreshModelStatus]);
+  }, [goal, webSearch, useMcp, running, refreshMissions, openMission, refreshModelStatus]);
 
   // "Stop mission" cancels this exact run via the explicit endpoint (the server then
   // kills the in-flight engine subprocess before persistence). `cancelMission` is
@@ -272,6 +283,31 @@ export default function App() {
                 Stop mission
               </button>
             )}
+            <label className="toggle" title="Fetch fresh web results and inject them as sourced context (opt-in — the Claude engine already searches on its own).">
+              <input
+                type="checkbox"
+                checked={webSearch}
+                onChange={(ev) => setWebSearch(ev.target.checked)}
+                disabled={running}
+              />
+              Search the web
+            </label>
+            <label
+              className="toggle"
+              title={
+                mcpCount === 0
+                  ? "No MCP servers configured — add them to mcp.json to use this."
+                  : "Read resources from your configured MCP servers and inject them as sourced context (opt-in)."
+              }
+            >
+              <input
+                type="checkbox"
+                checked={useMcp}
+                onChange={(ev) => setUseMcp(ev.target.checked)}
+                disabled={running}
+              />
+              Use MCP{mcpCount ? ` (${mcpCount})` : ""}
+            </label>
             <span className="hint">⌘/Ctrl+Enter to run</span>
           </div>
           {error && <p className="error">{error}</p>}
