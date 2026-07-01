@@ -419,3 +419,31 @@ class ModelManager:
             model = self._ensure("tts", _probe_tts, _load_tts_backend)
             _run_tts_backend(model, text=text, voice=voice, out_path=out)
         return SpeechResult(path=out, voice=voice, seconds=round(time.monotonic() - started, 2))
+
+    def embed(
+        self, texts: "list[str]", *, model: str = models.DEFAULT_EMBED_MODEL,
+        kind: str = "document",
+    ) -> "list[list[float]]":
+        """Embed ``texts`` with the selected embedding model (Wave 4 — RAG). ``kind`` is
+        ``"document"`` (chunks being ingested) or ``"query"`` (the mission goal at retrieval
+        time) — it selects the model's retrieval instruction prefix.
+
+        Keyed by ``embed:<id>`` so a switch to a different embedding model — or to/from an
+        image or voice model — evicts the previous one (the 16 GB mutual-exclusion rule),
+        while repeat calls with the same model reuse the warm one (the fast path across a
+        whole ingest, and again at query time). An empty list is a no-op that never touches
+        the device, so it can't evict a warm image model for nothing."""
+        if not texts:
+            return []
+        # Lazy import: embeddings imports MediaUnavailable/_pinned_repo from this module, so
+        # importing it at module load would be circular. Deferring to call time also keeps
+        # the [studio] extra fully optional (the import only runs when an embed is requested).
+        from . import embeddings
+        entry = models.embed_model(model)  # ValueError on unknown id (re-validated here)
+        with self._lock:
+            backend = self._ensure(
+                f"embed:{entry.id}",
+                embeddings._probe_embed,
+                lambda: embeddings._load_embed(entry),
+            )
+            return embeddings._run_embed(backend, entry, texts=texts, kind=kind)

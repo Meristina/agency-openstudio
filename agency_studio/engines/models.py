@@ -206,6 +206,87 @@ def image_models_payload() -> "list[dict]":
     ]
 
 
+# ── selectable text-embedding registry (Wave 4 — RAG / LocalDocs) ─────────────
+# The retriever (agency_studio/rag.py) embeds document chunks and the mission goal
+# with ONE of these, loaded via ``mlx_embedding_models`` (MLX-native, MIT) inside the
+# ``[studio]`` extra. Each entry is a backend-agnostic descriptor carrying exactly the
+# fields ``mlx_embedding_models.EmbeddingModel.__init__`` needs (repo, pooling, normalize,
+# max_length, nomic_bert, apply_ln) PLUS the immutable commit SHA that pins the weights
+# (same supply-chain guarantee as STT_HF_REVISION / the image mirror pins, SECURITY.md
+# #4/#5 — HF host already allowlisted) and the retrieval instruction prefixes some models
+# require. Passing the pinned local snapshot dir as EmbeddingModel(model_path=...) gives
+# BOTH the revision pin AND the correct per-model pooling (from_registry would re-resolve
+# the repo at HEAD, unpinned). All entries are 16 GB-friendly and MIT/Apache; both are in
+# mlx_embedding_models' own registry, so the config below matches its known-good values.
+
+@dataclass(frozen=True)
+class EmbedModel:
+    """One selectable embedding model. The mlx_embedding_models fields load the model;
+    ``query_prefix``/``doc_prefix`` are the retrieval instructions a model expects on each
+    text (nomic requires ``search_query:`` / ``search_document:``; bge-m3 uses none)."""
+    id: str
+    label: str            # GUI display name
+    note: str             # short one-line descriptor
+    repo: str             # HF repo id for the weights
+    revision: "str | None"  # immutable commit SHA pinning ``repo`` (None = unpinned)
+    ndim: int             # embedding dimensionality (drives the sqlite-vec column width)
+    pooling_strategy: str  # "mean" | "first" | "max" — mlx_embedding_models pooling
+    max_length: int       # tokenizer truncation length
+    normalize: bool = True    # L2-normalize (cosine similarity needs unit vectors)
+    nomic_bert: bool = False  # load NomicBert instead of Bert
+    apply_ln: bool = False    # nomic-v1.5 applies a final LayerNorm
+    query_prefix: str = ""    # prepended to a query before embedding (retrieval instruction)
+    doc_prefix: str = ""      # prepended to a document chunk before embedding
+    default: bool = False
+
+
+DEFAULT_EMBED_MODEL = "nomic-text-v1.5"
+
+# Insertion order IS the registry order the API exposes.
+EMBED_MODELS: "dict[str, EmbedModel]" = {
+    # nomic-embed-text-v1.5 — Apache-2.0, 137M, ~0.4 GB, 768-dim, 8k ctx. Fastest and the
+    # lowest-footprint competent retriever on a 16 GB Mac; the ROADMAP's named pick. Needs
+    # the search_query:/search_document: task prefixes; applies a final LayerNorm.
+    "nomic-text-v1.5": EmbedModel(
+        id="nomic-text-v1.5", label="nomic-embed-text v1.5",
+        note="Fast · 768-dim · 16 GB-ideal", repo="nomic-ai/nomic-embed-text-v1.5",
+        revision="e9b6763023c676ca8431644204f50c2b100d9aab",
+        ndim=768, pooling_strategy="mean", max_length=2048,
+        nomic_bert=True, apply_ln=True,
+        query_prefix="search_query: ", doc_prefix="search_document: ",
+        default=True,
+    ),
+    # bge-m3 — MIT, 568M, ~0.7 GB, 1024-dim, 8k ctx, multilingual. Higher retrieval quality
+    # (MTEB 64.5) at ~3× the cost; no instruction prefixes for retrieval.
+    "bge-m3": EmbedModel(
+        id="bge-m3", label="BGE-M3",
+        note="Higher quality · 1024-dim · multilingual", repo="BAAI/bge-m3",
+        revision="5617a9f61b028005a4858fdac845db406aefb181",
+        ndim=1024, pooling_strategy="first", max_length=8192,
+    ),
+}
+
+
+def embed_model(model_id: str) -> EmbedModel:
+    """Resolve an embedding-model id to its registry entry. Raises ``ValueError`` on an
+    unknown id (the retriever validates before the manager loads; the manager re-validates
+    so a direct call can't load an unregistered model)."""
+    try:
+        return EMBED_MODELS[model_id]
+    except KeyError:
+        raise ValueError(
+            f"unknown embedding model {model_id!r} (known: {sorted(EMBED_MODELS)})"
+        ) from None
+
+
+def embed_models_payload() -> "list[dict]":
+    """The ordered ``embed_models`` list for GET /api/models (registry order)."""
+    return [
+        {"id": m.id, "label": m.label, "note": m.note, "ndim": m.ndim, "default": m.default}
+        for m in EMBED_MODELS.values()
+    ]
+
+
 # Kokoro-82M v1.0 en-us voices. ``local_media._run_tts_backend`` forces lang="en-us",
 # so only the American/British English voices are offered; the default is af_heart.
 # /api/tts validates a client-supplied voice against this set (an unknown voice is a

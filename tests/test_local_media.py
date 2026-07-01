@@ -11,7 +11,7 @@ import re
 
 import pytest
 
-from agency_studio.engines import local_media, models
+from agency_studio.engines import embeddings, local_media, models
 
 
 # ── models: URL validation (SECURITY.md #4) ──────────────────────────────────
@@ -161,8 +161,8 @@ def _stub_backends(monkeypatch):
     parametrized by model id: ANY of the three image models loads through the same
     stub, and ``counters['loaded_models']`` records the ids loaded in order (so an
     image↔image switch — eviction + reload — is observable)."""
-    counters = {"image_load": 0, "stt_load": 0, "tts_load": 0,
-                "image_run": 0, "stt_run": 0, "tts_run": 0, "freed": 0,
+    counters = {"image_load": 0, "stt_load": 0, "tts_load": 0, "embed_load": 0,
+                "image_run": 0, "stt_run": 0, "tts_run": 0, "embed_run": 0, "freed": 0,
                 "loaded_models": []}
 
     def _load_image(entry):
@@ -190,12 +190,27 @@ def _stub_backends(monkeypatch):
         counters["tts_run"] += 1
         out_path.write_bytes(b"RIFF")
 
+    def _load_embed(entry):
+        counters["embed_load"] += 1
+        counters["loaded_models"].append(entry.id)
+        return _FakeModel(entry.id)
+
+    def _run_embed(model, entry, *, texts, kind):
+        counters["embed_run"] += 1
+        # Deterministic fake vectors (no MLX): length + a query/document marker dim.
+        return [[float(len(t)), 1.0 if kind == "query" else 0.0] for t in texts]
+
     monkeypatch.setattr(local_media, "_load_image_backend", _load_image)
     monkeypatch.setattr(local_media, "_run_image_backend", _run_image)
     monkeypatch.setattr(local_media, "_load_stt_backend", _load_stt)
     monkeypatch.setattr(local_media, "_run_stt_backend", _run_stt)
     monkeypatch.setattr(local_media, "_load_tts_backend", _load_tts)
     monkeypatch.setattr(local_media, "_run_tts_backend", _run_tts)
+    # Embed adapters live in the ``embeddings`` module (ModelManager.embed imports it
+    # lazily and references the module attrs, so patching them here is seen at call time).
+    monkeypatch.setattr(embeddings, "_load_embed", _load_embed)
+    monkeypatch.setattr(embeddings, "_run_embed", _run_embed)
+    monkeypatch.setattr(embeddings, "_probe_embed", lambda: None)
     # Probes are cheap availability checks — stub them to succeed so the suite never
     # tries a real import (a test for the failing-probe path stubs one to raise). The
     # image probe takes the selected entry (and accepts any of the three models).
@@ -376,6 +391,104 @@ def test_transcribe_returns_text(tmp_path, monkeypatch):
     result = mgr.transcribe(audio)
     assert result.text == "transcribed text"
     assert mgr.resident_kind == "stt"
+
+
+# ── embeddings (Wave 4 — RAG): registry + ModelManager.embed ──────────────────
+
+def test_embed_returns_one_vector_per_text_and_goes_warm(tmp_path, monkeypatch):
+    counters = _stub_backends(monkeypatch)
+    mgr = local_media.ModelManager(tmp_path)
+    vecs = mgr.embed(["alpha", "beta gamma"])
+    assert len(vecs) == 2
+    assert vecs[0] == [5.0, 0.0]          # len("alpha")=5, kind=document → marker 0
+    assert mgr.resident == "embed:nomic-text-v1.5"   # keyed by model id
+    assert counters["embed_load"] == 1
+
+
+def test_embed_empty_list_is_a_noop(tmp_path, monkeypatch):
+    counters = _stub_backends(monkeypatch)
+    mgr = local_media.ModelManager(tmp_path)
+    assert mgr.embed([]) == []
+    assert mgr.resident is None           # never touched the device
+    assert counters["embed_load"] == 0
+
+
+def test_embed_kind_query_selects_the_query_marker(tmp_path, monkeypatch):
+    _stub_backends(monkeypatch)
+    mgr = local_media.ModelManager(tmp_path)
+    doc = mgr.embed(["x"], kind="document")
+    qry = mgr.embed(["x"], kind="query")
+    assert doc[0][1] == 0.0 and qry[0][1] == 1.0   # the stub marks kind in dim 1
+
+
+def test_embed_warm_reuse_same_model_no_reload(tmp_path, monkeypatch):
+    counters = _stub_backends(monkeypatch)
+    mgr = local_media.ModelManager(tmp_path)
+    mgr.embed(["a"])
+    mgr.embed(["b"])
+    assert counters["embed_load"] == 1    # loaded once, reused warm
+    assert counters["embed_run"] == 2
+    assert counters["freed"] == 0
+
+
+def test_embed_switching_model_evicts_and_reloads(tmp_path, monkeypatch):
+    counters = _stub_backends(monkeypatch)
+    mgr = local_media.ModelManager(tmp_path)
+    mgr.embed(["a"], model="nomic-text-v1.5")
+    mgr.embed(["a"], model="bge-m3")
+    assert counters["embed_load"] == 2
+    assert counters["freed"] == 1
+    assert mgr.resident == "embed:bge-m3"
+    assert counters["loaded_models"] == ["nomic-text-v1.5", "bge-m3"]
+
+
+def test_embed_and_image_are_mutually_exclusive(tmp_path, monkeypatch):
+    counters = _stub_backends(monkeypatch)
+    mgr = local_media.ModelManager(tmp_path)
+    mgr.generate_image("draw")
+    assert mgr.resident == "flux-schnell"
+    mgr.embed(["retrieve me"])            # embedding evicts the warm image model
+    assert mgr.resident == "embed:nomic-text-v1.5"
+    assert counters["freed"] == 1
+    mgr.generate_image("draw again")      # ...and image evicts the warm embedder
+    assert mgr.resident == "flux-schnell"
+    assert counters["freed"] == 2
+
+
+def test_embed_unknown_model_raises_value_error(tmp_path, monkeypatch):
+    _stub_backends(monkeypatch)
+    mgr = local_media.ModelManager(tmp_path)
+    with pytest.raises(ValueError):
+        mgr.embed(["x"], model="does-not-exist")
+
+
+def test_probe_embed_without_extra_raises_media_unavailable():
+    # The [studio] extra (mlx_embedding_models) is absent in the offline suite, so the
+    # real probe must raise MediaUnavailable (→ the server's 501), mirroring boogu/media.
+    with pytest.raises(local_media.MediaUnavailable):
+        embeddings._probe_embed()
+
+
+def test_run_embed_applies_model_prefixes():
+    # Unit-test the real prefix logic with a fake model capturing what it received.
+    class _Capture:
+        def __init__(self):
+            self.seen = None
+
+        def encode(self, prepared):
+            self.seen = list(prepared)
+            return [[0.0] for _ in prepared]
+
+    nomic = models.embed_model("nomic-text-v1.5")
+    cap = _Capture()
+    embeddings._run_embed(cap, nomic, texts=["hello"], kind="query")
+    assert cap.seen == ["search_query: hello"]
+    embeddings._run_embed(cap, nomic, texts=["body"], kind="document")
+    assert cap.seen == ["search_document: body"]
+
+    bge = models.embed_model("bge-m3")           # no retrieval prefixes
+    embeddings._run_embed(cap, bge, texts=["plain"], kind="query")
+    assert cap.seen == ["plain"]
 
 
 def test_synthesize_writes_audio_asset(tmp_path, monkeypatch):
