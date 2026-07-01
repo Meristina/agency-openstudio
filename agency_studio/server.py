@@ -161,27 +161,35 @@ def _build_render_assets(server, events: "queue.Queue", cancel_event: threading.
     ``/media`` route already serves through ``path_inside``)."""
     def render_assets(dossier: dict) -> None:
         from agency_studio import assets
-        from agency_studio.engines.local_media import ModelManager
-        requests = assets.parse_markers(dossier.get("delivered") or "", dossier.get("route") or [])
-        if not requests:
-            return
-        with server.media_lock:  # reuse the ONE warm manager (16 GB mutual-exclusivity)
-            if server.media is None:
-                server.media = ModelManager(server.assets_root)
-            manager = server.media
-        assets_root = Path(server.assets_root).resolve()
-        out_dir = assets_root / "missions" / str(dossier.get("mission_id"))
+        delivered = dossier.get("delivered") or ""
+        requests = assets.parse_markers(delivered, dossier.get("route") or [])
+        # Render only when there is something to render — spinning up the warm ModelManager
+        # (and importing the [media] backends) is gated on a non-empty request set.
+        manifest: "list[dict]" = []
+        if requests:
+            from agency_studio.engines.local_media import ModelManager
+            with server.media_lock:  # reuse the ONE warm manager (16 GB mutual-exclusivity)
+                if server.media is None:
+                    server.media = ModelManager(server.assets_root)
+                manager = server.media
+            assets_root = Path(server.assets_root).resolve()
+            out_dir = assets_root / "missions" / str(dossier.get("mission_id"))
 
-        def to_url(path) -> str:
-            return "/media/" + Path(path).resolve().relative_to(assets_root).as_posix()
+            def to_url(path) -> str:
+                return _media_url(assets_root, path)
 
-        manifest = assets.render(
-            manager, requests, out_dir=out_dir, to_url=to_url,
-            should_cancel=cancel_event.is_set, on_event=events.put,
-        )
-        new_delivered = assets.rewrite_delivered(dossier.get("delivered") or "", manifest)
-        dossier["assets"] = manifest
-        dossier["delivered"] = new_delivered
+            manifest = assets.render(
+                manager, requests, out_dir=out_dir, to_url=to_url,
+                should_cancel=cancel_event.is_set, on_event=events.put,
+            )
+        # Always rewrite — even with no requests, a marker dropped at the parse boundary
+        # (off-route / over-cap / malformed) leaves a raw fence that must be stripped from the
+        # deliverable/PDF. rewrite_delivered is pure and a no-op when no ```asset block exists.
+        new_delivered = assets.rewrite_delivered(delivered, manifest)
+        if manifest:
+            dossier["assets"] = manifest
+        if new_delivered != delivered:
+            dossier["delivered"] = new_delivered
     return render_assets
 
 
@@ -199,6 +207,16 @@ def path_inside(root: Path, requested: str) -> Path | None:
     if candidate == root or root in candidate.parents:
         return candidate
     return None
+
+
+def _media_url(assets_root: "str | Path", path: "str | Path") -> str:
+    """Map a generated asset's filesystem ``path`` to its public ``/media/...`` URL, relative
+    to ``assets_root``. The single home for that mapping so the HTTP image/TTS handlers and the
+    marker-render bridge (``_build_render_assets``) can never drift on how a ``/media`` URL is
+    formed — a drift the ``/media`` route (guarded by :func:`path_inside`) would then have to
+    reconcile. Both sides are resolved before the relative-path computation."""
+    rel = Path(path).resolve().relative_to(Path(assets_root).resolve())
+    return "/media/" + rel.as_posix()
 
 
 def _require_int_in_range(value: object, lo: int, hi: int, name: str) -> int:
@@ -767,10 +785,10 @@ class StudioHandler(BaseHTTPRequestHandler):
         return payload
 
     def _media_url(self, path: "str | Path") -> str:
-        """Map a generated asset's filesystem path to its public ``/media/...`` URL
-        (relative to the server's assets root)."""
-        rel = Path(path).resolve().relative_to(self.server.assets_root)  # type: ignore[attr-defined]
-        return "/media/" + rel.as_posix()
+        """Map a generated asset's filesystem path to its public ``/media/...`` URL (relative
+        to the server's assets root). Thin wrapper over the module-level :func:`_media_url`,
+        shared with the marker-render bridge so the two can't drift."""
+        return _media_url(self.server.assets_root, path)  # type: ignore[attr-defined]
 
     def _handle_generate_image(self) -> None:
         payload = self._read_json_body()

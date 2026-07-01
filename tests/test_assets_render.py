@@ -3,8 +3,9 @@
 Fully offline: a fake ModelManager records calls and returns canned results (no real
 model loads, no GPU). These pin the render contract — document-order manifest, images
 rendered before TTS, never-raises per-asset isolation, cancel→skip, SSE event frames —
-and the cosmetic rewrite (match a rendered block by its source-block ordinal, leave every
-other block verbatim).
+and the cosmetic rewrite (match each block by its source-block ordinal — rendered → clean
+reference, attempted-but-failed/skipped → neutral placeholder, parse-dropped → stripped, so
+no raw ```asset fence ever survives into the deliverable).
 """
 
 import json
@@ -164,11 +165,68 @@ def test_rewrite_swaps_rendered_tts_for_a_caption():
     assert "audio" in out.lower()  # a reader can't play sound → labelled link
 
 
-def test_rewrite_leaves_failed_or_unmatched_blocks_verbatim():
+def test_rewrite_replaces_failed_block_with_a_placeholder_not_raw():
+    # A render that was ATTEMPTED but failed (backend crash) leaves a neutral breadcrumb, not
+    # the raw JSON fence — the prose may reference the asset, so a silent hole would dangle.
     delivered = _block({"type": "image", "prompt": "hero"})
     manifest = [{"type": "image", "status": "failed", "reason": "x", "prompt": "hero", "block": 0}]
     out = assets.rewrite_delivered(delivered, manifest)
-    assert "```asset" in out, "only successfully-rendered blocks are swapped"
+    assert "```asset" not in out, "no raw fence survives"
+    assert out == "_[image unavailable]_"
+
+
+def test_rewrite_replaces_skipped_block_with_a_placeholder():
+    # A Stop mid-render records status='skipped'; that attempted asset also gets a placeholder.
+    delivered = _block({"type": "tts", "text": "hello"})
+    manifest = [{"type": "tts", "status": "skipped", "reason": "cancelled", "block": 0}]
+    out = assets.rewrite_delivered(delivered, manifest)
+    assert "```asset" not in out
+    assert out == "_[audio narration unavailable]_"
+
+
+def test_rewrite_strips_parse_dropped_block_with_no_manifest_entry():
+    # A marker dropped at the parse boundary (off-route / over-cap / non-allowlisted / malformed)
+    # has NO manifest entry — an illegitimate marker the reader should never see. It is stripped
+    # entirely (not placeholdered): removing the fence line collapses it out of the deliverable.
+    delivered = "Before\n" + _block({"type": "tts", "text": "off route"}) + "\nAfter"
+    out = assets.rewrite_delivered(delivered, [])  # empty manifest = nothing rendered/attempted
+    assert "```asset" not in out and "off route" not in out
+    assert out == "Before\nAfter"
+
+
+def test_rewrite_collapses_the_blank_a_stripped_block_leaves_behind():
+    # A parse-dropped block wrapped in blank lines (the markdown norm) must not fuse the two
+    # surrounding blanks into a double gap once its fence is stripped — one blank is swallowed.
+    delivered = "Lead.\n\n" + _block({"type": "tts", "text": "off route"}) + "\n\nTail."
+    out = assets.rewrite_delivered(delivered, [])
+    assert out == "Lead.\n\nTail."
+
+
+def test_rewrite_leaves_an_unterminated_opener_as_text_documented_edge():
+    # Documented residual: a ```asset opener with NO closing fence can't be bounded, so the
+    # scanner (anti-swallow) emits it as passthrough text and rewrite leaves it untouched —
+    # the one case a fence survives, because stripping would delete the unbounded tail of real
+    # prose that follows it. Verifies we don't over-reach and eat that trailing content.
+    delivered = ("Intro\n```asset\n" + json.dumps({"type": "image", "prompt": "hero"})
+                 + "\ntrailing prose the reader still needs")
+    out = assets.rewrite_delivered(delivered, [])
+    assert out == delivered
+
+
+def test_rewrite_strips_over_cap_block_while_swapping_the_rendered_ones():
+    # Mixed mission: two rendered images (ok) + a third over-cap block with no manifest entry.
+    delivered = (
+        _block({"type": "image", "prompt": "one"}) + "\n"
+        + _block({"type": "image", "prompt": "two"}) + "\n"
+        + _block({"type": "image", "prompt": "three"})  # over MAX_IMAGES → dropped, no entry
+    )
+    manifest = [
+        {"type": "image", "status": "ok", "url": "/media/1.png", "prompt": "one", "block": 0},
+        {"type": "image", "status": "ok", "url": "/media/2.png", "prompt": "two", "block": 1},
+    ]
+    out = assets.rewrite_delivered(delivered, manifest)
+    assert "```asset" not in out and "three" not in out, "the over-cap fence is stripped"
+    assert "![one](/media/1.png)" in out and "![two](/media/2.png)" in out
 
 
 def test_rewrite_pairs_by_block_ordinal_independent_of_manifest_order():
@@ -225,7 +283,9 @@ def test_rewrite_escapes_untrusted_caption_so_it_cannot_inject_a_link():
     assert "\\]" in out and "\\(" in out  # the metacharacters were escaped, not left active
 
 
-def test_rewrite_no_ok_entries_returns_input_unchanged():
+def test_rewrite_no_markers_returns_input_unchanged():
+    # A deliverable with no ```asset fence at all is returned byte-for-byte (fast path),
+    # regardless of what the manifest happens to contain.
     delivered = "no markers here\n"
     assert assets.rewrite_delivered(delivered, []) == delivered
     assert assets.rewrite_delivered(delivered, [{"type": "image", "status": "failed"}]) == delivered
@@ -233,10 +293,14 @@ def test_rewrite_no_ok_entries_returns_input_unchanged():
 
 def test_rewrite_ignores_ok_entry_without_a_block_ordinal():
     # Defensive: an ok entry that carries no (or a non-int) ``block`` cannot be paired to a
-    # source block safely, so it is ignored rather than guessed onto some block by content.
+    # source block safely, so it is left out of the index — its block then has no pairable
+    # entry and is stripped like any parse-dropped fence (never guessed onto by content, and
+    # never left as a raw fence).
     delivered = _block({"type": "image", "prompt": "hero"})
     manifest = [{"type": "image", "status": "ok", "url": "/media/a.png", "prompt": "hero"}]
-    assert assets.rewrite_delivered(delivered, manifest) == delivered  # block left raw
+    out = assets.rewrite_delivered(delivered, manifest)
+    assert "```asset" not in out and "/media/a.png" not in out  # not paired → fence stripped
+    assert out == ""
 
 
 def test_rewrite_does_not_cross_match_a_rejected_block_onto_a_valid_twin():
@@ -254,8 +318,8 @@ def test_rewrite_does_not_cross_match_a_rejected_block_onto_a_valid_twin():
     manifest = assets.render(mgr, reqs, out_dir="/m", to_url=_to_url)
     assert manifest[0]["block"] == 1 and manifest[0]["status"] == "ok"
     out = assets.rewrite_delivered(delivered, manifest)
-    # block 0 (rejected) stays a raw fence; block 1 (valid) becomes the only embed.
-    assert "```asset" in out and '"boogu-base"' in out, "the rejected block is left verbatim"
+    # block 0 (rejected, no manifest entry) is stripped; block 1 (valid) becomes the only embed.
+    assert "```asset" not in out and '"boogu-base"' not in out, "the rejected block is stripped"
     assert out.count("![hero](") == 1, "exactly one embed, on the valid block"
 
 
