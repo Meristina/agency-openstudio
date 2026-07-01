@@ -41,6 +41,11 @@ transcriptions/
 # ~/.cache/huggingface), never in the repo. Generated outputs land here.
 studio_assets/
 
+# ── Wave 4/6 — local RAG / knowledge-graph / visual stores (rag.data_dir) ──
+# SQLite corpora written when the studio is run with --path inside the repo
+# (localdocs-*.db, visual-*.db, knowledge.db, mcp.json). Local user data — never committed.
+.agency-studio/
+
 # ── Partial downloads & archives ──────────────────────────────────────────
 *.part
 *.tmp
