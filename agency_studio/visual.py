@@ -116,8 +116,10 @@ def _probe_local() -> None:
 
 def _load_local(entry: VisualModel):
     """Load the MLX VLM, pinned to ``entry.revision`` (via ``_pinned_repo`` → a local snapshot),
-    so the exact reviewed weights load even if the repo moves. The precise return/call surface is
-    validated live on the Mac (deferred like Wave-2)."""
+    so the exact reviewed weights load even if the repo moves. Returns mlx-vlm's ``(model,
+    processor)`` pair; the caption call surface (``_run_local``) is validated live against mlx-vlm
+    0.6.3 on the Apple-Silicon Mac. (The full ``/api/visual`` ingest additionally needs the embed
+    backend from the ``[studio]`` extra to vectorise the caption.)"""
     from mlx_vlm import load  # type: ignore
     from .engines.local_media import _pinned_repo
     model_path = _pinned_repo(entry.repo, entry.revision)
@@ -125,13 +127,41 @@ def _load_local(entry: VisualModel):
 
 
 def _run_local(backend, entry: VisualModel, *, images: "List[bytes]") -> "List[str]":
-    """Caption each image with a loaded MLX VLM → one caption string per image. The exact
-    mlx-vlm generate surface is Mac-validated (deferred)."""
+    """Caption each image with a loaded MLX VLM → one caption string per image.
+
+    Call surface validated live against mlx-vlm 0.6.3 on the Apple-Silicon Mac. Two things the
+    library requires that the seam must honour:
+
+      * ``generate`` takes an image *path* (``str`` | ``list[str]``), NOT raw bytes — so each
+        image is written to a short-lived temp file, captioned, then unlinked immediately (never
+        persisted; matches the ingest handler's own temp-file discipline in SECURITY.md);
+      * the prompt must be run through ``apply_chat_template(..., num_images=1)`` so the image
+        placeholder token is inserted — passing a bare prompt makes ``process_inputs`` fail with
+        "tuple index out of range" (the input has an image but the prompt has no slot for it).
+
+    The caption is ``GenerationResult.text``; ``max_tokens`` bounds it (the store truncates to
+    ``rag.MAX_DOC_CHARS`` anyway, this just caps generation cost)."""
+    import os
+    import tempfile
     from mlx_vlm import generate  # type: ignore
+    from mlx_vlm.prompt_utils import apply_chat_template  # type: ignore
     model, processor = backend
+    # One image per generate call, so the templated prompt (num_images=1) is constant.
+    prompt = apply_chat_template(processor, model.config, _CAPTION_PROMPT, num_images=1)
     out: "List[str]" = []
     for img in images:
-        out.append(str(generate(model, processor, _CAPTION_PROMPT, image=img)))
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            tmp.write(img)
+            path = tmp.name
+        try:
+            result = generate(model, processor, prompt, image=[path],
+                              verbose=False, max_tokens=_CAPTION_MAX_TOKENS)
+        finally:
+            try:
+                os.unlink(path)  # short-lived: the raw image never persists (SECURITY.md)
+            except OSError:
+                pass
+        out.append(result.text.strip())
     return out
 
 
@@ -171,6 +201,10 @@ _CAPTION_PROMPT = (
     "Describe this image in detail for retrieval: any text, charts, diagrams, UI, people, "
     "objects, and the overall subject. Be specific and factual."
 )
+
+# Bound the caption generation. The store truncates to rag.MAX_DOC_CHARS regardless; this just
+# caps per-image generation cost so a pathological image can't run the VLM unbounded.
+_CAPTION_MAX_TOKENS = 256
 
 _VISUAL_BACKENDS = {
     "local": (_probe_local, _load_local, _run_local),

@@ -181,6 +181,46 @@ def test_visual_model_unknown_id_raises():
         visual.visual_model("nope")
 
 
+def test_run_local_call_surface(monkeypatch):
+    """Lock in the mlx-vlm 0.6.3 caption call surface (the live-validated fix): bytes → a temp file
+    PATH (never raw bytes), prompt via apply_chat_template(num_images=1) so the image placeholder is
+    inserted, generate(image=[path]).text, and the temp file unlinked afterwards. Stubs the two
+    mlx-vlm entry points via sys.modules so no model loads — deterministic on any machine. Guards
+    the exact regression this replaced ('tuple index out of range' from passing bytes + a
+    non-templated prompt)."""
+    import os
+    import sys
+    import types
+    seen = {}
+
+    def _fake_apply(processor, config, prompt, *, num_images=0, **k):
+        seen.update(num_images=num_images, config=config)
+        return f"<img*{num_images}> {prompt}"
+
+    def _fake_generate(model, processor, prompt, image=None, verbose=False, max_tokens=None, **k):
+        seen.update(prompt=prompt, image=image, max_tokens=max_tokens,
+                    path_exists=bool(image) and all(os.path.isfile(p) for p in image))
+        return types.SimpleNamespace(text="  a lake at sunset  ")
+
+    fake_mlx = types.ModuleType("mlx_vlm")
+    fake_mlx.generate = _fake_generate
+    fake_pu = types.ModuleType("mlx_vlm.prompt_utils")
+    fake_pu.apply_chat_template = _fake_apply
+    monkeypatch.setitem(sys.modules, "mlx_vlm", fake_mlx)
+    monkeypatch.setitem(sys.modules, "mlx_vlm.prompt_utils", fake_pu)
+
+    model = types.SimpleNamespace(config={"model_type": "qwen2_5_vl"})
+    out = visual._run_local((model, object()), visual.VISUAL_MODELS["qwen3-vl-local"], images=[b"\x89PNGfake"])
+
+    assert out == ["a lake at sunset"]                         # GenerationResult.text, stripped
+    assert seen["num_images"] == 1                             # image placeholder inserted
+    assert seen["config"] is model.config                     # model.config threaded to the template
+    assert isinstance(seen["image"], list) and len(seen["image"]) == 1   # image=[path], NOT bytes
+    assert seen["path_exists"]                                 # a real file path existed during the call
+    assert seen["max_tokens"] == visual._CAPTION_MAX_TOKENS
+    assert not os.path.isfile(seen["image"][0])               # temp file unlinked afterwards
+
+
 # ── the OPTIONAL cloud backend's safety gates (network-free) ──────────────────
 def test_cloud_backend_requires_https_endpoint():
     bad = visual.VisualModel(id="x", label="x", backend="cloud",
