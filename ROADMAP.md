@@ -28,14 +28,15 @@
 > `context_clause` hook** as Wave 4 (no new agency-kit surface), each **opt-in per mission**
 > (default off — the Claude path already searches / speaks MCP). Offline suite runs anywhere;
 > the live web/MCP paths need a network / a real MCP server (deferred like Wave 2). **Wave 6 —
-> advanced extensions — is now partly BUILT: two bricks.** (1) The **knowledge-graph brick**
-> (`knowledge.py`, graph-RAG over docs + history via Hyper-Extract, the `[kg]` extra, `knowledge`
-> flag + `graph` SSE phase + `GET/POST /api/graph` + GUI toggle). (2) The **MCP tool-calling
-> brick** — a new additive agency-kit engine hook (`mcp_config_path`/`mcp_allowed_tools` via
-> `_with_mcp`, dept+synth only) + the studio's `--mcp-config` builder + `mcp_tools` opt-in flag +
-> SSE phase + GUI toggle. Both shipped offline-first (live paths need the Mac / a real MCP
-> server). The remaining three Wave-6 plug-ins (persona doctrine, visual RAG (PixelRAG), cloud
-> video (seedance)) remain deferred. See `docs/WAVE6-PLAN.md`.
+> advanced extensions — is partly BUILT: two bricks, both merged to `main`.** (1) The
+> **knowledge-graph brick** (`knowledge.py`, graph-RAG over docs + history via Hyper-Extract, the
+> `[kg]` extra, `knowledge` flag + `graph` SSE phase + `GET/POST /api/graph` + GUI toggle) — studio
+> PR #30. (2) The **MCP tool-calling brick** — a new additive agency-kit engine hook
+> (`mcp_config_path`/`mcp_allowed_tools` via `_with_mcp`, dept+synth only; agency-kit PR #10) + the
+> studio's `--mcp-config` builder + `mcp_tools` opt-in flag + SSE phase + GUI toggle (studio PR #32).
+> Both shipped offline-first (live paths need the Mac / a real MCP server). The remaining three
+> Wave-6 plug-ins (persona doctrine, visual RAG (PixelRAG), cloud video (seedance)) remain deferred.
+> See `docs/WAVE6-PLAN.md`.
 > Setup for Wave 2: Python 3.10+ venv
 > + `[media]` extra + system `ffmpeg` (STT); image defaults to a non-gated 8-bit
 > FLUX.1-schnell mirror (no HF login).
@@ -252,7 +253,8 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
   the server's `_resolve_clause` scaffold, used by RAG + web + MCP alike.
 
 ### Wave 6 — Advanced extensions (plug-ins behind flags, MIT/Apache) *(mostly deferred)*
-- ✅ **Knowledge graphs — BUILT** (offline-first slice; see `docs/WAVE6-PLAN.md`). The first
+- ✅ **Knowledge graphs — BUILT & MERGED** (offline-first slice; studio PR #30 → `main`; see
+  `docs/WAVE6-PLAN.md`). The first
   Wave-6 brick lands as **graph-RAG**, the exact parallel of Waves 4/5: `agency_studio/knowledge.py`
   extracts `(subject, relation, object)` triples from the user's own **docs + mission history**
   into a pure-stdlib SQLite graph (`nodes`/`edges`, upsert-dedup with weight), and at mission
@@ -264,7 +266,8 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
   `GET /api/graph` / `POST /api/graph/build` and the GUI "Use knowledge graph" toggle + timeline
   step. Offline suite runs anywhere (extractor stubbed); the live extraction path needs the Mac,
   deferred like Wave 2.
-- ✅ **MCP tool-calling — BUILT** (offline-first slice; see `docs/WAVE6-PLAN.md` Brick 2). The
+- ✅ **MCP tool-calling — BUILT & MERGED** (offline-first slice; agency-kit PR #10 + studio PR #32,
+  both → `main`; see `docs/WAVE6-PLAN.md` Brick 2). The
   Wave-5 deferral is paid: unlike every prior brick this can't ride `context_clause` — it adds
   a **new additive agency-kit engine hook** (`mcp_config_path` / `mcp_allowed_tools` on
   `run_mission_cli`, spliced via `_with_mcp` into the claude **department + synthesis** commands

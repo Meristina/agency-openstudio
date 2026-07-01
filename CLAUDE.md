@@ -45,8 +45,9 @@ a clean web GUI.
 > A shared `context_block.format_context_block` + server `_resolve_clause` back RAG/web/MCP alike;
 > MCP is read-only **resources-as-context** (tool-calling is the `claude --mcp-config` path,
 > deferred). Offline suite runs anywhere; the live web/MCP paths need a network / a real MCP
-> server (deferred like Wave 2). **Wave 6 — advanced extensions — is now partly BUILT**, tracked
-> in `docs/WAVE6-PLAN.md`: the **knowledge-graph brick** (offline-first slice) lands as *graph-RAG*,
+> server (deferred like Wave 2). **Wave 6 — advanced extensions — is partly BUILT (two bricks, both
+> merged to `main`)**, tracked
+> in `docs/WAVE6-PLAN.md`: the **knowledge-graph brick** (offline-first slice; studio PR #30) lands as *graph-RAG*,
 > the exact parallel of Waves 4/5 — `agency_studio/knowledge.py` extracts `(subject, relation,
 > object)` triples from the user's own **docs + mission history** into a pure-stdlib SQLite graph
 > (`nodes`/`edges`, upsert-dedup + weight; `rag.LocalRetriever.all_chunks` feeds the doc source),
@@ -65,7 +66,8 @@ a clean web GUI.
 > enabled `mcp.json` servers (`mcp_client.build_cli_config`), writes a short-lived temp file, emits
 > an `mcp_tools` SSE phase, and threads it + the `mcp__*` tools through `runner_bridge.run` under a
 > new `mcp_tools` opt-in flag (default off) + GUI toggle. This brick spans **both repos** (the hook
-> lands in agency-kit-studio, like the Wave-4 `context_clause` hook did); its live tool-calling path
+> lands in agency-kit-studio via agency-kit PR #10, like the Wave-4 `context_clause` hook did; the
+> studio side is studio PR #32 — both merged to `main`); its live tool-calling path
 > needs a real MCP server on the Mac. The **remaining three Wave-6 plug-ins** (persona doctrine,
 > visual RAG (PixelRAG), cloud video (seedance)) **remain deferred**; see `ROADMAP.md`. Do **not**
 > invent implementation that the roadmap/WAVE-PLANs defer.
@@ -124,11 +126,13 @@ Agency Studio does **not** reimplement agency-kit's mission loop. It wraps it:
 
 Follow `ROADMAP.md` exactly. Waves **0-1** (stdlib server + event hook + React/Vite
 Mission Console) are buildable and testable on Linux. **Wave 2** (FLUX/Whisper/Kokoro on
-Metal), **Wave 3** (multimodal as a department deliverable), and **Wave 4** (RAG / LocalDocs,
-incl. the GUI "Docs" tab) are **shipped** — their unit/HTTP/GUI tests run offline anywhere
-(backends + network stubbed), but the live model runs require the Apple Silicon Mac. Waves
-**5-6** (web search, MCP, advanced extensions — plus Wave-6 visual RAG / knowledge graphs)
-remain deferred.
+Metal), **Wave 3** (multimodal as a department deliverable), **Wave 4** (RAG / LocalDocs,
+incl. the GUI "Docs" tab), **Wave 5** (local web search + MCP resources-as-context), and the
+first two **Wave 6** bricks (knowledge graphs + MCP tool-calling — both merged to `main`) are
+**shipped** — their unit/HTTP/GUI tests run offline anywhere (backends + network stubbed), but
+the live model / web / MCP-server runs require the Apple Silicon Mac. The **remaining three
+Wave-6 plug-ins** (persona doctrine, visual RAG (PixelRAG), cloud video (seedance)) remain
+deferred.
 
 ## Conventions
 
