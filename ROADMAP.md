@@ -28,15 +28,19 @@
 > `context_clause` hook** as Wave 4 (no new agency-kit surface), each **opt-in per mission**
 > (default off — the Claude path already searches / speaks MCP). Offline suite runs anywhere;
 > the live web/MCP paths need a network / a real MCP server (deferred like Wave 2). **Wave 6 —
-> advanced extensions — is partly BUILT: two bricks, both merged to `main`.** (1) The
-> **knowledge-graph brick** (`knowledge.py`, graph-RAG over docs + history via Hyper-Extract, the
-> `[kg]` extra, `knowledge` flag + `graph` SSE phase + `GET/POST /api/graph` + GUI toggle) — studio
-> PR #30. (2) The **MCP tool-calling brick** — a new additive agency-kit engine hook
+> advanced extensions — is partly BUILT: three bricks.** (1) The **knowledge-graph brick**
+> (`knowledge.py`, graph-RAG over docs + history via Hyper-Extract, the `[kg]` extra, `knowledge`
+> flag + `graph` SSE phase + `GET/POST /api/graph` + GUI toggle) — studio PR #30, merged to `main`.
+> (2) The **MCP tool-calling brick** — a new additive agency-kit engine hook
 > (`mcp_config_path`/`mcp_allowed_tools` via `_with_mcp`, dept+synth only; agency-kit PR #10) + the
-> studio's `--mcp-config` builder + `mcp_tools` opt-in flag + SSE phase + GUI toggle (studio PR #32).
-> Both shipped offline-first (live paths need the Mac / a real MCP server). The remaining three
-> Wave-6 plug-ins (persona doctrine, visual RAG (PixelRAG), cloud video (seedance)) remain deferred.
-> See `docs/WAVE6-PLAN.md`.
+> studio's `--mcp-config` builder + `mcp_tools` opt-in flag + SSE phase + GUI toggle (studio PR #32);
+> merged to `main`. (3) The **persona-doctrine brick** — a second additive agency-kit engine hook
+> (`persona_doctrine`, dept+synth only) that weaves the user's **curated per-department personas**
+> (a local `personas/<dept>/*.md` store, the new `[personas]` importer extra) into the DEPARTMENT
+> DOCTRINE + commander prompts; `personas` opt-in flag + `persona` SSE phase + `GET /api/personas` +
+> `POST /api/personas/import` + GUI toggle. All shipped offline-first (live paths need the Mac / a
+> real MCP server / the network). The remaining two Wave-6 plug-ins (visual RAG (PixelRAG), cloud
+> video (seedance)) remain deferred. See `docs/WAVE6-PLAN.md`.
 > Setup for Wave 2: Python 3.10+ venv
 > + `[media]` extra + system `ffmpeg` (STT); image defaults to a non-gated 8-bit
 > FLUX.1-schnell mirror (no HF login).
@@ -277,8 +281,19 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
   new `mcp_tools` opt-in flag (default off) with an `mcp_tools` SSE phase + GUI toggle. Offline
   suites in both repos; the live tool-calling path needs a real MCP server on the Mac (deferred
   like Wave 5).
-- *(deferred)* `agency-agents` (MIT): **curated** import of personas as additional doctrine
-  (respect `DEPT_NAMES` + the payload drift guard).
+- ✅ **Persona doctrine — BUILT** (offline-first slice; see `docs/WAVE6-PLAN.md` Brick 3). The
+  third brick lands as *adopted doctrine* — the first Wave-6 injection that is neither a
+  `context_clause` block nor an argv splice: a **new additive agency-kit engine hook**
+  (`persona_doctrine`, dept+synth only, never router/inspector — Art. IX) weaves the user's
+  **curated per-department personas** into the DEPARTMENT DOCTRINE (+ commander) prompt text.
+  Source is a **local** `personas/<dept>/<name>.md` store (keyed to `DEPT_NAMES` — the drift guard
+  rejects an unknown department; the frozen `payload/agents` snapshot is never touched), curated by
+  hand or by an **optional** `agency-agents` (MIT) importer behind the new **`[personas]`** extra
+  (network/Mac-deferred → `PersonasUnavailable`/501; **reading a built store needs no extra**).
+  Opt-in per mission (`personas` flag, default off) with a `persona` SSE phase, `GET /api/personas`
+  + `POST /api/personas/import`, and the GUI "Use persona doctrine" toggle + timeline step. Offline
+  suite runs anywhere (importer stubbed); the live import path needs the network, deferred like
+  Wave 5.
 - *(deferred)* `PixelRAG` (Apache-2.0): visual RAG **cloud/opt-in** (Qwen3-VL via API).
 - *(deferred)* `seedance-2.0` (MIT): **cloud video** modality as a department tool.
 - 📚 `awesome-llm-apps`: inspiration catalog, not a dependency.

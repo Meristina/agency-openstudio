@@ -89,6 +89,27 @@ describe("<Timeline>", () => {
     expect(text).toContain("knowledge graph skipped — knowledge-graph extra not installed");
   });
 
+  it("renders the persona doctrine phase with the styled departments", () => {
+    const events: MissionEvent[] = [
+      { phase: "persona", status: "start" },
+      { phase: "persona", status: "done", depts: ["marketing", "commander"] },
+      { phase: "route", status: "done", route: ["marketing"] },
+    ];
+    const text = render(<Timeline events={events} />).container.textContent ?? "";
+    expect(text).toContain("Persona doctrine");
+    expect(text).toContain("2 departments styled");
+    expect(text).toContain("marketing");
+    expect(text).toContain("commander");
+  });
+
+  it("renders a skipped persona doctrine phase with its reason", () => {
+    const events: MissionEvent[] = [
+      { phase: "persona", status: "skipped", reason: "no personas curated in the store" },
+    ];
+    const text = render(<Timeline events={events} />).container.textContent ?? "";
+    expect(text).toContain("persona doctrine skipped — no personas curated in the store");
+  });
+
   it("renders both iterations of a VETO→retry (Art. IX, never collapsed)", () => {
     const events: MissionEvent[] = [
       { phase: "route", status: "done", route: ["product"] },

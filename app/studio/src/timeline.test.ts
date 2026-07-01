@@ -5,7 +5,7 @@ import type { MissionEvent } from "./types";
 describe("groupTimeline", () => {
   it("returns an empty model for no events", () => {
     const m = groupTimeline([]);
-    expect(m).toEqual({ retrieval: null, websearch: null, mcp: null, mcpTools: null, graph: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null });
+    expect(m).toEqual({ retrieval: null, websearch: null, mcp: null, mcpTools: null, graph: null, persona: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null });
     expect(runStatus(m)).toBe("idle");
   });
 
@@ -70,7 +70,7 @@ describe("groupTimeline", () => {
       { phase: "route", status: "done", route: ["solve"] },
     ]);
     // The run frame contributes no step; only the route shows.
-    expect(m).toEqual({ retrieval: null, websearch: null, mcp: null, mcpTools: null, graph: null, route: ["solve"], depts: [], synth: [], inspect: [], assets: [], terminal: null });
+    expect(m).toEqual({ retrieval: null, websearch: null, mcp: null, mcpTools: null, graph: null, persona: null, route: ["solve"], depts: [], synth: [], inspect: [], assets: [], terminal: null });
   });
 
   it("folds an asset render phase: start→done pairs into ok steps with the served url", () => {
@@ -243,6 +243,22 @@ describe("groupTimeline", () => {
     expect(m.graph).toEqual({
       status: "skipped", hits: null, sources: [], reason: "knowledge-graph extra not installed",
     });
+    expect(runStatus(m)).toBe("running");
+  });
+
+  it("folds a persona start→done with the styled department keys", () => {
+    const m = groupTimeline([
+      { phase: "persona", status: "start" },
+      { phase: "persona", status: "done", depts: ["marketing", "commander"] },
+    ]);
+    expect(m.persona).toEqual({ status: "done", depts: ["marketing", "commander"], reason: null });
+  });
+
+  it("folds a skipped persona with its reason and reads as running", () => {
+    const m = groupTimeline([
+      { phase: "persona", status: "skipped", reason: "no personas curated in the store" },
+    ]);
+    expect(m.persona).toEqual({ status: "skipped", depts: [], reason: "no personas curated in the store" });
     expect(runStatus(m)).toBe("running");
   });
 });

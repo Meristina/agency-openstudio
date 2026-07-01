@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { cancelMission, getGraphStats, getMission, getModelsStatus, listMcpServers, listMissions, runMission } from "./api";
+import { cancelMission, getGraphStats, getMission, getModelsStatus, getPersonaStats, listMcpServers, listMissions, runMission } from "./api";
 import Timeline from "./components/Timeline";
 import MissionDetail from "./components/MissionDetail";
 import ImagePanel from "./components/ImagePanel";
@@ -37,6 +37,8 @@ export default function App() {
   const [mcpCount, setMcpCount] = useState<number | null>(null);
   const [useKnowledge, setUseKnowledge] = useState(false);
   const [graphNodes, setGraphNodes] = useState<number | null>(null);
+  const [usePersonas, setUsePersonas] = useState(false);
+  const [personaCount, setPersonaCount] = useState<number | null>(null);
   const [events, setEvents] = useState<MissionEvent[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,6 +91,14 @@ export default function App() {
     getGraphStats()
       .then((stats) => setGraphNodes(stats.nodes))
       .catch(() => setGraphNodes(null));
+  }, []);
+
+  // How many personas are curated in the store, so the "Use persona doctrine" toggle can hint
+  // when it's empty. Best-effort — a failure just leaves it null.
+  useEffect(() => {
+    getPersonaStats()
+      .then((stats) => setPersonaCount(stats.enabled))
+      .catch(() => setPersonaCount(null));
   }, []);
 
   const openMission = useCallback(async (id: string) => {
@@ -154,7 +164,7 @@ export default function App() {
           if (e.phase === "done" && e.mission_id) completedId = e.mission_id;
           if (e.phase === "cancelled") cancelled = true;
         },
-        { signal: ctrl.signal, webSearch, mcp: useMcp, knowledge: useKnowledge, mcpTools: useMcpTools },
+        { signal: ctrl.signal, webSearch, mcp: useMcp, knowledge: useKnowledge, mcpTools: useMcpTools, personas: usePersonas },
       );
       // The stream ended on a terminal frame. Always refresh first so a mission that
       // won the cancel race (finished before the stop landed) still shows in History.
@@ -189,7 +199,7 @@ export default function App() {
       // mutually-exclusive rule), so refresh the warm-model chip when it ends.
       void refreshModelStatus();
     }
-  }, [goal, webSearch, useMcp, useKnowledge, useMcpTools, running, refreshMissions, openMission, refreshModelStatus]);
+  }, [goal, webSearch, useMcp, useKnowledge, useMcpTools, usePersonas, running, refreshMissions, openMission, refreshModelStatus]);
 
   // "Stop mission" cancels this exact run via the explicit endpoint (the server then
   // kills the in-flight engine subprocess before persistence). `cancelMission` is
@@ -350,6 +360,22 @@ export default function App() {
                 disabled={running}
               />
               Use knowledge graph{graphNodes ? ` (${graphNodes})` : ""}
+            </label>
+            <label
+              className="toggle"
+              title={
+                personaCount === 0
+                  ? "No personas curated yet — import them from the agency-agents repo (POST /api/personas/import) or add them under .agency-studio/personas/."
+                  : "Style each department with a curated expert persona doctrine (opt-in; woven into the department + synthesis prompts, never the router/inspector)."
+              }
+            >
+              <input
+                type="checkbox"
+                checked={usePersonas}
+                onChange={(ev) => setUsePersonas(ev.target.checked)}
+                disabled={running}
+              />
+              Use persona doctrine{personaCount ? ` (${personaCount})` : ""}
             </label>
             <span className="hint">⌘/Ctrl+Enter to run</span>
           </div>

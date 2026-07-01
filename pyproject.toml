@@ -93,6 +93,17 @@ mcp = [
 kg = [
     "hyper-extract",     # Apache-2.0 — entity/relation extraction (text → knowledge triples)
 ]
+# Wave 6 — persona doctrine as mission context (see docs/WAVE6-PLAN.md, Brick 3). The studio
+# keeps a LOCAL, user-curated store of expert personas (personas/<dept>/<name>.md) and injects
+# each routed department's persona into the department + synthesis prompts through a new additive
+# agency-kit engine hook (persona_doctrine). Only the OPTIONAL importer (curating personas FROM
+# the agency-agents MIT repo over the network) needs this extra; it's imported LAZILY inside
+# agency_studio.personas, so the core server boots and missions run with it absent — reading or
+# injecting an already-curated store is pure stdlib (no extra), and POST /api/personas/import
+# returns 501 when it's missing. Persona doctrine is opt-in per mission (default off).
+personas = [
+    "requests>=2,<3",    # Apache-2.0 — HTTP client for the agency-agents import (https-only)
+]
 # PDF export of a mission deliverable (agency-kit's exporter.export_pdf), exposed
 # at GET /api/mission/{id}/pdf. Both imported lazily inside export_pdf, so the
 # server runs fine without them — the endpoint returns 501 until installed.

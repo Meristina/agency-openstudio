@@ -65,6 +65,20 @@ export async function getGraphStats(): Promise<GraphStats> {
   return (await res.json()) as GraphStats;
 }
 
+/** Persona-store size (GET /api/personas). Reading needs no [personas] extra — an un-curated
+ * store reports zero. The "Use persona doctrine" toggle uses `enabled` to gate + hint. */
+export interface PersonaStats {
+  total: number;
+  enabled: number;
+  by_dept: Record<string, { enabled: number; names: string[] }>;
+}
+
+export async function getPersonaStats(): Promise<PersonaStats> {
+  const res = await fetch("/api/personas");
+  if (!res.ok) throw new Error(`GET /api/personas → ${res.status}`);
+  return (await res.json()) as PersonaStats;
+}
+
 // Load one saved dossier by id (used by the history click-through in App.tsx).
 export async function getMission(id: string): Promise<Dossier> {
   const res = await fetch(`/api/mission/${encodeURIComponent(id)}`);
@@ -100,14 +114,14 @@ export async function cancelMission(runId: string): Promise<boolean> {
 export async function runMission(
   goal: string,
   onEvent: (event: MissionEvent) => void,
-  opts: { engine?: string; signal?: AbortSignal; webSearch?: boolean; mcp?: boolean; knowledge?: boolean; mcpTools?: boolean } = {},
+  opts: { engine?: string; signal?: AbortSignal; webSearch?: boolean; mcp?: boolean; knowledge?: boolean; mcpTools?: boolean; personas?: boolean } = {},
 ): Promise<void> {
   const res = await fetch("/api/mission", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    // web_search + mcp (Wave 5) and knowledge + mcp_tools (Wave 6) are opt-in per mission; all
-    // default false, so the request stays byte-identical to a pre-Wave-5 launch unless the user
-    // enabled them.
+    // web_search + mcp (Wave 5) and knowledge + mcp_tools + personas (Wave 6) are opt-in per
+    // mission; all default false, so the request stays byte-identical to a pre-Wave-5 launch
+    // unless the user enabled them.
     body: JSON.stringify({
       goal,
       engine: opts.engine ?? "claude-code",
@@ -115,6 +129,7 @@ export async function runMission(
       mcp: opts.mcp ?? false,
       knowledge: opts.knowledge ?? false,
       mcp_tools: opts.mcpTools ?? false,
+      personas: opts.personas ?? false,
     }),
     signal: opts.signal,
   });

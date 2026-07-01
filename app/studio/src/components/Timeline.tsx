@@ -25,7 +25,7 @@ export default function Timeline({ events }: { events: MissionEvent[] }) {
   // Re-fold only when the event list itself changes — not on the per-second
   // `elapsed`-tick re-renders App fires during a run.
   const model = useMemo(() => groupTimeline(events), [events]);
-  const empty = !model.retrieval && !model.websearch && !model.mcp && !model.mcpTools && !model.graph && !model.route && model.depts.length === 0 && !model.terminal;
+  const empty = !model.retrieval && !model.websearch && !model.mcp && !model.mcpTools && !model.graph && !model.persona && !model.route && model.depts.length === 0 && !model.terminal;
 
   if (empty) return <p className="muted">No events yet — run a mission to see the live timeline.</p>;
 
@@ -161,6 +161,31 @@ export default function Timeline({ events }: { events: MissionEvent[] }) {
           {model.graph.status === "skipped" && (
             <p className="muted">
               knowledge graph skipped{model.graph.reason ? ` — ${model.graph.reason}` : ""}
+            </p>
+          )}
+        </section>
+      )}
+      {model.persona && (
+        <section className="phase">
+          <h4>Persona doctrine</h4>
+          {model.persona.status === "running" && (
+            <p className="muted">applying persona doctrine…</p>
+          )}
+          {model.persona.status === "done" && (
+            <>
+              <p>{model.persona.depts.length} department{model.persona.depts.length === 1 ? "" : "s"} styled</p>
+              {model.persona.depts.length > 0 && (
+                <div className="chips">
+                  {model.persona.depts.map((d) => (
+                    <span key={d} className="chip">{d}</span>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+          {model.persona.status === "skipped" && (
+            <p className="muted">
+              persona doctrine skipped{model.persona.reason ? ` — ${model.persona.reason}` : ""}
             </p>
           )}
         </section>

@@ -349,6 +349,34 @@ def _resolve_mcp_tools(run_kwargs, emit, should_cancel):
         return None
 
 
+def _resolve_persona_doctrine(run_kwargs, emit, should_cancel, *, root=None):
+    """Wave 6 persona doctrine (opt-in): load the user's curated per-department personas and
+    thread them into ``run_kwargs['persona_doctrine']`` so the DEPARTMENT + SYNTHESIS prompts
+    carry an expert persona voice (never the router/inspector — Art. IX). Emits the ``persona``
+    SSE phase (start → done with the styled dept keys, or skipped with a reason). Best-effort:
+    any failure is a skipped frame and the mission runs WITHOUT personas (never aborts — the same
+    invariant as ``_resolve_mcp_tools`` / the context resolvers).
+
+    Unlike ``_resolve_mcp_tools`` there is no temp file — the doctrine is read-only in-memory
+    text — so nothing needs cleanup in the worker's finally."""
+    if should_cancel():
+        return
+    emit({"phase": "persona", "status": "start"})
+    try:
+        from agency_studio import personas
+        doctrine = personas.build_persona_doctrine(root=root)
+        if not doctrine:
+            emit({"phase": "persona", "status": "skipped",
+                  "reason": "no personas curated in the store"})
+            return
+        run_kwargs["persona_doctrine"] = doctrine
+        emit({"phase": "persona", "status": "done", "depts": sorted(doctrine)})
+    except Exception as exc:  # non-fatal — run without personas, surface the real reason
+        import traceback
+        traceback.print_exc()
+        emit({"phase": "persona", "status": "skipped", "reason": str(exc)[:200]})
+
+
 def _compose_context_clause(*blocks: "Optional[str]") -> "Optional[str]":
     """Join the non-None ``context_clause`` blocks (RAG, web, MCP, and — Wave 6 — the knowledge
     graph) into the single ``context_clause`` string threaded to ``run_mission_cli``. Returns
@@ -639,6 +667,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_list_mcp_servers()
         if path == "/api/graph":
             return self._handle_graph_stats()
+        if path == "/api/personas":
+            return self._handle_personas_stats()
         if path.startswith("/api/mission/"):
             rest = path[len("/api/mission/"):]
             if rest.endswith("/pdf"):
@@ -664,6 +694,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_ingest_doc()
         if path == "/api/graph/build":
             return self._handle_build_graph()
+        if path == "/api/personas/import":
+            return self._handle_import_personas()
         if path.startswith("/api/mission/") and path.endswith("/cancel"):
             run_id = path[len("/api/mission/"):-len("/cancel")]
             return self._handle_cancel_mission(run_id)
@@ -752,7 +784,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         request = self._parse_mission_request()
         if request is None:
             return  # a 400 was already sent
-        goal, engine, web_search, use_mcp, use_knowledge, use_mcp_tools = request
+        goal, engine, web_search, use_mcp, use_knowledge, use_mcp_tools, use_personas = request
         self._begin_sse()
         # Register an ephemeral run id BEFORE streaming, and announce it as the first
         # frame, so the GUI can stop this exact run via POST /api/mission/{id}/cancel
@@ -763,7 +795,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         try:
             self._write_sse({"phase": "run", "run_id": run_id})
             result_box = self._stream_mission(goal, engine, cancel_event, web_search, use_mcp,
-                                              use_knowledge, use_mcp_tools)
+                                              use_knowledge, use_mcp_tools, use_personas)
         finally:
             # Deregister the instant the run is over — BEFORE writing the terminal
             # frame — so a cancel arriving during that (socket-write) window gets a
@@ -801,15 +833,16 @@ class StudioHandler(BaseHTTPRequestHandler):
         cancel_event.set()
         self._send_json({"status": "cancelling", "run_id": run_id}, status=202)
 
-    def _parse_mission_request(self) -> "tuple[str, str, bool, bool, bool, bool] | None":
+    def _parse_mission_request(self) -> "tuple[str, str, bool, bool, bool, bool, bool] | None":
         """Read + validate the JSON body. Returns ``(goal, engine, web_search, use_mcp,
-        use_knowledge, use_mcp_tools)``, or ``None`` after sending the matching error: a 400 for
-        bad JSON / a non-object body / missing goal, or the error ``_read_body`` already sent
-        (400/408/411/413) for a malformed, withheld, chunked, or oversized body. ``web_search``
-        / ``use_mcp`` (Wave 5) and ``knowledge`` / ``mcp_tools`` (Wave 6) are the opt-in flags
-        (default false) — any truthy JSON value enables the matching feature; absent/false
-        leaves the mission byte-identical to a run without that feature. ``mcp_tools`` is the
-        tool-calling counterpart to Wave 5's read-only ``mcp`` resources flag."""
+        use_knowledge, use_mcp_tools, use_personas)``, or ``None`` after sending the matching
+        error: a 400 for bad JSON / a non-object body / missing goal, or the error ``_read_body``
+        already sent (400/408/411/413) for a malformed, withheld, chunked, or oversized body.
+        ``web_search`` / ``use_mcp`` (Wave 5) and ``knowledge`` / ``mcp_tools`` / ``personas``
+        (Wave 6) are the opt-in flags (default false) — any truthy JSON value enables the matching
+        feature; absent/false leaves the mission byte-identical to a run without that feature.
+        ``mcp_tools`` is the tool-calling counterpart to Wave 5's read-only ``mcp`` resources
+        flag; ``personas`` injects the user's curated per-department persona doctrine."""
         payload = self._read_json_body()
         if payload is None:
             return None  # _read_json_body already sent the error (and closed if needed)
@@ -819,7 +852,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return None
         return (goal, payload.get("engine") or "claude-code",
                 bool(payload.get("web_search")), bool(payload.get("mcp")),
-                bool(payload.get("knowledge")), bool(payload.get("mcp_tools")))
+                bool(payload.get("knowledge")), bool(payload.get("mcp_tools")),
+                bool(payload.get("personas")))
 
     def _begin_sse(self) -> None:
         """Emit the SSE response headers. The Mission Console consumes this via
@@ -838,7 +872,7 @@ class StudioHandler(BaseHTTPRequestHandler):
     def _stream_mission(
         self, goal: str, engine: str, cancel_event: threading.Event,
         web_search: bool = False, use_mcp: bool = False, use_knowledge: bool = False,
-        use_mcp_tools: bool = False,
+        use_mcp_tools: bool = False, use_personas: bool = False,
     ) -> "dict | None":
         """Run the mission on a worker thread and stream its progress events.
 
@@ -856,6 +890,10 @@ class StudioHandler(BaseHTTPRequestHandler):
         events: "queue.Queue[dict | None]" = queue.Queue()
         result_box: dict = {}
         project_root = self.server.project_root  # type: ignore[attr-defined]
+        # Wave 6 — persona doctrine: the curated persona store lives under docs_root (never
+        # web-served), beside the RAG/KG stores. Captured here (a str path) so the worker closes
+        # over no handler state, exactly like project_root.
+        docs_root = self.server.docs_root  # type: ignore[attr-defined]
         # Built over the server (never `self`) so the daemon worker doesn't pin the handler.
         render_assets = _build_render_assets(self.server, events, cancel_event)  # type: ignore[attr-defined]
         # Wave 4 — RAG: resolve the retriever on the handler thread (cheap: build + list_docs,
@@ -924,6 +962,17 @@ class StudioHandler(BaseHTTPRequestHandler):
                 elif use_mcp_tools:
                     print("[studio] installed agency-kit lacks the mcp_config_path hook; "
                           "running without MCP tool-calling")
+                # Wave 6 — persona doctrine (opt-in): load the user's curated per-department
+                # personas and thread them into the DEPARTMENT + SYNTHESIS prompts (never the
+                # router/inspector — Art. IX). Gated on the additive engine hook being present,
+                # like the clause and mcp_tools. No temp file (read-only text) → no cleanup.
+                if use_personas and "persona_doctrine" in run_params:
+                    _resolve_persona_doctrine(
+                        run_kwargs, events.put, cancel_event.is_set, root=docs_root
+                    )
+                elif use_personas:
+                    print("[studio] installed agency-kit lacks the persona_doctrine hook; "
+                          "running without persona doctrine")
                 result_box["result"] = runner_bridge.run(**run_kwargs)
             except MissionCancelled:
                 # Stopped before any persistence. Recorded so that — when the client
@@ -1114,6 +1163,40 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._send_error_json(500, "knowledge-graph build failed")
         stats = retriever.stats()
         stats["extracted"] = n_docs + n_hist
+        self._send_json(stats, status=201)
+
+    def _handle_personas_stats(self) -> None:
+        """Persona-store stats (GET /api/personas): total/enabled counts + the curated dept keys.
+        Reading the store needs no extra (pure filesystem), so this works without the importer —
+        an un-curated store lists empty. Backs the GUI toggle being gated on a non-empty store."""
+        server = self.server  # type: ignore[attr-defined]
+        try:
+            from agency_studio import personas
+            self._send_json(personas.stats(root=server.docs_root))
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            self._send_error_json(500, "could not read persona store")
+
+    def _handle_import_personas(self) -> None:
+        """Import curated personas from the agency-agents MIT repo into the local store (POST
+        /api/personas/import). The importer pulls a repo over the network, so it needs the
+        [personas] extra → 501 when absent (mirrors /api/graph/build). Returns the resulting
+        stats. Reading/injecting a built store, by contrast, needs no extra."""
+        if self._read_body() is None:
+            return  # malformed/oversized body already answered
+        server = self.server  # type: ignore[attr-defined]
+        try:
+            from agency_studio import personas
+            written = personas.import_personas(root=server.docs_root)
+        except ImportError as exc:  # [personas] network dep absent (PersonasUnavailable)
+            return self._send_error_json(501, str(exc))
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            return self._send_error_json(500, "persona import failed")
+        stats = personas.stats(root=server.docs_root)
+        stats["imported"] = written
         self._send_json(stats, status=201)
 
     def _handle_ingest_doc(self) -> None:

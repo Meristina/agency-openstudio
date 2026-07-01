@@ -145,6 +145,20 @@ export interface KnowledgeEvent {
   reason?: string;
 }
 
+/**
+ * Wave 6 — persona doctrine, streamed once at the start of a mission when the user opted in
+ * (the `personas` flag). `start` opens the phase; `done` carries the department keys that
+ * received a curated persona (its own `depts` shape, like `mcp_tools`' `servers`, not
+ * hits/sources); `skipped` carries a `reason` (no personas curated, or a read failure — the
+ * doctrine is best-effort, the mission still runs). Absent on a run without the flag.
+ */
+export interface PersonaEvent {
+  phase: "persona";
+  status: "start" | "done" | "skipped";
+  depts?: string[];
+  reason?: string;
+}
+
 /** Terminal frame the server appends once the worker returns. */
 export interface DoneEvent {
   phase: "done";
@@ -182,6 +196,7 @@ export type MissionEvent =
   | McpEvent
   | McpToolsEvent
   | KnowledgeEvent
+  | PersonaEvent
   | DoneEvent
   | ErrorEvent
   | CancelledEvent;

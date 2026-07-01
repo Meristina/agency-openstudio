@@ -60,6 +60,12 @@ export interface McpToolsStep {
   reason: string | null;
 }
 
+export interface PersonaStep {
+  status: "running" | "done" | "skipped";
+  depts: string[];
+  reason: string | null;
+}
+
 export type Terminal =
   | { kind: "done"; verdict: string | null; missionId: string | null; path: string; residualRisk: string | null }
   | { kind: "error"; message: string }
@@ -71,6 +77,7 @@ export interface TimelineModel {
   mcp: McpStep | null;
   mcpTools: McpToolsStep | null;
   graph: KnowledgeStep | null;
+  persona: PersonaStep | null;
   route: string[] | null;
   depts: DeptStep[];
   synth: SynthStep[];
@@ -94,7 +101,7 @@ function foldStep<S>(
 
 /** Fold the events received so far into a stable, render-ready model. */
 export function groupTimeline(events: MissionEvent[]): TimelineModel {
-  const model: TimelineModel = { retrieval: null, websearch: null, mcp: null, mcpTools: null, graph: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null };
+  const model: TimelineModel = { retrieval: null, websearch: null, mcp: null, mcpTools: null, graph: null, persona: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null };
 
   for (const e of events) {
     switch (e.phase) {
@@ -121,6 +128,12 @@ export function groupTimeline(events: MissionEvent[]): TimelineModel {
         break;
       case "graph":
         model.graph = foldStep(e);
+        break;
+      case "persona":
+        // Its own shape (`depts`, not hits/sources), so it folds by hand like mcp_tools.
+        if (e.status === "start") model.persona = { status: "running", depts: [], reason: null };
+        else if (e.status === "done") model.persona = { status: "done", depts: e.depts ?? [], reason: null };
+        else model.persona = { status: "skipped", depts: [], reason: e.reason ?? null };
         break;
       case "route":
         model.route = e.route;
@@ -198,6 +211,6 @@ export function runStatus(model: TimelineModel): "idle" | "running" | "done" | "
   if (model.terminal?.kind === "error") return "error";
   if (model.terminal?.kind === "cancelled") return "cancelled";
   if (model.terminal?.kind === "done") return "done";
-  if (model.retrieval || model.websearch || model.mcp || model.mcpTools || model.graph || model.route || model.depts.length) return "running";
+  if (model.retrieval || model.websearch || model.mcp || model.mcpTools || model.graph || model.persona || model.route || model.depts.length) return "running";
   return "idle";
 }

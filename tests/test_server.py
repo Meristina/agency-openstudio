@@ -1283,10 +1283,11 @@ def _capture_run(monkeypatch, captured):
 
     def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
                   asset_clause=None, render_assets=None, context_clause=None,
-                  mcp_config_path=None, mcp_allowed_tools=None):
+                  mcp_config_path=None, mcp_allowed_tools=None, persona_doctrine=None):
         captured["context_clause"] = context_clause
         captured["mcp_config_path"] = mcp_config_path
         captured["mcp_allowed_tools"] = mcp_allowed_tools
+        captured["persona_doctrine"] = persona_doctrine
         if mcp_config_path:
             captured["mcp_config"] = json.loads(Path(mcp_config_path).read_text(encoding="utf-8"))
         on_event({"phase": "route", "status": "done", "route": []})
@@ -1722,3 +1723,185 @@ def test_mission_mcp_tools_with_no_enabled_servers_skips(monkeypatch, tmp_path):
     phase = [e for e in events if e.get("phase") == "mcp_tools"]
     assert any(e["status"] == "skipped" for e in phase)
     assert captured["mcp_config_path"] is None
+
+
+# ── Wave 6 — persona doctrine: opt-in per-department persona woven into the prompts ─
+
+def _write_persona(tmp_path, dept, name, body):
+    """Curate a persona in the server's on-disk store (docs_root/personas/<dept>/<name>.md), so
+    the server later loads the SAME store — a real store, no model, no network."""
+    d = tmp_path / ".agency-studio" / "personas" / dept
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.md").write_text(body, encoding="utf-8")
+
+
+def test_mission_with_personas_flag_injects_doctrine_and_emits_phase(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _use_fake_retriever(monkeypatch, _FakeRetriever())   # no docs → no context_clause
+    _write_persona(tmp_path, "marketing", "growth", "You are a razor-focused growth marketer.")
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "launch a brand", "personas": True}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    phase = [e for e in events if e.get("phase") == "persona"]
+    assert any(e["status"] == "done" and "marketing" in e["depts"] for e in phase)
+    # Persona doctrine rides its OWN hook, NOT the context_clause — the two are independent.
+    assert captured["persona_doctrine"] == {"marketing": "You are a razor-focused growth marketer."}
+    assert captured["context_clause"] is None
+
+
+def test_mission_without_personas_flag_does_no_persona(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _use_fake_retriever(monkeypatch, _FakeRetriever())
+    _write_persona(tmp_path, "marketing", "growth", "unused persona")
+
+    # Prove the store is never even read when the flag is off (the byte-identical invariant).
+    def _boom(*a, **k):
+        raise AssertionError("personas must not be loaded when the flag is absent")
+
+    from agency_studio import personas
+    monkeypatch.setattr(personas, "build_persona_doctrine", _boom)
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=json.dumps({"goal": "x"}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    assert not [e for e in events if e.get("phase") == "persona"]
+    assert captured["persona_doctrine"] is None
+
+
+def test_mission_personas_with_empty_store_skips(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _use_fake_retriever(monkeypatch, _FakeRetriever())   # no personas curated
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "x", "personas": True}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    phase = [e for e in events if e.get("phase") == "persona"]
+    assert any(e["status"] == "skipped" for e in phase)
+    assert captured["persona_doctrine"] is None
+
+
+def test_persona_and_knowledge_hooks_are_independent(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio.knowledge import Triple
+    _use_fake_retriever(monkeypatch, _FakeRetriever())
+    _prebuild_graph(tmp_path, [Triple("Widget", "depends on", "Rust")])
+    _write_persona(tmp_path, "commander", "chief", "You are a decisive agency chief.")
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "roadmap for the Widget", "knowledge": True,
+                                      "personas": True}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    # The KG rides context_clause; the persona rides its own hook — populated separately.
+    assert "KNOWLEDGE GRAPH" in captured["context_clause"]
+    assert captured["persona_doctrine"] == {"commander": "You are a decisive agency chief."}
+
+
+def test_get_personas_stats_empty_then_built(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _get(host, port, "/api/personas")
+        assert resp.status == 200 and json.loads(body)["enabled"] == 0
+    finally:
+        httpd.shutdown()
+
+    _write_persona(tmp_path, "product", "pm", "You are a senior PM.")
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _get(host, port, "/api/personas")
+        stats = json.loads(body)
+        assert stats["enabled"] == 1
+        assert stats["by_dept"]["product"]["names"] == ["pm"]
+    finally:
+        httpd.shutdown()
+
+
+def test_import_personas_when_unavailable_returns_501(monkeypatch, tmp_path):
+    # The default importer is network/Mac-deferred → PersonasUnavailable → 501. (Independent of
+    # whether `requests` is installed: the live fetch is deferred, so the endpoint 501s either way.)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _post(host, port, "/api/personas/import", body=b"")
+        assert resp.status == 501
+        assert "persona" in body.decode().lower()
+    finally:
+        httpd.shutdown()
+
+
+def test_import_personas_maps_missing_dep_to_501(monkeypatch, tmp_path):
+    # Force the genuine missing-[personas]-extra branch (not the deferred stub), so the 501
+    # mapping is asserted for the real absent-dependency condition it exists to handle.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio import personas
+
+    class _MissingDep:
+        def fetch(self):
+            raise personas.PersonasUnavailable("needs the [personas] extra")
+
+    monkeypatch.setattr(personas, "AgencyAgentsSource", _MissingDep)
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _post(host, port, "/api/personas/import", body=b"")
+        assert resp.status == 501
+        assert "personas" in body.decode().lower()
+    finally:
+        httpd.shutdown()
+
+
+def test_import_personas_stubbed_populates_store(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio import personas
+
+    class _StubSource:
+        def fetch(self):
+            return [personas.Persona("marketing", "growth", "curated MKT persona")]
+
+    monkeypatch.setattr(personas, "AgencyAgentsSource", _StubSource)
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _post(host, port, "/api/personas/import", body=b"")
+        assert resp.status == 201
+        assert json.loads(body)["imported"] == 1
+    finally:
+        httpd.shutdown()
+
+    # The persona is now on disk and loads back.
+    from pathlib import Path as _P
+    assert (tmp_path / ".agency-studio" / "personas" / "marketing" / "growth.md").exists()

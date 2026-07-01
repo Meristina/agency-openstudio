@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cancelMission, getMission, listMissions, runMission } from "./api";
+import { cancelMission, getMission, getPersonaStats, listMissions, runMission } from "./api";
 import type { MissionEvent } from "./types";
 
 const realFetch = global.fetch;
@@ -78,13 +78,25 @@ describe("runMission SSE parsing", () => {
 
     await runMission("g", () => {});
     expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toMatchObject({
-      goal: "g", web_search: false, mcp: false, knowledge: false, mcp_tools: false,
+      goal: "g", web_search: false, mcp: false, knowledge: false, mcp_tools: false, personas: false,
     });
 
-    await runMission("g", () => {}, { webSearch: true, mcp: true, knowledge: true, mcpTools: true });
+    await runMission("g", () => {}, { webSearch: true, mcp: true, knowledge: true, mcpTools: true, personas: true });
     expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toMatchObject({
-      web_search: true, mcp: true, knowledge: true, mcp_tools: true,
+      web_search: true, mcp: true, knowledge: true, mcp_tools: true, personas: true,
     });
+  });
+});
+
+describe("getPersonaStats", () => {
+  it("returns the persona-store stats", async () => {
+    stubFetch({ ok: true, status: 200, json: async () => ({ total: 2, enabled: 1, by_dept: { product: { enabled: 1, names: ["pm"] } } }) });
+    expect(await getPersonaStats()).toEqual({ total: 2, enabled: 1, by_dept: { product: { enabled: 1, names: ["pm"] } } });
+  });
+
+  it("throws on a non-ok response", async () => {
+    stubFetch({ ok: false, status: 503 });
+    await expect(getPersonaStats()).rejects.toThrow(/503/);
   });
 });
 
