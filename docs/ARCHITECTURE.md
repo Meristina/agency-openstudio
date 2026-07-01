@@ -3,8 +3,10 @@
 > Target state. Waves 0-3 are implemented: the stdlib server + `on_event` hook, the React
 > Mission Console, the **local multimodal layer (image / STT / TTS on Metal)** — validated
 > live on an M4 — and **multimodal as a department deliverable** (assets rendered into the
-> dossier + gallery + PDF). The remaining local-inference layers (Waves 4-6: RAG, web search,
-> MCP, extensions) are still deferred. See `ROADMAP.md` for the build order.
+> dossier + gallery + PDF). **Wave 4 (RAG / LocalDocs) core is implemented** — `/api/docs`
+> ingestion, `rag.py` (markitdown → embeddings → `sqlite-vec`), and the `context_clause`
+> retrieval hook (GUI "Docs" tab deferred). The remaining layers (Waves 5-6: web search, MCP,
+> extensions; plus Wave-6 visual RAG / knowledge graphs) are still deferred. See `ROADMAP.md`.
 
 ## Stacked view
 
@@ -21,7 +23,7 @@ top. Three layers:
 │  POST /api/mission · GET /api/missions · /api/mission/{id} (+ /pdf) │
 │  Wave 2 (shipped): POST /api/{image,tts,stt} · GET /api/models      │
 │                    · /media/<asset> (path_inside-guarded)           │
-│  Wave 4 (deferred): /api/docs (RAG)                                 │
+│  Wave 4 (shipped): POST/GET/DELETE /api/docs (RAG) + context_clause │
 └───────────────────────────────┬────────────────────────────────────┘
                                 ▼
 ┌─ agency-kit CORE — logic UNCHANGED ────────────────────────────────┐
@@ -30,8 +32,8 @@ top. Three layers:
 └──────────┬───────────────────────┬─────────────────────────────────┘
            ▼                       ▼
    department tools         LOCAL INFERENCE (multimodal only, Metal)
-   • web search (Claude       • FLUX · Whisper · Kokoro (warm, mutually exclusive) ✅
-     WebSearch already wired) • rag.py: markitdown → embeddings → SQLite (Wave 4)
+   • web search (Claude       • FLUX · Whisper · Kokoro · embeddings (warm, mutually excl.) ✅
+     WebSearch already wired) • rag.py: markitdown → MLX embeddings → sqlite-vec (Wave 4) ✅
    • image/TTS = deliverable  • mcp_client (Jan ideas, fresh MIT code) (Wave 5)
      (Wave 3)
 ```

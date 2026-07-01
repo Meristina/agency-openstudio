@@ -51,11 +51,16 @@ boogu = [
     "mlx-vlm",       # MIT — the Qwen3-VL conditioner Boogu uses
     "Pillow",        # HPND — save the generated array to PNG
 ]
-# Placeholders — populated when the matching waves are implemented (see ROADMAP.md).
-# Wave 4 (RAG): markitdown for document ingestion + an embeddings lib.
+# Wave 4 — RAG / LocalDocs (see docs/WAVE4-PLAN.md). All MIT/Apache, imported LAZILY
+# inside agency_studio.rag / engines.embeddings, so the core server still boots and
+# missions still run with this extra absent — an /api/docs request or a mission retrieval
+# then degrades cleanly (a 501 with install guidance for ingestion; RAG silently skipped
+# for a mission). The embedding model runs on MLX/Metal (Apple Silicon), loaded mutually
+# exclusive with the [media] models via the shared ModelManager.
 studio = [
-    # "markitdown",      # Wave 4 — MIT, document → markdown ingestion
-    # "<embeddings-lib>", # Wave 4 — small local embedding model
+    "markitdown",              # MIT — document (PDF/docx/pptx/…) → markdown ingestion
+    "mlx-embedding-models",    # MIT — MLX-native text embeddings (nomic-embed / bge-m3)
+    "sqlite-vec",              # Apache-2.0/MIT — loadable SQLite vector search extension
 ]
 # PDF export of a mission deliverable (agency-kit's exporter.export_pdf), exposed
 # at GET /api/mission/{id}/pdf. Both imported lazily inside export_pdf, so the

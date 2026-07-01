@@ -18,7 +18,9 @@ project) — we borrow only its *concepts*, never its code.
 | **seedance-2.0** | Video modality (Wave 6, cloud) | MIT | ✅ Cloud mode |
 | **awesome-llm-apps** | Inspiration catalog | Apache-2.0 | 📚 Reference, not a dependency |
 | **Jan** | Mature LLM runner (MCP, OpenAI-compat) | **AGPL-3.0** | ❌ Concepts only, **never the code** |
-| **chunkr** | Document OCR/chunking | **AGPL-3.0** | ❌ Ruled out (AGPL + heavy Rust/Docker service) |
+| **chunkr** | Document OCR/chunking | **AGPL-3.0** | ❌ Ruled out (AGPL + heavy Rust/Docker/Postgres service, not a lib) |
+| **Blaizzy/mlx-embeddings** | MLX embeddings (Wave 4 candidate) | **GPL-3.0** | ❌ Ruled out (GPL) — used MIT `taylorai/mlx_embedding_models` instead |
+| **EmbeddingGemma** | On-device embedding model (Wave 4 candidate) | Gemma Terms | ❌ Not OSI MIT/Apache (use restrictions) — used nomic-embed (Apache) / bge-m3 (MIT) |
 | **LM Studio** | LLM runner | Proprietary | ❌ Closed, not reusable |
 
 ## Wave 2 runtime dependencies — the `[media]` extra (shipped)
@@ -49,6 +51,19 @@ Isolated behind its own backend + extra; an unvetted, work-in-progress **communi
 | **mlx-vlm** | Qwen3-VL conditioner runtime | MIT | ✅ |
 | **Boogu-Image-0.1-Base** weights (mlx-community 4-bit) | Image model | Apache-2.0 | ✅ non-gated |
 | **Qwen3-VL-8B-Instruct** weights (mlx-community 4-bit) | Text/instruction conditioner | Apache-2.0 | ✅ non-gated |
+
+## Wave 4 runtime dependencies — the `[studio]` extra (shipped, offline-first slice)
+
+All MIT/Apache; lazily imported so the core keeps zero runtime deps. Model **weights** are
+downloaded at runtime into the HF cache, pinned to an immutable commit SHA, never bundled.
+
+| Component | Role | License | Notes |
+|---|---|---|---|
+| **microsoft/markitdown** | Document (PDF/docx/pptx/…) → markdown | MIT | ✅ Direct dependency (lazy; absent ⇒ 501) |
+| **mlx_embedding_models** (`taylorai/mlx_embedding_models`) | MLX-native text embeddings | MIT | ✅ Direct dependency (chosen over GPL `Blaizzy/mlx-embeddings`) |
+| **sqlite-vec** (`asg017/sqlite-vec`) | SQLite vector search extension | Apache-2.0/MIT | ✅ Direct dependency; a pure-Python cosine fallback covers builds without loadable extensions |
+| **nomic-embed-text-v1.5** weights (default) | Embedding model | Apache-2.0 | ✅ Non-gated HF repo, pinned by commit SHA (`engines/models.py`) |
+| **bge-m3** weights (option) | Embedding model | MIT | ✅ Non-gated HF repo, pinned by commit SHA |
 
 ## Rule for contributors / agents
 

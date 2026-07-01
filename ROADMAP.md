@@ -15,8 +15,15 @@
 > `## Assets` (step 4), `assets.render`/`rewrite_delivered` + server wiring with the SSE
 > `asset` phase (step 5), and the GUI asset timeline + per-mission gallery + the PDF
 > `/media`→on-disk fix (step 6). Like Wave 2, its offline suite runs anywhere; the live
-> render path needs the Apple Silicon Mac. Waves **4-6**
-> (RAG, web search, MCP, extensions) remain deferred. Setup for Wave 2: Python 3.10+ venv
+> render path needs the Apple Silicon Mac. **Wave 4 — RAG / LocalDocs — core is SHIPPED**
+> (offline-first slice), tracked in `docs/WAVE4-PLAN.md`: the `mlx_embedding_models` embed
+> engine, `agency_studio/rag.py` (markitdown → chunk → embed → `sqlite-vec` store, behind a
+> pluggable `Retriever`), agency-kit's additive `context_clause` hook, and the `/api/docs`
+> endpoints + best-effort mission retrieval injection with a `retrieval` SSE phase. Its
+> offline suite runs anywhere; the live embedding path needs the Apple Silicon Mac, and the
+> **GUI "Docs" tab is a tracked follow-up**. Waves **5-6** (web search, MCP, extensions) —
+> plus Wave-6 visual RAG (PixelRAG) / knowledge graphs (Hyper-Extract) — remain deferred.
+> Setup for Wave 2: Python 3.10+ venv
 > + `[media]` extra + system `ffmpeg` (STT); image defaults to a non-gated 8-bit
 > FLUX.1-schnell mirror (no HF login).
 
@@ -206,11 +213,15 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
   loop · ✅ step 6 GUI asset timeline + per-mission gallery (`AssetGallery`) + PDF
   `/media`→on-disk localization (`exporter._localize_assets`). **Wave 3 complete.**
 
-### Wave 4 — RAG / LocalDocs *(model downloads — deferred)*
-- **Ingestion via `microsoft/markitdown`** (MIT) → Markdown. In the `[studio]` extra.
-- **`agency_studio/rag.py`**: markitdown → chunking → embeddings (nomic-embed via llama.cpp)
-  → **SQLite vector store**. Endpoint `/api/docs` + inject relevant chunks into `_dept_prompt`.
-- ❌ Not `chunkr` (AGPL + Rust/Docker too heavy).
+### Wave 4 — RAG / LocalDocs *(core SHIPPED — see `docs/WAVE4-PLAN.md`; GUI deferred)*
+- **Ingestion via `microsoft/markitdown`** (MIT) → Markdown. In the `[studio]` extra. ✅
+- **`agency_studio/rag.py`**: markitdown → chunking → embeddings (**nomic-embed via MLX**, not
+  llama.cpp — MLX is ~50% faster on embeddings and matches the rest of the local layer) →
+  **`sqlite-vec` SQLite vector store** (pure-Python cosine fallback for extension-less builds),
+  behind a pluggable `Retriever`. Endpoint `/api/docs` + inject relevant chunks via the additive
+  `context_clause` hook. ✅
+- ❌ Not `chunkr` (AGPL + Rust/Docker/Postgres too heavy). ❌ Not `Blaizzy/mlx-embeddings` (GPL).
+- ⏳ **Deferred to a follow-up:** the GUI "Docs" tab (upload / list / delete / per-mission sources).
 
 ### Wave 5 — Local web search + MCP *(deferred)*
 - **`agency_studio/websearch.py`** (DuckDuckGo, fresh code): sourcing for the optional local

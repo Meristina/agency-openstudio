@@ -47,6 +47,32 @@ are enforced in `agency_studio/engines/models.py` (covered by `tests/test_local_
 - The image model is loaded from a **non-gated, Apache-2.0** pre-quantized mirror, so no
   Hugging Face token or credential is stored anywhere (consistent with rule #6).
 
+## Wave 4 — RAG / LocalDocs (rules #1, #3, #4, #5, implemented)
+
+The local-docs layer ingests user documents and stores their text + vectors; it applies the
+same posture as the media layer (covered by `tests/test_server.py` + `tests/test_rag.py`):
+
+- **The document store is never web-served.** Ingested text + embeddings live in a SQLite
+  DB under `<project>/.agency-studio/` — deliberately **outside** `studio_assets/`, the only
+  root the `/media` route serves. So no `/media/...` request can ever reach a document's text
+  (rule #3, by construction — the DB is not under the served root at all).
+- **The upload body is bounded and streamed.** `POST /api/docs` streams the raw file to a
+  short-lived temp file capped at `_MAX_DOC_BYTES` (64 MiB) in `_READ_CHUNK` pieces (never
+  held whole in RAM), then deletes it; `rag.MAX_DOC_CHARS` bounds the extracted text before
+  chunking. The uploaded `filename` is reduced to its basename (`Path(...).name`) so it can't
+  carry a path (defense in depth — it's only used for a suffix + a display title).
+- **The embedding model download is pinned** (rules #4/#5): pulled by repo id through
+  `huggingface_hub` (allowlisted host, content-addressed cache) and pinned to an immutable
+  commit SHA in `engines/models.py` (`EMBED_MODELS[...].revision`), so a moved/force-pushed
+  repo can't swap the weights on the next load — the same guarantee as the Wave-2 STT/image
+  pins.
+- **`sqlite-vec` is a local file extension only** — no network, no server; loaded via
+  `sqlite3.enable_load_extension`, and if that is unavailable the pure-Python fallback runs
+  (no native code loaded at all).
+- **Retrieval is best-effort and never weakens the gate.** Retrieved excerpts are injected
+  as an additive `context_clause` (see `docs/WAVE4-PLAN.md`); they reach the department +
+  synthesis prompts only, never the router or Inspector, and the veto loop is unchanged.
+
 ## `path_inside()` reference implementation
 
 Mirrors the shipped guard in `agency_studio/server.py` (the source of truth). It takes the
