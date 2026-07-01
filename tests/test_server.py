@@ -178,7 +178,7 @@ def test_stream_mission_wires_a_live_cancel_predicate(monkeypatch, tmp_path):
     captured = {}
 
     def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
-                  asset_clause=None, render_assets=None):
+                  asset_clause=None, render_assets=None, context_clause=None):
         captured["should_cancel"] = should_cancel
         on_event({"phase": "route", "status": "done", "route": []})
         return runner_bridge.MissionResult(
@@ -264,7 +264,7 @@ def test_endpoint_cancel_stops_an_in_flight_mission_and_emits_cancelled(monkeypa
     from agency_cli.engines.cli_engine import MissionCancelled
 
     def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
-                  asset_clause=None, render_assets=None):
+                  asset_clause=None, render_assets=None, context_clause=None):
         on_event({"phase": "route", "status": "done", "route": ["solve"]})
         for _ in range(500):  # ~5s ceiling: a stuck cancel fails the test, never hangs CI
             if should_cancel():
@@ -1033,7 +1033,7 @@ def test_post_mission_passes_asset_hook_to_runner(monkeypatch, tmp_path):
     captured = {}
 
     def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
-                  asset_clause=None, render_assets=None):
+                  asset_clause=None, render_assets=None, context_clause=None):
         captured["asset_clause"] = asset_clause
         captured["render_assets"] = render_assets
         return runner_bridge.MissionResult(
@@ -1060,7 +1060,7 @@ def test_done_frame_carries_asset_summary(monkeypatch, tmp_path):
     from agency_cli import runner_bridge
 
     def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
-                  asset_clause=None, render_assets=None):
+                  asset_clause=None, render_assets=None, context_clause=None):
         return runner_bridge.MissionResult(path=tmp_path, dossier={
             "verdicts": [{"verdict": "PASS"}], "mission_id": "x",
             "assets": [
@@ -1082,3 +1082,176 @@ def test_done_frame_carries_asset_summary(monkeypatch, tmp_path):
     done = next(e for e in events if e["phase"] == "done")
     assert done["assets_total"] == 2 and done["assets_rendered"] == 1
     assert len(done["assets"]) == 2
+
+
+# ── Wave 4 — RAG: /api/docs endpoints + retrieval injection ─────────────────────
+
+def _delete(host, port, path):
+    conn = http.client.HTTPConnection(host, port)
+    conn.request("DELETE", path)
+    resp = conn.getresponse()
+    return resp, resp.read()
+
+
+class _FakeRetriever:
+    """In-memory stand-in for LocalRetriever — no markitdown, no MLX, no sqlite. Lets the
+    endpoint + injection wiring be tested without the [studio] extra."""
+
+    def __init__(self, *, hits=None):
+        self._docs = {}
+        self._hits = hits or []
+
+    def ingest(self, doc_bytes, filename):
+        from agency_studio.rag import DocMeta
+        import uuid as _uuid
+        meta = DocMeta(id=_uuid.uuid4().hex, filename=filename,
+                       title=f"Title of {filename}", n_chunks=3, created=123.0)
+        self._docs[meta.id] = meta
+        self.last_bytes = doc_bytes
+        return meta
+
+    def list_docs(self):
+        return list(self._docs.values())
+
+    def delete(self, doc_id):
+        return self._docs.pop(doc_id, None) is not None
+
+    def retrieve(self, query, *, k=5):
+        return self._hits
+
+
+def _use_fake_retriever(monkeypatch, fake):
+    monkeypatch.setattr(server.StudioHandler, "_retriever", lambda self: fake)
+
+
+def test_ingest_document_then_list(monkeypatch, tmp_path):
+    _use_fake_retriever(monkeypatch, _FakeRetriever())
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _post(host, port, "/api/docs?filename=report.pdf", body=b"raw pdf bytes")
+        assert resp.status == 201
+        meta = json.loads(body)
+        assert meta["filename"] == "report.pdf" and meta["n_chunks"] == 3
+        resp, body = _get(host, port, "/api/docs")
+        docs = json.loads(body)["docs"]
+        assert len(docs) == 1 and docs[0]["id"] == meta["id"]
+    finally:
+        httpd.shutdown()
+
+
+def test_list_docs_empty(monkeypatch, tmp_path):
+    _use_fake_retriever(monkeypatch, _FakeRetriever())
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _get(host, port, "/api/docs")
+        assert resp.status == 200 and json.loads(body) == {"docs": []}
+    finally:
+        httpd.shutdown()
+
+
+def test_ingest_empty_body_is_400(monkeypatch, tmp_path):
+    _use_fake_retriever(monkeypatch, _FakeRetriever())
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, _ = _post(host, port, "/api/docs?filename=x.txt", body=b"")
+        assert resp.status == 400
+    finally:
+        httpd.shutdown()
+
+
+def test_delete_document_is_idempotent(monkeypatch, tmp_path):
+    _use_fake_retriever(monkeypatch, _FakeRetriever())
+    httpd, host, port = _start(tmp_path)
+    try:
+        _, body = _post(host, port, "/api/docs?filename=a.md", body=b"# H\ntext")
+        doc_id = json.loads(body)["id"]
+        resp, body = _delete(host, port, f"/api/docs/{doc_id}")
+        assert resp.status == 200 and json.loads(body)["deleted"] == doc_id
+        assert json.loads(_get(host, port, "/api/docs")[1])["docs"] == []
+        resp, _ = _delete(host, port, f"/api/docs/{doc_id}")  # already gone
+        assert resp.status == 404
+    finally:
+        httpd.shutdown()
+
+
+def test_ingest_without_studio_extra_returns_501(tmp_path):
+    # No stub: the REAL retriever runs, markitdown is absent offline → MediaUnavailable → 501.
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _post(host, port, "/api/docs?filename=r.pdf", body=b"%PDF-1.7 bytes")
+        assert resp.status == 501
+        assert "studio" in body.decode().lower()
+    finally:
+        httpd.shutdown()
+
+
+def test_models_status_includes_embed_models(tmp_path):
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _get(host, port, "/api/models")
+        payload = json.loads(body)
+        ids = [m["id"] for m in payload["embed_models"]]
+        assert "nomic-text-v1.5" in ids
+        default = next(m for m in payload["embed_models"] if m["default"])
+        assert default["id"] == "nomic-text-v1.5"
+    finally:
+        httpd.shutdown()
+
+
+def test_mission_injects_retrieved_context_and_emits_phase(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio.rag import Chunk
+    from agency_cli import runner_bridge
+    fake = _FakeRetriever(hits=[Chunk("d1", 0, "Solar", "panels convert sunlight", score=0.9)])
+    fake.ingest(b"seed", "solar.md")   # one doc present → retrieval runs
+    _use_fake_retriever(monkeypatch, fake)
+
+    captured = {}
+
+    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
+                  asset_clause=None, render_assets=None, context_clause=None):
+        captured["context_clause"] = context_clause
+        on_event({"phase": "route", "status": "done", "route": []})
+        return runner_bridge.MissionResult(path=tmp_path, dossier={"verdicts": [], "mission_id": "id"})
+
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=json.dumps({"goal": "solar plan"}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    retrieval = [e for e in events if e.get("phase") == "retrieval"]
+    assert any(e["status"] == "done" and e["hits"] == 1 for e in retrieval)
+    assert captured["context_clause"] is not None
+    assert "REFERENCE DOCUMENTS" in captured["context_clause"]
+
+
+def test_mission_without_docs_injects_no_context(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_cli import runner_bridge
+    _use_fake_retriever(monkeypatch, _FakeRetriever())  # no docs ingested
+
+    captured = {}
+
+    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
+                  asset_clause=None, render_assets=None, context_clause=None):
+        captured["context_clause"] = context_clause
+        on_event({"phase": "route", "status": "done", "route": []})
+        return runner_bridge.MissionResult(path=tmp_path, dossier={"verdicts": [], "mission_id": "id"})
+
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=json.dumps({"goal": "x"}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    assert captured["context_clause"] is None
+    assert not [e for e in events if e.get("phase") == "retrieval"]

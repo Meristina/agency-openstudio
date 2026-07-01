@@ -31,7 +31,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterable
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -55,6 +55,12 @@ _MAX_AUDIO_BYTES = 32 << 20  # 32 MiB
 
 # Chunk size for streaming a large request body to disk (STT upload).
 _READ_CHUNK = 1 << 16  # 64 KiB
+
+# Upper bound on an uploaded document body for RAG ingestion (POST /api/docs). Documents
+# (PDF/docx/pptx) are larger than an audio clip; still bounded, still streamed to disk in
+# _READ_CHUNK pieces (never held whole in RAM). rag.MAX_DOC_CHARS bounds the extracted text
+# downstream, so this only caps the raw upload.
+_MAX_DOC_BYTES = 64 << 20  # 64 MiB
 
 # Bounds on image-generation parameters (POST /api/image). The request BYTE size is
 # bounded, but the COMPUTE it triggers is not — an unclamped width/height/steps could
@@ -476,6 +482,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_list_missions()
         if path == "/api/models":
             return self._handle_models_status()
+        if path == "/api/docs":
+            return self._handle_list_docs()
         if path.startswith("/api/mission/"):
             rest = path[len("/api/mission/"):]
             if rest.endswith("/pdf"):
@@ -497,10 +505,20 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_synthesize()
         if path == "/api/stt":
             return self._handle_transcribe()
+        if path == "/api/docs":
+            return self._handle_ingest_doc()
         if path.startswith("/api/mission/") and path.endswith("/cancel"):
             run_id = path[len("/api/mission/"):-len("/cancel")]
             return self._handle_cancel_mission(run_id)
         # Unknown POST: the body is never read, so close to avoid a keep-alive desync.
+        self._reject(404, "not found")
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        if not self._host_allowed():
+            return
+        path = urlparse(self.path).path
+        if path.startswith("/api/docs/"):
+            return self._handle_delete_doc(path[len("/api/docs/"):])
         self._reject(404, "not found")
 
     # ── API: list / get saved missions ───────────────────────────────────────
@@ -674,6 +692,10 @@ class StudioHandler(BaseHTTPRequestHandler):
         project_root = self.server.project_root  # type: ignore[attr-defined]
         # Built over the server (never `self`) so the daemon worker doesn't pin the handler.
         render_assets = _build_render_assets(self.server, events, cancel_event)  # type: ignore[attr-defined]
+        # Wave 4 — RAG: retrieve sourced excerpts from the user's docs BEFORE the run, on
+        # the handler thread (the retrieval SSE frame precedes route/dept). Best-effort and
+        # captured as a plain string, so the daemon worker closes over no handler state.
+        context_clause = self._retrieve_context(goal)
 
         def _worker() -> None:
             # Capture only `project_root` (a str) + `render_assets` (closed over the server,
@@ -691,6 +713,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                     should_cancel=cancel_event.is_set,
                     asset_clause=ASSET_CLAUSE,
                     render_assets=render_assets,
+                    context_clause=context_clause,
                 )
             except MissionCancelled:
                 # Stopped before any persistence. Recorded so that — when the client
@@ -805,6 +828,101 @@ class StudioHandler(BaseHTTPRequestHandler):
                 from agency_studio.engines.local_media import ModelManager
                 server.media = ModelManager(server.assets_root)
             return server.media
+
+    def _retriever(self):
+        """Lazily build + cache the one local-docs retriever for this server. Created on
+        the first /api/docs request (or the first mission retrieval), so the [studio] extra
+        is only needed when RAG is actually used. Bound to the default embed model; its
+        SQLite store lives under docs_root (outside assets_root — never web-served)."""
+        server = self.server  # type: ignore[attr-defined]
+        with server.retriever_lock:  # type: ignore[attr-defined]
+            if server.retriever is None:  # type: ignore[attr-defined]
+                from agency_studio.rag import LocalRetriever
+                from agency_studio.engines import models as media_models
+                db = server.docs_root / f"localdocs-{media_models.DEFAULT_EMBED_MODEL}.db"  # type: ignore[attr-defined]
+                server.retriever = LocalRetriever(self._media_manager(), db_path=db)  # type: ignore[attr-defined]
+            return server.retriever  # type: ignore[attr-defined]
+
+    def _handle_ingest_doc(self) -> None:
+        """Ingest an uploaded document for RAG (POST /api/docs?filename=report.pdf, the raw
+        file as the body). The body is streamed to a short-lived temp file (bounded, never
+        held whole in RAM), converted + chunked + embedded + stored, then the temp removed.
+        Absent [studio] extra → 501; unreadable/empty document → 400."""
+        import tempfile
+        query = parse_qs(urlparse(self.path).query)
+        filename = Path((query.get("filename", ["upload"])[0] or "upload")).name
+        tmp_dir = Path(tempfile.mkdtemp(prefix="agency-doc-"))
+        upload = tmp_dir / filename
+        written = self._stream_body_to_file(upload, max_bytes=_MAX_DOC_BYTES)
+        try:
+            if written is None:
+                return  # _stream_body_to_file already sent the error + cleaned the partial
+            if written == 0:
+                return self._send_error_json(400, "empty document body")
+            try:
+                meta = self._retriever().ingest(upload.read_bytes(), filename)
+            except ImportError as exc:  # markitdown / mlx-embedding-models absent ([studio])
+                return self._send_error_json(501, str(exc))
+            except ValueError as exc:  # no extractable text
+                return self._send_error_json(400, str(exc))
+            except Exception:  # conversion / embedding failure — clean 500, never a socket drop
+                import traceback
+                traceback.print_exc()
+                return self._send_error_json(500, "document ingestion failed")
+        finally:
+            upload.unlink(missing_ok=True)
+            tmp_dir.rmdir()
+        self._send_json({
+            "id": meta.id, "filename": meta.filename, "title": meta.title,
+            "n_chunks": meta.n_chunks, "created": meta.created,
+        }, status=201)
+
+    def _handle_list_docs(self) -> None:
+        """List ingested documents (GET /api/docs). Reading the store needs no extra, so
+        this works even without [studio] (an un-built store simply lists empty)."""
+        docs = self._retriever().list_docs()
+        self._send_json({"docs": [
+            {"id": d.id, "filename": d.filename, "title": d.title,
+             "n_chunks": d.n_chunks, "created": d.created}
+            for d in docs
+        ]})
+
+    def _handle_delete_doc(self, doc_id: str) -> None:
+        """Delete an ingested document and its chunks (DELETE /api/docs/{id}). 404 for an
+        unknown id (idempotent — a second delete is just another 404)."""
+        if self._read_body() is None:
+            return  # malformed/oversized body already answered
+        if not doc_id or "/" in doc_id:
+            return self._send_error_json(404, "unknown document")
+        if not self._retriever().delete(doc_id):
+            return self._send_error_json(404, "unknown document")
+        self._send_json({"deleted": doc_id})
+
+    def _retrieve_context(self, goal: str) -> "str | None":
+        """Best-effort RAG retrieval for a mission goal → the ``context_clause`` string (or
+        None). Emits a ``retrieval`` SSE phase frame. Never fatal: no ingested docs is an
+        instant no-op (no model load); a missing [studio] extra or any failure skips RAG so
+        the mission still runs (the deliverable just won't cite local docs)."""
+        try:
+            retriever = self._retriever()
+            if not retriever.list_docs():
+                return None  # no docs → nothing to retrieve, no embed model loaded
+            self._write_sse({"phase": "retrieval", "status": "start"})
+            from agency_studio.rag import build_context_clause
+            chunks = retriever.retrieve(goal, k=5)
+            self._write_sse({
+                "phase": "retrieval", "status": "done", "hits": len(chunks),
+                "sources": [{"title": c.title, "doc_id": c.doc_id} for c in chunks],
+            })
+            return build_context_clause(chunks)
+        except ImportError:  # [studio] extra absent though docs exist — run without RAG
+            self._write_sse({"phase": "retrieval", "status": "skipped"})
+            return None
+        except Exception:  # any retrieval failure is non-fatal — the mission must still run
+            import traceback
+            traceback.print_exc()
+            self._write_sse({"phase": "retrieval", "status": "skipped"})
+            return None
 
     def _read_json_body(self) -> "dict | None":
         """Read + parse a small JSON object body. Returns the dict, or ``None`` after
@@ -937,6 +1055,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         self._send_json({
             "resident": mgr.resident if mgr is not None else None,
             "image_models": media_models.image_models_payload(),
+            "embed_models": media_models.embed_models_payload(),
             "models": {
                 "stt": media_models.STT_HF_REPO,
                 "tts": "kokoro-v1.0",
@@ -1051,6 +1170,14 @@ def make_server(
     httpd.assets_root = Path(project_root).resolve() / "studio_assets"  # type: ignore[attr-defined]
     httpd.media = None  # type: ignore[attr-defined]
     httpd.media_lock = threading.Lock()  # type: ignore[attr-defined]
+    # Wave 4 — RAG / LocalDocs. Ingested documents + their vectors live in a SQLite store
+    # under <project>/.agency-studio/ — deliberately OUTSIDE assets_root, so the document
+    # text is NEVER reachable through the /media route (which serves assets_root). Built
+    # lazily on the first /api/docs or mission-retrieval request (the [studio] extra is only
+    # needed then). retriever_lock serializes the lazy init.
+    httpd.docs_root = Path(project_root).resolve() / ".agency-studio"  # type: ignore[attr-defined]
+    httpd.retriever = None  # type: ignore[attr-defined]
+    httpd.retriever_lock = threading.Lock()  # type: ignore[attr-defined]
     # Retention cap on studio_assets/: bounds cumulative disk growth (oldest-first eviction).
     # Enforced after each render and once at startup; retention_lock serializes concurrent prunes.
     httpd.media_budget_bytes = media_budget_bytes  # type: ignore[attr-defined]
