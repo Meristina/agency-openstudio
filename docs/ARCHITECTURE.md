@@ -1,9 +1,10 @@
 # Architecture — Agency Studio
 
-> Target state. Waves 0-2 are implemented: the stdlib server + `on_event` hook, the React
-> Mission Console, and the **local multimodal layer (image / STT / TTS on Metal)** —
-> validated live on an M4. The remaining local-inference layers (Waves 3-6: multimodal-as-
-> deliverable, RAG, web search, MCP) are still deferred. See `ROADMAP.md` for the build order.
+> Target state. Waves 0-3 are implemented: the stdlib server + `on_event` hook, the React
+> Mission Console, the **local multimodal layer (image / STT / TTS on Metal)** — validated
+> live on an M4 — and **multimodal as a department deliverable** (assets rendered into the
+> dossier + gallery + PDF). The remaining local-inference layers (Waves 4-6: RAG, web search,
+> MCP, extensions) are still deferred. See `ROADMAP.md` for the build order.
 
 ## Stacked view
 
