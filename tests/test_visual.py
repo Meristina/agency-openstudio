@@ -121,8 +121,14 @@ def test_visual_unavailable_is_an_importerror():
     assert issubclass(visual.VisualUnavailable, ImportError)
 
 
-def test_local_backend_absent_raises_visual_unavailable(monkeypatch):
-    # The real local probe: mlx_vlm is not installed offline → VisualUnavailable (→ 501).
+def _force_mlx_absent(monkeypatch):
+    """Make ``import mlx_vlm`` fail, so ``visual._probe_local`` raises ``VisualUnavailable`` on ANY
+    machine — the offline-CI condition these tests assert — whether or not the ``[visual]`` extra is
+    actually installed (it IS, on the Apple-Silicon target Mac, which would otherwise load a real 7B
+    VLM and fail deep inside mlx-vlm). Patches ``builtins.__import__`` (process-global, so it also
+    covers a caption running on the server's worker thread), NOT ``visual._probe_local`` — the
+    ``_VISUAL_BACKENDS`` dispatch table binds a direct reference to the probe that a module-attr
+    patch would never reach. Returns nothing; the patch auto-reverts at test teardown."""
     import builtins
     real_import = builtins.__import__
 
@@ -132,13 +138,20 @@ def test_local_backend_absent_raises_visual_unavailable(monkeypatch):
         return real_import(name, *a, **k)
 
     monkeypatch.setattr(builtins, "__import__", _no_mlx)
+
+
+def test_local_backend_absent_raises_visual_unavailable(monkeypatch):
+    # The real local probe: mlx_vlm forced absent → VisualUnavailable (→ 501).
+    _force_mlx_absent(monkeypatch)
     with pytest.raises(visual.VisualUnavailable):
         visual._probe_local()
 
 
 def test_real_manager_caption_local_default_hits_the_local_backend(monkeypatch, tmp_path):
     # A REAL ModelManager + cloud=False must dispatch to the LOCAL backend (which, with mlx_vlm
-    # absent, raises VisualUnavailable) — never a cloud/network attempt.
+    # forced absent, raises VisualUnavailable) — never a cloud/network attempt.
+    _force_mlx_absent(monkeypatch)
+
     def _boom_cloud(*a, **k):
         raise AssertionError("the cloud backend must not run without explicit consent")
 
@@ -150,9 +163,11 @@ def test_real_manager_caption_local_default_hits_the_local_backend(monkeypatch, 
 
 
 def test_real_manager_caption_dispatches_on_the_cloud_flag(monkeypatch, tmp_path):
-    # A REAL ModelManager must route on the `cloud` flag. With no API key set, each backend's probe
-    # raises a DISTINCT message — cloud=True hits the cloud probe (API key), cloud=False hits the
-    # local probe (mlx-vlm) — proving the dispatch actually selects the backend from the flag.
+    # A REAL ModelManager must route on the `cloud` flag. With no API key set (and mlx_vlm forced
+    # absent), each backend's probe raises a DISTINCT message — cloud=True hits the cloud probe
+    # (API key), cloud=False hits the local probe (mlx-vlm) — proving the dispatch actually selects
+    # the backend from the flag, deterministically whether or not the [visual] extra is installed.
+    _force_mlx_absent(monkeypatch)
     monkeypatch.delenv(visual.CLOUD_API_KEY_ENV, raising=False)
     mgr = ModelManager(tmp_path)
     with pytest.raises(visual.VisualUnavailable, match=visual.CLOUD_API_KEY_ENV):

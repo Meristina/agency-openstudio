@@ -2069,9 +2069,20 @@ def test_ingest_image_cloud_consent_threads_to_ingest(monkeypatch, tmp_path):
 
 
 def test_ingest_image_without_visual_extra_returns_501(monkeypatch, tmp_path):
-    # No stub: the real VisualRetriever + a real ModelManager. mlx-vlm is absent offline, so the
-    # caption backend's lazy import raises VisualUnavailable (ImportError) → 501.
+    # No stub: the real VisualRetriever + a real ModelManager. mlx-vlm's lazy import is FORCED to
+    # fail (process-global __import__ patch — covers the server worker thread too), so the caption
+    # backend raises VisualUnavailable (ImportError) → 501, deterministically whether or not the
+    # [visual] extra is actually installed (it is, on the Apple-Silicon target Mac).
     monkeypatch.setenv("HOME", str(tmp_path))
+    import builtins
+    real_import = builtins.__import__
+
+    def _no_mlx(name, *a, **k):
+        if name == "mlx_vlm":
+            raise ImportError("no mlx_vlm")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _no_mlx)
     httpd, host, port = _start(tmp_path)
     try:
         resp, body = _post(host, port, "/api/visual?filename=x.png", body=b"\x89PNG bytes")
