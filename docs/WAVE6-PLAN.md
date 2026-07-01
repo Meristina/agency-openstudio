@@ -1,4 +1,12 @@
-# Wave 6 — Knowledge graphs (graph-RAG over docs + history) · Implementation Plan
+# Wave 6 — Advanced extensions · Implementation Plan
+
+> Wave 6 is a **basket of five independent plug-ins** (knowledge graphs · MCP tool-calling ·
+> persona doctrine · visual RAG · cloud video). This plan tracks the bricks as they land. Two
+> are **BUILT** so far — the **knowledge-graph** brick (below) and the **MCP tool-calling**
+> brick (see the second section); the remaining three (persona doctrine, visual RAG, cloud
+> video) stay deferred and are **not** built here.
+
+## Brick 1 — Knowledge graphs (graph-RAG over docs + history)
 
 > Status: **BUILT** — the first Wave 6 brick, end-to-end: the module
 > (`agency_studio/knowledge.py`), the server wiring (`_resolve_kg_clause`, `knowledge` flag,
@@ -10,10 +18,6 @@
 > read-only investigation of the shipped `Retriever` / `context_clause` seam.
 > This plan supersedes the naive one-line `ROADMAP.md §Wave 6` sketch (`hyper-extract →
 > knowledge.py`) with the corrections the code surfaced.
->
-> Wave 6 is a **basket of five independent plug-ins** (knowledge graphs · persona doctrine ·
-> visual RAG · cloud video · MCP tool-calling). This plan scopes **only the knowledge-graph
-> brick**; the other four remain deferred and are **not** built here.
 
 ## Goal (ROADMAP, verbatim)
 
@@ -157,3 +161,82 @@ is a manual step, like Wave 4's live embeddings.
   fast-paths the `GraphRetriever` seam leaves room for, not this brick.
 - **A visual graph explorer UI.** The GUI reflects graph *stats* + the timeline step; an
   interactive node-link canvas is out of scope for the offline-first slice.
+
+---
+
+## Brick 2 — MCP tool-calling (the `claude --mcp-config` path)
+
+> Status: **BUILT** — the second Wave 6 brick, end-to-end across **two repos**: the additive
+> agency-kit engine hook (`agency-kit-studio`), the studio config-builder + server wiring +
+> GUI, and the offline suites in both. The **live tool-calling path** (the `claude` CLI
+> actually spawning MCP servers and invoking their tools) needs a real MCP server on the Mac,
+> deferred like Wave 5's live MCP resources.
+
+### The load-bearing correction
+
+Wave 5 deliberately shipped MCP as **read-only resources-as-context** (the studio reads
+resources itself and injects them through `context_clause`), and marked *tool-calling* as "the
+`claude --mcp-config` path, deferred to Wave 6." That deferral is now paid: unlike every prior
+brick, tool-calling **cannot** ride `context_clause` — it must reach the actual `claude`
+subprocess command to add `--mcp-config`. So this is the first brick to add a **new additive
+hook on the agency-kit engine** (the same shape as the Wave-4 `context_clause` hook: additive,
+default-None, byte-identical when unused).
+
+### The decisions (final)
+
+- **T1 — the engine hook (agency-kit):** `run_mission_cli` (and `runner_bridge.run` /
+  `_run_and_persist` / `resume`) gain `mcp_config_path` + `mcp_allowed_tools` params
+  (default None). A `_with_mcp(cmd, path, tools)` helper splices `--mcp-config <path>
+  --strict-mcp-config` + the `mcp__*` tool patterns into the **claude-code** command only
+  (gated on `--allowedTools` being present); any other engine / no config ⇒ byte-identical.
+- **T2 — departments + synthesis only:** the augmented command is used for the **department**
+  and **synthesis** `_call`s — where deliverables are produced — and **NOT** for the router or
+  the **inspector** (they stay on the base command). This mirrors how `context_clause` is
+  withheld from the inspector, so the Art. IX quality gate's inputs are unchanged: the veto
+  loop / `_short_verdict` logic never sees the tool surface.
+- **T3 — `--strict-mcp-config`:** the CLI uses ONLY the studio-written config, never the
+  user's global `.mcp.json`, so the reachable server set is exactly what the studio built from
+  `mcp.json` (reproducible + bounded).
+- **T4 — config from `mcp.json` (studio):** `mcp_client.build_cli_config(servers)` maps the
+  **enabled** servers to the claude `--mcp-config` shape (`{"mcpServers": {name: {command,
+  args} | {type:"http", url}}}`) and the `mcp__<name>` allow-patterns. Pure, offline-testable.
+- **T5 — opt-in, default OFF:** a per-mission `mcp_tools` flag (distinct from Wave 5's read-only
+  `mcp` resources flag). The server writes the config to a **short-lived OS temp file** (never
+  under `assets_root`; removed in the worker's `finally`), emits an `mcp_tools` SSE phase
+  (start → done with server names / skipped), and threads the path + tools into
+  `runner_bridge.run` — gated on the engine hook being present (older agency-kit ⇒ skip). GUI:
+  an "MCP tools" toggle (gated on `mcp.json` like the resources toggle) + timeline step.
+
+### Security (SECURITY.md discipline)
+
+- **Subprocess surface is the sharp edge** — the `claude` CLI spawns the MCP `stdio` servers
+  and invokes their tools. Those servers come **only** from the local, user-authored
+  `mcp.json` (never from network input), exactly as in Wave 5. `--strict-mcp-config` bounds the
+  set to the studio's file. The temp config lives in the OS temp dir (no `/media` route reaches
+  it) and is deleted after the run.
+- **Prompt-injection residual (documented, accepted):** tool RESULTS are now fed back to the
+  model by the `claude` CLI itself (the studio never sees them) — the same residual any
+  tool-using agent carries; the mitigation is that the user explicitly opted in and authored
+  the server list.
+
+### File-by-file (built)
+
+- `agency-kit-studio/agency_cli/engines/cli_engine.py` — `_with_mcp` + the `mcp_config_path` /
+  `mcp_allowed_tools` params on `run_mission_cli`; `exec_cmd` used for dept + synth only.
+- `agency-kit-studio/agency_cli/runner_bridge.py` — thread the params through `run` /
+  `_run_and_persist` / `resume`.
+- `agency_studio/mcp_client.py` — `build_cli_config(servers)` (pure).
+- `agency_studio/server.py` — `_resolve_mcp_tools` (write temp config, emit `mcp_tools` phase,
+  set run kwargs), the `mcp_tools` opt-in flag, hook-presence gate, temp-file cleanup.
+- GUI — `McpToolsEvent` type, `mcpTools` timeline fold + `Timeline.tsx` render, the "MCP tools"
+  toggle in `App.tsx` / `api.ts`.
+- Tests — `agency-kit-studio/tests/test_engine.py` + `test_cli.py` (hook + locality),
+  `tests/test_mcp_client.py` (`build_cli_config`), `tests/test_server.py` (flag on/off, no
+  servers, cleanup), frontend timeline/api/component tests.
+
+### Non-goals (deferred — do not build here)
+
+- **Tool selection / per-tool allow-listing.** This brick allows every tool an enabled server
+  exposes (`mcp__<name>`); a finer per-tool policy is a later refinement.
+- **Exposing MCP tools to the inspector or router.** Deliberately withheld (T2) to keep the
+  Art. IX gate inputs unchanged.

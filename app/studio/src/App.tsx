@@ -33,6 +33,7 @@ export default function App() {
   const [goal, setGoal] = useState("");
   const [webSearch, setWebSearch] = useState(false);
   const [useMcp, setUseMcp] = useState(false);
+  const [useMcpTools, setUseMcpTools] = useState(false);
   const [mcpCount, setMcpCount] = useState<number | null>(null);
   const [useKnowledge, setUseKnowledge] = useState(false);
   const [graphNodes, setGraphNodes] = useState<number | null>(null);
@@ -153,7 +154,7 @@ export default function App() {
           if (e.phase === "done" && e.mission_id) completedId = e.mission_id;
           if (e.phase === "cancelled") cancelled = true;
         },
-        { signal: ctrl.signal, webSearch, mcp: useMcp, knowledge: useKnowledge },
+        { signal: ctrl.signal, webSearch, mcp: useMcp, knowledge: useKnowledge, mcpTools: useMcpTools },
       );
       // The stream ended on a terminal frame. Always refresh first so a mission that
       // won the cancel race (finished before the stop landed) still shows in History.
@@ -188,7 +189,7 @@ export default function App() {
       // mutually-exclusive rule), so refresh the warm-model chip when it ends.
       void refreshModelStatus();
     }
-  }, [goal, webSearch, useMcp, useKnowledge, running, refreshMissions, openMission, refreshModelStatus]);
+  }, [goal, webSearch, useMcp, useKnowledge, useMcpTools, running, refreshMissions, openMission, refreshModelStatus]);
 
   // "Stop mission" cancels this exact run via the explicit endpoint (the server then
   // kills the in-flight engine subprocess before persistence). `cancelMission` is
@@ -317,6 +318,22 @@ export default function App() {
                 disabled={running}
               />
               Use MCP{mcpCount ? ` (${mcpCount})` : ""}
+            </label>
+            <label
+              className="toggle"
+              title={
+                mcpCount === 0
+                  ? "No MCP servers configured — add them to mcp.json to use this."
+                  : "Let the engine INVOKE your configured MCP servers' tools during the mission (opt-in; distinct from reading their resources as context)."
+              }
+            >
+              <input
+                type="checkbox"
+                checked={useMcpTools}
+                onChange={(ev) => setUseMcpTools(ev.target.checked)}
+                disabled={running}
+              />
+              MCP tools{mcpCount ? ` (${mcpCount})` : ""}
             </label>
             <label
               className="toggle"

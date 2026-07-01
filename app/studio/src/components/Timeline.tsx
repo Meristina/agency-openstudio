@@ -25,7 +25,7 @@ export default function Timeline({ events }: { events: MissionEvent[] }) {
   // Re-fold only when the event list itself changes — not on the per-second
   // `elapsed`-tick re-renders App fires during a run.
   const model = useMemo(() => groupTimeline(events), [events]);
-  const empty = !model.retrieval && !model.websearch && !model.mcp && !model.graph && !model.route && model.depts.length === 0 && !model.terminal;
+  const empty = !model.retrieval && !model.websearch && !model.mcp && !model.mcpTools && !model.graph && !model.route && model.depts.length === 0 && !model.terminal;
 
   if (empty) return <p className="muted">No events yet — run a mission to see the live timeline.</p>;
 
@@ -111,6 +111,31 @@ export default function Timeline({ events }: { events: MissionEvent[] }) {
           {model.mcp.status === "skipped" && (
             <p className="muted">
               MCP skipped{model.mcp.reason ? ` — ${model.mcp.reason}` : ""}
+            </p>
+          )}
+        </section>
+      )}
+      {model.mcpTools && (
+        <section className="phase">
+          <h4>MCP tools</h4>
+          {model.mcpTools.status === "running" && (
+            <p className="muted">configuring MCP tools…</p>
+          )}
+          {model.mcpTools.status === "done" && (
+            <>
+              <p>{model.mcpTools.servers.length} server{model.mcpTools.servers.length === 1 ? "" : "s"} available to the engine</p>
+              {model.mcpTools.servers.length > 0 && (
+                <div className="chips">
+                  {model.mcpTools.servers.map((s) => (
+                    <span key={s} className="chip">{s}</span>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+          {model.mcpTools.status === "skipped" && (
+            <p className="muted">
+              MCP tools skipped{model.mcpTools.reason ? ` — ${model.mcpTools.reason}` : ""}
             </p>
           )}
         </section>

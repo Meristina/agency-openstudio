@@ -158,6 +158,44 @@ def test_mcp_unavailable_is_an_importerror():
     assert issubclass(mc.McpUnavailable, ImportError)
 
 
+# ── Wave 6 — build_cli_config (the claude --mcp-config payload) ──────────────────
+
+def test_build_cli_config_maps_stdio_and_http_and_allowed_tools():
+    servers = [
+        mc.ServerConfig("wiki", "stdio", True, command="mcp-wiki", args=["--root", "/w"]),
+        mc.ServerConfig("api", "http", True, url="https://mcp.example/mcp"),
+    ]
+    config, allowed = mc.build_cli_config(servers)
+    assert config == {"mcpServers": {
+        "wiki": {"command": "mcp-wiki", "args": ["--root", "/w"]},
+        "api": {"type": "http", "url": "https://mcp.example/mcp"},
+    }}
+    assert allowed == ["mcp__wiki", "mcp__api"]
+
+
+def test_build_cli_config_excludes_disabled_servers():
+    servers = [
+        mc.ServerConfig("on", "stdio", True, command="x"),
+        mc.ServerConfig("off", "stdio", False, command="y"),
+    ]
+    config, allowed = mc.build_cli_config(servers)
+    assert list(config["mcpServers"]) == ["on"]
+    assert allowed == ["mcp__on"]
+
+
+def test_build_cli_config_empty_when_no_enabled_servers():
+    config, allowed = mc.build_cli_config([])
+    assert config == {"mcpServers": {}} and allowed == []
+
+
+def test_build_cli_config_reads_mcp_json_when_no_servers_passed():
+    _write_config({"servers": [
+        {"name": "wiki", "transport": "stdio", "command": "mcp-wiki"},
+    ]})
+    config, allowed = mc.build_cli_config()
+    assert list(config["mcpServers"]) == ["wiki"] and allowed == ["mcp__wiki"]
+
+
 # ── SDK-shape helpers (pure) ─────────────────────────────────────────────────────
 
 def test_text_of_joins_content_parts():

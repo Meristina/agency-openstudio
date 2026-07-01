@@ -57,9 +57,18 @@ a clean web GUI.
 > an already-built graph needs no extra**. Opt-in per mission (`knowledge` flag, default off) with
 > a `graph` SSE phase, `GET /api/graph` + `POST /api/graph/build`, and the GUI "Use knowledge graph"
 > toggle + timeline step. Its offline suite runs anywhere (extractor stubbed); the live extraction
-> path needs the Apple Silicon Mac (deferred like Wave 2). The **other four Wave-6 plug-ins**
-> (persona doctrine, visual RAG (PixelRAG), cloud video (seedance), MCP tool-calling) **remain
-> deferred**; see `ROADMAP.md`. Do **not** invent implementation that the roadmap/WAVE-PLANs defer.
+> path needs the Apple Silicon Mac (deferred like Wave 2). The **MCP tool-calling brick** (Brick 2)
+> is also BUILT — the first brick that can't ride `context_clause`: it adds a **new additive
+> agency-kit engine hook** (`mcp_config_path` / `mcp_allowed_tools` on `run_mission_cli`, spliced by
+> `_with_mcp` into the claude **department + synthesis** commands only — never the router/inspector,
+> so the Art. IX gate's inputs are unchanged), while the studio builds the `--mcp-config` from the
+> enabled `mcp.json` servers (`mcp_client.build_cli_config`), writes a short-lived temp file, emits
+> an `mcp_tools` SSE phase, and threads it + the `mcp__*` tools through `runner_bridge.run` under a
+> new `mcp_tools` opt-in flag (default off) + GUI toggle. This brick spans **both repos** (the hook
+> lands in agency-kit-studio, like the Wave-4 `context_clause` hook did); its live tool-calling path
+> needs a real MCP server on the Mac. The **remaining three Wave-6 plug-ins** (persona doctrine,
+> visual RAG (PixelRAG), cloud video (seedance)) **remain deferred**; see `ROADMAP.md`. Do **not**
+> invent implementation that the roadmap/WAVE-PLANs defer.
 >
 > **Running Wave 2 (target Mac):** a **Python 3.10+ venv** with the `[media]` extra
 > (`pip install -e ".[media]"`), plus **`ffmpeg`** on PATH for speech-to-text

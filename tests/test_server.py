@@ -12,6 +12,7 @@ import json
 import socket
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -1274,12 +1275,20 @@ def test_mission_without_docs_injects_no_context(monkeypatch, tmp_path):
 # ── Wave 5 — web search: opt-in web context injection ───────────────────────────
 
 def _capture_run(monkeypatch, captured):
-    """Stub runner_bridge.run to record the context_clause and emit a minimal timeline."""
+    """Stub runner_bridge.run to record the context_clause / MCP-tool hook and emit a minimal
+    timeline. The fake carries the mcp_config_path/mcp_allowed_tools params so the server's
+    hook-presence check (inspect.signature) sees them, exercising the Wave-6 tool-calling path;
+    it reads the temp --mcp-config while it still exists (the worker deletes it after)."""
     from agency_cli import runner_bridge
 
     def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
-                  asset_clause=None, render_assets=None, context_clause=None):
+                  asset_clause=None, render_assets=None, context_clause=None,
+                  mcp_config_path=None, mcp_allowed_tools=None):
         captured["context_clause"] = context_clause
+        captured["mcp_config_path"] = mcp_config_path
+        captured["mcp_allowed_tools"] = mcp_allowed_tools
+        if mcp_config_path:
+            captured["mcp_config"] = json.loads(Path(mcp_config_path).read_text(encoding="utf-8"))
         on_event({"phase": "route", "status": "done", "route": []})
         return runner_bridge.MissionResult(path=None, dossier={"verdicts": [], "mission_id": "id"})
 
@@ -1629,3 +1638,87 @@ def test_build_graph_without_kg_extra_returns_501(monkeypatch, tmp_path):
         assert "kg" in body.decode().lower()
     finally:
         httpd.shutdown()
+
+
+# ── Wave 6 — MCP tool-calling: opt-in --mcp-config threaded into the engine ───────
+
+def _stub_mcp_config(monkeypatch, servers):
+    from agency_studio import mcp_client
+    monkeypatch.setattr(mcp_client, "load_config", lambda path=None: servers)
+
+
+def test_mission_with_mcp_tools_flag_writes_config_and_emits_phase(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio.mcp_client import ServerConfig
+    _use_fake_retriever(monkeypatch, _FakeRetriever())
+    _stub_mcp_config(monkeypatch, [
+        ServerConfig("wiki", "stdio", True, command="mcp-wiki", args=["--root", "/w"]),
+    ])
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "ship it", "mcp_tools": True}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    phase = [e for e in events if e.get("phase") == "mcp_tools"]
+    assert any(e["status"] == "done" and e["servers"] == ["wiki"] for e in phase)
+    assert captured["mcp_allowed_tools"] == ["mcp__wiki"]
+    assert captured["mcp_config"]["mcpServers"]["wiki"]["command"] == "mcp-wiki"
+    # The temp --mcp-config is cleaned up after the run.
+    assert not Path(captured["mcp_config_path"]).exists()
+
+
+def test_mission_without_mcp_tools_flag_does_no_tool_calling(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio.mcp_client import ServerConfig
+    _use_fake_retriever(monkeypatch, _FakeRetriever())
+
+    def _boom(path=None):
+        raise AssertionError("MCP tool config must not be built when the flag is absent")
+
+    from agency_studio import mcp_client
+    monkeypatch.setattr(mcp_client, "load_config", _boom)
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=json.dumps({"goal": "x"}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    assert not [e for e in events if e.get("phase") == "mcp_tools"]
+    assert captured["mcp_config_path"] is None
+
+
+def test_mission_mcp_tools_with_no_enabled_servers_skips(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio.mcp_client import ServerConfig
+    _use_fake_retriever(monkeypatch, _FakeRetriever())
+    _stub_mcp_config(monkeypatch, [ServerConfig("off", "stdio", False, command="x")])
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "x", "mcp_tools": True}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    phase = [e for e in events if e.get("phase") == "mcp_tools"]
+    assert any(e["status"] == "skipped" for e in phase)
+    assert captured["mcp_config_path"] is None

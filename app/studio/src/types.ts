@@ -117,6 +117,20 @@ export interface McpEvent {
 }
 
 /**
+ * Wave 6 — MCP tool-calling, streamed once at mission start when the user opted in (the
+ * `mcp_tools` flag). `start` opens the setup; `done` carries the server names whose tools were
+ * handed to the engine (via `--mcp-config`); `skipped` carries a `reason` (no enabled servers,
+ * a malformed config, or an older agency-kit without the hook — best-effort, the mission still
+ * runs). Distinct from the Wave-5 `mcp` (read-only resources) phase. Absent without the flag.
+ */
+export interface McpToolsEvent {
+  phase: "mcp_tools";
+  status: "start" | "done" | "skipped";
+  servers?: string[];
+  reason?: string;
+}
+
+/**
  * Wave 6 — knowledge graph, streamed once at the start of a mission when the user opted in
  * (the `knowledge` flag). `start` opens the phase; `done` carries how many entities the goal
  * matched plus their {label, kind}; `skipped` carries a `reason` (missing [kg] extra or a
@@ -166,6 +180,7 @@ export type MissionEvent =
   | RetrievalEvent
   | WebSearchEvent
   | McpEvent
+  | McpToolsEvent
   | KnowledgeEvent
   | DoneEvent
   | ErrorEvent

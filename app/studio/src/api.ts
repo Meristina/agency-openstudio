@@ -100,13 +100,13 @@ export async function cancelMission(runId: string): Promise<boolean> {
 export async function runMission(
   goal: string,
   onEvent: (event: MissionEvent) => void,
-  opts: { engine?: string; signal?: AbortSignal; webSearch?: boolean; mcp?: boolean; knowledge?: boolean } = {},
+  opts: { engine?: string; signal?: AbortSignal; webSearch?: boolean; mcp?: boolean; knowledge?: boolean; mcpTools?: boolean } = {},
 ): Promise<void> {
   const res = await fetch("/api/mission", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    // web_search + mcp (Wave 5) and knowledge (Wave 6) are opt-in per mission; all default
-    // false, so the request stays byte-identical to a pre-Wave-5 launch unless the user
+    // web_search + mcp (Wave 5) and knowledge + mcp_tools (Wave 6) are opt-in per mission; all
+    // default false, so the request stays byte-identical to a pre-Wave-5 launch unless the user
     // enabled them.
     body: JSON.stringify({
       goal,
@@ -114,6 +114,7 @@ export async function runMission(
       web_search: opts.webSearch ?? false,
       mcp: opts.mcp ?? false,
       knowledge: opts.knowledge ?? false,
+      mcp_tools: opts.mcpTools ?? false,
     }),
     signal: opts.signal,
   });

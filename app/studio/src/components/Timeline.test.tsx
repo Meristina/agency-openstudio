@@ -44,6 +44,27 @@ describe("<Timeline>", () => {
     expect(text).toContain("failed — no voice");
   });
 
+  it("renders the MCP tools phase with the configured servers", () => {
+    const events: MissionEvent[] = [
+      { phase: "mcp_tools", status: "start" },
+      { phase: "mcp_tools", status: "done", servers: ["wiki", "db"] },
+      { phase: "route", status: "done", route: ["product"] },
+    ];
+    const text = render(<Timeline events={events} />).container.textContent ?? "";
+    expect(text).toContain("MCP tools");
+    expect(text).toContain("2 servers available to the engine");
+    expect(text).toContain("wiki");
+    expect(text).toContain("db");
+  });
+
+  it("renders a skipped MCP tools phase with its reason", () => {
+    const events: MissionEvent[] = [
+      { phase: "mcp_tools", status: "skipped", reason: "no enabled MCP servers configured" },
+    ];
+    const text = render(<Timeline events={events} />).container.textContent ?? "";
+    expect(text).toContain("MCP tools skipped — no enabled MCP servers configured");
+  });
+
   it("renders the knowledge-graph phase with matched entities", () => {
     const events: MissionEvent[] = [
       { phase: "graph", status: "start" },

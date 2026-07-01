@@ -5,7 +5,7 @@ import type { MissionEvent } from "./types";
 describe("groupTimeline", () => {
   it("returns an empty model for no events", () => {
     const m = groupTimeline([]);
-    expect(m).toEqual({ retrieval: null, websearch: null, mcp: null, graph: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null });
+    expect(m).toEqual({ retrieval: null, websearch: null, mcp: null, mcpTools: null, graph: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null });
     expect(runStatus(m)).toBe("idle");
   });
 
@@ -70,7 +70,7 @@ describe("groupTimeline", () => {
       { phase: "route", status: "done", route: ["solve"] },
     ]);
     // The run frame contributes no step; only the route shows.
-    expect(m).toEqual({ retrieval: null, websearch: null, mcp: null, graph: null, route: ["solve"], depts: [], synth: [], inspect: [], assets: [], terminal: null });
+    expect(m).toEqual({ retrieval: null, websearch: null, mcp: null, mcpTools: null, graph: null, route: ["solve"], depts: [], synth: [], inspect: [], assets: [], terminal: null });
   });
 
   it("folds an asset render phase: start→done pairs into ok steps with the served url", () => {
@@ -194,6 +194,26 @@ describe("groupTimeline", () => {
     ]);
     expect(m.mcp).toEqual({
       status: "skipped", hits: null, sources: [], reason: "mcp extra not installed",
+    });
+    expect(runStatus(m)).toBe("running");
+  });
+
+  it("folds an mcp_tools start→done with the configured server names", () => {
+    const m = groupTimeline([
+      { phase: "run", run_id: "f".repeat(32) },
+      { phase: "mcp_tools", status: "start" },
+      { phase: "mcp_tools", status: "done", servers: ["wiki", "db"] },
+      { phase: "route", status: "done", route: ["solve"] },
+    ]);
+    expect(m.mcpTools).toEqual({ status: "done", servers: ["wiki", "db"], reason: null });
+  });
+
+  it("folds a skipped mcp_tools with its reason and reads as running", () => {
+    const m = groupTimeline([
+      { phase: "mcp_tools", status: "skipped", reason: "no enabled MCP servers configured" },
+    ]);
+    expect(m.mcpTools).toEqual({
+      status: "skipped", servers: [], reason: "no enabled MCP servers configured",
     });
     expect(runStatus(m)).toBe("running");
   });

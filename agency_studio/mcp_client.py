@@ -140,6 +140,35 @@ def list_servers(path: "Optional[Path]" = None) -> "List[dict]":
     return [cfg.public() for cfg in load_config(path)]
 
 
+# ── Wave 6 — MCP tool-calling: build the claude --mcp-config (pure, offline) ─────
+
+def build_cli_config(servers: "Optional[List[ServerConfig]]" = None) -> "tuple[dict, List[str]]":
+    """Build the ``claude --mcp-config`` payload + the allowed-tool patterns from the ENABLED
+    servers in ``mcp.json``. Returns ``(config_dict, allowed_tools)`` — pure, offline-testable.
+
+    Unlike Wave 5's read-only *resources-as-context* (the studio reads resources itself), this
+    hands the user's MCP servers to the ``claude`` CLI so the model can **invoke their tools**
+    while producing department/synthesis deliverables (see ``docs/WAVE6-PLAN.md``).
+
+    The config shape is the claude CLI's own: ``{"mcpServers": {name: entry}}`` where a stdio
+    entry is ``{"command", "args"}`` and an http entry is ``{"type": "http", "url"}``. The
+    ``allowed_tools`` are the ``mcp__<name>`` patterns that permit every tool a server exposes
+    (paired with ``--strict-mcp-config`` on the engine side, only these servers are reachable).
+    Disabled servers are excluded; no enabled servers ⇒ ``({"mcpServers": {}}, [])`` so the
+    caller can treat it as a no-op."""
+    cfgs = [c for c in (servers if servers is not None else load_config()) if c.enabled]
+    mcp_servers: dict = {}
+    allowed: "List[str]" = []
+    for c in cfgs:
+        if c.transport == "stdio":
+            entry = {"command": c.command, "args": list(c.args)}
+        else:
+            entry = {"type": "http", "url": c.url}
+        mcp_servers[c.name] = entry
+        allowed.append(f"mcp__{c.name}")
+    return {"mcpServers": mcp_servers}, allowed
+
+
 # ── SDK seam (async, stubbed in tests) ──────────────────────────────────────────
 
 def _text_of(content) -> str:

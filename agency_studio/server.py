@@ -307,6 +307,48 @@ def _resolve_kg_clause(kg_retriever, goal, emit, should_cancel):
                            unavailable_reason="knowledge-graph extra not installed")
 
 
+def _resolve_mcp_tools(run_kwargs, emit, should_cancel):
+    """Wave 6 MCP tool-calling (opt-in): write a ``--mcp-config`` file from the ENABLED servers
+    in ``mcp.json``, and thread its path + the allowed ``mcp__*`` tools into ``run_kwargs`` so
+    the engine can invoke those tools during departments/synthesis. Emits the ``mcp_tools`` SSE
+    phase (start → done with the server names, or skipped with a reason). Best-effort: any
+    failure is a skipped frame and the mission runs WITHOUT tools (never aborts — the same
+    invariant as the context resolvers). Returns the temp config path for the caller to remove
+    after the run (or None when nothing was configured).
+
+    The config file is written to the OS temp dir (never under ``assets_root`` — no ``/media``
+    route reaches it) and is short-lived (removed in the worker's finally)."""
+    if should_cancel():
+        return None
+    emit({"phase": "mcp_tools", "status": "start"})
+    try:
+        from agency_studio import mcp_client
+        servers = [s for s in mcp_client.load_config() if s.enabled]
+        if not servers:
+            emit({"phase": "mcp_tools", "status": "skipped",
+                  "reason": "no enabled MCP servers configured"})
+            return None
+        config, allowed = mcp_client.build_cli_config(servers)
+        import tempfile
+        with tempfile.NamedTemporaryFile(
+            mode="w", prefix="agency-mcp-", suffix=".json", delete=False, encoding="utf-8"
+        ) as fh:
+            json.dump(config, fh)
+            path = fh.name
+        run_kwargs["mcp_config_path"] = path
+        run_kwargs["mcp_allowed_tools"] = allowed
+        emit({"phase": "mcp_tools", "status": "done", "servers": [s.name for s in servers]})
+        return path
+    except ValueError as exc:  # malformed mcp.json
+        emit({"phase": "mcp_tools", "status": "skipped", "reason": str(exc)[:200]})
+        return None
+    except Exception as exc:  # non-fatal — run without tool-calling, surface the real reason
+        import traceback
+        traceback.print_exc()
+        emit({"phase": "mcp_tools", "status": "skipped", "reason": str(exc)[:200]})
+        return None
+
+
 def _compose_context_clause(*blocks: "Optional[str]") -> "Optional[str]":
     """Join the non-None ``context_clause`` blocks (RAG, web, MCP, and — Wave 6 — the knowledge
     graph) into the single ``context_clause`` string threaded to ``run_mission_cli``. Returns
@@ -710,7 +752,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         request = self._parse_mission_request()
         if request is None:
             return  # a 400 was already sent
-        goal, engine, web_search, use_mcp, use_knowledge = request
+        goal, engine, web_search, use_mcp, use_knowledge, use_mcp_tools = request
         self._begin_sse()
         # Register an ephemeral run id BEFORE streaming, and announce it as the first
         # frame, so the GUI can stop this exact run via POST /api/mission/{id}/cancel
@@ -720,7 +762,8 @@ class StudioHandler(BaseHTTPRequestHandler):
         self._register_run(run_id, cancel_event)
         try:
             self._write_sse({"phase": "run", "run_id": run_id})
-            result_box = self._stream_mission(goal, engine, cancel_event, web_search, use_mcp, use_knowledge)
+            result_box = self._stream_mission(goal, engine, cancel_event, web_search, use_mcp,
+                                              use_knowledge, use_mcp_tools)
         finally:
             # Deregister the instant the run is over — BEFORE writing the terminal
             # frame — so a cancel arriving during that (socket-write) window gets a
@@ -758,14 +801,15 @@ class StudioHandler(BaseHTTPRequestHandler):
         cancel_event.set()
         self._send_json({"status": "cancelling", "run_id": run_id}, status=202)
 
-    def _parse_mission_request(self) -> "tuple[str, str, bool, bool, bool] | None":
+    def _parse_mission_request(self) -> "tuple[str, str, bool, bool, bool, bool] | None":
         """Read + validate the JSON body. Returns ``(goal, engine, web_search, use_mcp,
-        use_knowledge)``, or ``None`` after sending the matching error: a 400 for bad JSON / a
-        non-object body / missing goal, or the error ``_read_body`` already sent
-        (400/408/411/413) for a malformed, withheld, chunked, or oversized body.
-        ``web_search`` / ``use_mcp`` (Wave 5) and ``knowledge`` (Wave 6) are the opt-in flags
-        (default false) — any truthy JSON value enables the matching best-effort context step;
-        absent/false leaves the mission byte-identical to a run without that feature."""
+        use_knowledge, use_mcp_tools)``, or ``None`` after sending the matching error: a 400 for
+        bad JSON / a non-object body / missing goal, or the error ``_read_body`` already sent
+        (400/408/411/413) for a malformed, withheld, chunked, or oversized body. ``web_search``
+        / ``use_mcp`` (Wave 5) and ``knowledge`` / ``mcp_tools`` (Wave 6) are the opt-in flags
+        (default false) — any truthy JSON value enables the matching feature; absent/false
+        leaves the mission byte-identical to a run without that feature. ``mcp_tools`` is the
+        tool-calling counterpart to Wave 5's read-only ``mcp`` resources flag."""
         payload = self._read_json_body()
         if payload is None:
             return None  # _read_json_body already sent the error (and closed if needed)
@@ -775,7 +819,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             return None
         return (goal, payload.get("engine") or "claude-code",
                 bool(payload.get("web_search")), bool(payload.get("mcp")),
-                bool(payload.get("knowledge")))
+                bool(payload.get("knowledge")), bool(payload.get("mcp_tools")))
 
     def _begin_sse(self) -> None:
         """Emit the SSE response headers. The Mission Console consumes this via
@@ -794,6 +838,7 @@ class StudioHandler(BaseHTTPRequestHandler):
     def _stream_mission(
         self, goal: str, engine: str, cancel_event: threading.Event,
         web_search: bool = False, use_mcp: bool = False, use_knowledge: bool = False,
+        use_mcp_tools: bool = False,
     ) -> "dict | None":
         """Run the mission on a worker thread and stream its progress events.
 
@@ -830,6 +875,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             import inspect
             from agency_cli import runner_bridge
             from agency_cli.engines.cli_engine import MissionCancelled
+            run_params = inspect.signature(runner_bridge.run).parameters
+            mcp_tools_config = None   # temp --mcp-config file to clean up after the run
             try:
                 run_kwargs = dict(
                     goal=goal, project_root=project_root, engine=engine,
@@ -841,7 +888,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                 # an older agency-kit never pays a network round-trip (web/MCP) whose result
                 # would then be silently discarded. A mismatched agency-kit would else TypeError
                 # on the unexpected kwarg and break EVERY mission; here it degrades gracefully.
-                if "context_clause" in inspect.signature(runner_bridge.run).parameters:
+                if "context_clause" in run_params:
                     # Wave 4 (RAG, auto when the user has docs) + Wave 5 (web search + MCP, each
                     # opt-in per mission) each produce an independent block; compose into the
                     # single context_clause. User docs first, fresh web results, then MCP.
@@ -866,6 +913,17 @@ class StudioHandler(BaseHTTPRequestHandler):
                 elif retriever is not None or web_search or use_mcp or use_knowledge:
                     print("[studio] installed agency-kit lacks the context_clause hook; "
                           "running without RAG / web / MCP / knowledge context")
+                # Wave 6 — MCP tool-calling (opt-in): write a --mcp-config from the enabled
+                # mcp.json servers and thread it + the allowed mcp__* tools into the run, so
+                # departments/synthesis can INVOKE those tools (distinct from Wave 5's read-only
+                # resources). Gated on the additive engine hook being present, like the clause.
+                if use_mcp_tools and "mcp_config_path" in run_params:
+                    mcp_tools_config = _resolve_mcp_tools(
+                        run_kwargs, events.put, cancel_event.is_set
+                    )
+                elif use_mcp_tools:
+                    print("[studio] installed agency-kit lacks the mcp_config_path hook; "
+                          "running without MCP tool-calling")
                 result_box["result"] = runner_bridge.run(**run_kwargs)
             except MissionCancelled:
                 # Stopped before any persistence. Recorded so that — when the client
@@ -876,6 +934,13 @@ class StudioHandler(BaseHTTPRequestHandler):
             except Exception as exc:  # surfaced to the client as an SSE error event
                 result_box["error"] = str(exc)
             finally:
+                # The MCP tool-calling config is a temp file that only needs to outlive the
+                # engine run (synchronous — done by now); remove it on every exit path.
+                if mcp_tools_config is not None:
+                    try:
+                        Path(mcp_tools_config).unlink()
+                    except OSError:
+                        pass
                 events.put(None)  # sentinel: worker finished
 
         threading.Thread(target=_worker, daemon=True).start()
