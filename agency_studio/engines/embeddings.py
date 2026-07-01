@@ -42,15 +42,35 @@ def _probe_embed() -> None:
         raise MediaUnavailable(f"text embeddings need mlx-embedding-models — {_STUDIO_HINT}") from exc
 
 
+def _shim_legacy_tokenizer(model) -> None:
+    """Restore ``batch_encode_plus`` on the loaded model's tokenizer when the installed
+    ``transformers`` (5.x) has removed it.
+
+    ``mlx-embedding-models`` 0.0.11 tokenizes via ``self.tokenizer.batch_encode_plus(...)``, a
+    method ``transformers`` 5.x dropped in favour of ``__call__`` — which takes the same
+    ``padding/truncation/max_length`` args and returns the same ``BatchEncoding`` (``input_ids`` /
+    ``attention_mask`` / ``token_type_ids``). Without this shim, ``model.encode()`` raises
+    ``AttributeError: BertTokenizer has no attribute batch_encode_plus`` (#38), which blocks the
+    whole embed path (docs/visual/knowledge). We can't pin ``transformers<5`` because the
+    ``[visual]`` extra's ``mlx-vlm`` needs 5.x — so a one-line compat alias is the fix that lets a
+    single ``transformers`` satisfy both. No-op when the method already exists (older transformers)
+    or no tokenizer is present. Validated live (transformers 5.12.1, nomic-embed → real 768-dim
+    vectors)."""
+    tok = getattr(model, "tokenizer", None)
+    if tok is not None and not hasattr(tok, "batch_encode_plus"):
+        tok.batch_encode_plus = tok.__call__  # __call__ is the drop-in replacement
+
+
 def _load_embed(entry: "models.EmbedModel"):
     """Load the embedding model from its registry entry. The weights are fetched + cached
     by HF and PINNED to ``entry.revision`` (via ``_pinned_repo`` → a local snapshot dir),
     so the exact reviewed commit loads even if the repo later moves. Passing the pinned dir
     as ``model_path`` keeps the per-model pooling from the registry entry (``from_registry``
-    would re-resolve the repo at HEAD, unpinned)."""
+    would re-resolve the repo at HEAD, unpinned). ``_shim_legacy_tokenizer`` then patches the
+    tokenizer for transformers-5.x compatibility (see its docstring)."""
     from mlx_embedding_models.embedding import EmbeddingModel
     model_path = _pinned_repo(entry.repo, entry.revision)  # local snapshot dir (pinned), or repo id
-    return EmbeddingModel(
+    model = EmbeddingModel(
         model_path=model_path,
         pooling_strategy=entry.pooling_strategy,
         normalize=entry.normalize,
@@ -58,6 +78,8 @@ def _load_embed(entry: "models.EmbedModel"):
         nomic_bert=entry.nomic_bert,
         apply_ln=entry.apply_ln,
     )
+    _shim_legacy_tokenizer(model)
+    return model
 
 
 def _run_embed(model, entry: "models.EmbedModel", *, texts: "List[str]", kind: str) -> "List[List[float]]":

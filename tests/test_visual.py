@@ -57,8 +57,12 @@ def test_visual_retriever_satisfies_the_retriever_protocol(visual_retriever):
     assert isinstance(visual_retriever, rag.Retriever)   # the @runtime_checkable Wave-6 seam
 
 
-def test_visual_store_uses_pure_python_fallback_offline(visual_retriever):
-    assert visual_retriever._store.has_vec is False
+def test_visual_store_uses_pure_python_fallback_when_sqlite_vec_absent(monkeypatch, tmp_path):
+    # Same as the rag test: force the sqlite-vec loader to fail so the pure-Python fallback is
+    # exercised deterministically whether or not sqlite-vec is installed ([studio], on the Mac).
+    monkeypatch.setattr(rag, "_try_load_sqlite_vec", lambda conn: False)
+    r = visual.VisualRetriever(_FakeManager(), db_path=tmp_path / "v_fallback.db")
+    assert r._store.has_vec is False
 
 
 def test_ingest_captions_via_the_manager_and_stores_it(visual_retriever):

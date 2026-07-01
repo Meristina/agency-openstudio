@@ -442,6 +442,40 @@ def test_embed_switching_model_evicts_and_reloads(tmp_path, monkeypatch):
     assert counters["loaded_models"] == ["nomic-text-v1.5", "bge-m3"]
 
 
+# ── transformers-5.x compat shim (#38) ───────────────────────────────────────
+def test_shim_adds_batch_encode_plus_when_transformers5_removed_it():
+    # transformers 5.x dropped batch_encode_plus; mlx-embedding-models 0.0.11 still calls it.
+    # The shim must alias it to the tokenizer's __call__ (the drop-in replacement), so encode works.
+    class _Tok:
+        def __call__(self, *a, **k):
+            return {"input_ids": [[1]], "attention_mask": [[1]], "token_type_ids": [[0]]}
+    class _Model:
+        def __init__(self):
+            self.tokenizer = _Tok()
+    model = _Model()
+    assert not hasattr(model.tokenizer, "batch_encode_plus")   # the transformers-5.x state
+    embeddings._shim_legacy_tokenizer(model)
+    assert model.tokenizer.batch_encode_plus == model.tokenizer.__call__   # aliased, not reimplemented
+    assert "input_ids" in model.tokenizer.batch_encode_plus(["x"])         # and it actually works
+
+
+def test_shim_is_a_noop_when_batch_encode_plus_already_present():
+    # Older transformers (4.x) still have batch_encode_plus — the shim must NOT overwrite it.
+    sentinel = object()
+    class _Tok:
+        batch_encode_plus = sentinel
+        def __call__(self, *a, **k):
+            return {}
+    class _Model:
+        tokenizer = _Tok()
+    embeddings._shim_legacy_tokenizer(_Model())
+    assert _Tok.batch_encode_plus is sentinel   # untouched
+
+
+def test_shim_tolerates_a_model_without_a_tokenizer():
+    embeddings._shim_legacy_tokenizer(object())   # no tokenizer attr → no-op, never raises
+
+
 def test_embed_and_image_are_mutually_exclusive(tmp_path, monkeypatch):
     counters = _stub_backends(monkeypatch)
     mgr = local_media.ModelManager(tmp_path)
@@ -462,9 +496,20 @@ def test_embed_unknown_model_raises_value_error(tmp_path, monkeypatch):
         mgr.embed(["x"], model="does-not-exist")
 
 
-def test_probe_embed_without_extra_raises_media_unavailable():
-    # The [studio] extra (mlx_embedding_models) is absent in the offline suite, so the
-    # real probe must raise MediaUnavailable (→ the server's 501), mirroring boogu/media.
+def test_probe_embed_without_extra_raises_media_unavailable(monkeypatch):
+    # The real probe must raise MediaUnavailable (→ the server's 501) when the [studio] extra
+    # (mlx_embedding_models) is absent. Force the import to fail so this holds deterministically
+    # whether or not the extra is actually installed — the extra IS present on the target Mac,
+    # which would otherwise make this assertion fail (same robustness fix as the visual tests, #36).
+    import builtins
+    real_import = builtins.__import__
+
+    def _no_embed(name, *a, **k):
+        if name == "mlx_embedding_models":
+            raise ImportError("no mlx_embedding_models")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _no_embed)
     with pytest.raises(local_media.MediaUnavailable):
         embeddings._probe_embed()
 

@@ -108,10 +108,13 @@ def local_retriever(tmp_path, monkeypatch):
     return rag.LocalRetriever(_FakeManager(), db_path=tmp_path / "docs.db")
 
 
-def test_store_uses_pure_python_fallback_offline(local_retriever):
-    # sqlite-vec is not installed in the offline suite, so the fallback path is what runs
-    # (and is therefore what these tests cover).
-    assert local_retriever._store.has_vec is False
+def test_store_uses_pure_python_fallback_when_sqlite_vec_absent(monkeypatch, tmp_path):
+    # When sqlite-vec can't load, the store falls back to pure-Python cosine. Force the loader to
+    # fail so this exercises the fallback deterministically whether or not sqlite-vec is installed
+    # (it IS, via [studio], on the target Mac — same robustness fix as #36/#38).
+    monkeypatch.setattr(rag, "_try_load_sqlite_vec", lambda conn: False)
+    store = rag._VectorStore(tmp_path / "fallback.db", 8)
+    assert store.has_vec is False
 
 
 def test_ingest_then_retrieve_returns_the_relevant_chunk(local_retriever):
@@ -184,9 +187,20 @@ def test_store_is_usable_across_threads(local_retriever):
     assert len(local_retriever.list_docs()) == 2
 
 
-def test_markitdown_absent_raises_media_unavailable():
-    # markitdown ships in [studio]; absent offline, the real converter must raise
-    # MediaUnavailable (→ the server's 501), mirroring the media/embed extras.
+def test_markitdown_absent_raises_media_unavailable(monkeypatch):
+    # markitdown ships in [studio]; when absent, the real converter must raise MediaUnavailable
+    # (→ the server's 501). Force the import to fail so this holds whether or not [studio] is
+    # installed — it IS on the target Mac, which would otherwise make this assertion fail (same
+    # robustness fix as the visual/embed tests, #36/#38).
+    import builtins
     from agency_studio.engines.local_media import MediaUnavailable
+    real_import = builtins.__import__
+
+    def _no_markitdown(name, *a, **k):
+        if name == "markitdown":
+            raise ImportError("no markitdown")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _no_markitdown)
     with pytest.raises(MediaUnavailable):
         rag._markitdown_to_text(b"data", "x.pdf")

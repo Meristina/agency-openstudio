@@ -1249,8 +1249,19 @@ def test_delete_document_is_idempotent(monkeypatch, tmp_path):
         httpd.shutdown()
 
 
-def test_ingest_without_studio_extra_returns_501(tmp_path):
-    # No stub: the REAL retriever runs, markitdown is absent offline → MediaUnavailable → 501.
+def test_ingest_without_studio_extra_returns_501(tmp_path, monkeypatch):
+    # No stub: the REAL retriever runs; with markitdown absent it must return 501. Force the
+    # import to fail (process-global, covers the server worker thread) so this holds whether or
+    # not [studio] is installed — it IS on the target Mac (same robustness fix as #36/#38).
+    import builtins
+    real_import = builtins.__import__
+
+    def _no_markitdown(name, *a, **k):
+        if name == "markitdown":
+            raise ImportError("no markitdown")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _no_markitdown)
     httpd, host, port = _start(tmp_path)
     try:
         resp, body = _post(host, port, "/api/docs?filename=r.pdf", body=b"%PDF-1.7 bytes")

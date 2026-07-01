@@ -61,6 +61,8 @@ studio = [
     "markitdown",              # MIT — document (PDF/docx/pptx/…) → markdown ingestion
     "mlx-embedding-models",    # MIT — MLX-native text embeddings (nomic-embed / bge-m3)
     "sqlite-vec",              # Apache-2.0/MIT — loadable SQLite vector search extension
+    "einops",                  # MIT — required by the nomic-embed remote modeling code (not a
+                               # transitive dep of mlx-embedding-models; #38)
 ]
 # Wave 5 — local web search (see docs/WAVE5-PLAN.md). Pure-Python, cross-platform (no
 # Metal), so it lives in its own portable extra — NOT the Mac-heavy [media]/[studio] ones.

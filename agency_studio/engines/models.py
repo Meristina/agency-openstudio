@@ -170,12 +170,16 @@ IMAGE_MODELS: "dict[str, ImageModel]" = {
     # Experimental: Boogu-Image-0.1 (Apache-2.0, #1 on Qwen-Image-Bench) via the
     # community MLX port (the `[boogu]` extra). Heaviest option — the 10B image model
     # rides a Qwen3-VL-8B conditioner — and SLOW: non-distilled, so it needs many steps
-    # (default 16 here; the model recommends ~30 for best quality → minutes/image on a
-    # 16 GB Mac). Validated end-to-end on the target Mac in Wave 2.4. Loaded mutually
-    # exclusive like every other model. Both weight repos are non-gated.
+    # (default 16 here; the model recommends ~30 for best quality). Unlike every other
+    # model it loads TWO heavyweight models CO-RESIDENT (base + the Qwen3-VL conditioner
+    # in one pipeline), so it does NOT fit the 16 GB reference Mac: a live run (#39) swap-
+    # thrashed (~19.7 GB swap, no diffusion step after ~9 min) and had to be killed. Treat
+    # as **>16 GB only** (needs ~32 GB+, not yet re-validated there). This is why boogu is
+    # excluded from the untrusted marker allowlist (assets.MARKER_IMAGE_MODELS). Both weight
+    # repos are non-gated.
     "boogu-base": ImageModel(
         id="boogu-base", label="Boogu-Image 0.1 (experimental)",
-        note="Highest quality · slow · experimental",
+        note="Highest quality · experimental · needs >16 GB RAM (swap-thrashes on 16 GB)",
         backend="boogu",
         base_repo="mlx-community/Boogu-Image-0.1-Base-4bit",
         qwen_repo="mlx-community/Qwen3-VL-8B-Instruct-4bit",
