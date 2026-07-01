@@ -5,8 +5,13 @@
 > live on an M4 — and **multimodal as a department deliverable** (assets rendered into the
 > dossier + gallery + PDF). **Wave 4 (RAG / LocalDocs) is implemented** — `/api/docs`
 > ingestion, `rag.py` (markitdown → embeddings → `sqlite-vec`), the `context_clause`
-> retrieval hook, and the GUI "Docs" tab. The remaining layers (Waves 5-6: web search, MCP,
-> extensions; plus Wave-6 visual RAG / knowledge graphs) are still deferred. See `ROADMAP.md`.
+> retrieval hook, and the GUI "Docs" tab. **Wave 5 (local web search + MCP) is built** — both
+> land as *web-RAG*: the studio fetches web results (`websearch.py`, ddgs) and reads MCP
+> server resources (`mcp_client.py`, the official MIT SDK) itself and injects them through the
+> **same `context_clause` hook** (no new agency-kit surface), each opt-in per mission. Its
+> offline suite runs anywhere; the live web/MCP paths need a network / a real MCP server
+> (deferred like Wave 2). Wave 6 (extensions; visual RAG / knowledge graphs) is still
+> deferred. See `ROADMAP.md`.
 
 ## Stacked view
 
@@ -24,6 +29,8 @@ top. Three layers:
 │  Wave 2 (shipped): POST /api/{image,tts,stt} · GET /api/models      │
 │                    · /media/<asset> (path_inside-guarded)           │
 │  Wave 4 (shipped): POST/GET/DELETE /api/docs (RAG) + context_clause │
+│  Wave 5 (built):   web_search/mcp mission flags · GET /api/mcp      │
+│                    → web + MCP results compose into context_clause  │
 └───────────────────────────────┬────────────────────────────────────┘
                                 ▼
 ┌─ agency-kit CORE — logic UNCHANGED ────────────────────────────────┐
@@ -32,9 +39,11 @@ top. Three layers:
 └──────────┬───────────────────────┬─────────────────────────────────┘
            ▼                       ▼
    department tools         LOCAL INFERENCE (multimodal only, Metal)
-   • web search (Claude       • FLUX · Whisper · Kokoro · embeddings (warm, mutually excl.) ✅
-     WebSearch already wired) • rag.py: markitdown → MLX embeddings → sqlite-vec (Wave 4) ✅
-   • image/TTS = deliverable  • mcp_client (Jan ideas, fresh MIT code) (Wave 5)
+   • web search: Claude's     • FLUX · Whisper · Kokoro · embeddings (warm, mutually excl.) ✅
+     WebSearch + studio's     • rag.py: markitdown → MLX embeddings → sqlite-vec (Wave 4) ✅
+     websearch.py (ddgs,      • websearch.py: ddgs → web-RAG context (Wave 5) ✅ built
+     web-RAG, Wave 5) ✅ built • mcp_client.py: official MIT SDK → resources as context
+   • image/TTS = deliverable    (Wave 5) ✅ built
      (Wave 3)
 ```
 
