@@ -1,13 +1,14 @@
 # Agency Studio
 
-> **Status: Waves 0-2 shipped.** Core (0-1): the stdlib HTTP/SSE server + `on_event`
+> **Status: Waves 0-3 shipped.** Core (0-1): the stdlib HTTP/SSE server + `on_event`
 > hook and the React Mission Console (`app/studio/`). **Wave 2** — local multimodal
 > (image / speech-to-text / text-to-speech) on Apple Silicon (Metal) — is built and
 > **validated live on an M4**: `POST /api/image|/api/tts|/api/stt` + Image/Voice GUI
-> tabs, gallery, and a warm-model chip. Setup: a Python 3.10+ venv with the `[media]`
-> extra + system `ffmpeg` (for STT); the image model defaults to a non-gated 8-bit
-> FLUX.1-schnell mirror (no Hugging Face login). Waves **3-6** (multimodal-as-deliverable,
-> RAG, web search, MCP, extensions) remain deferred — see [`ROADMAP.md`](./ROADMAP.md).
+> tabs, gallery, and a warm-model chip. **Wave 3** — multimodal as a department
+> deliverable (assets rendered into the dossier + gallery + PDF) — is shipped. Setup: a
+> Python 3.10+ venv with the `[media]` extra + system `ffmpeg` (for STT); the image model
+> defaults to a non-gated 8-bit FLUX.1-schnell mirror (no Hugging Face login). Waves
+> **4-6** (RAG, web search, MCP, extensions) remain deferred — see [`ROADMAP.md`](./ROADMAP.md).
 
 **Agency Studio** is a **local-first agentic studio**. It stacks
 [agency-kit](https://github.com/Meristina/agency-kit) (the *brain* that orchestrates
@@ -39,6 +40,23 @@ agency-studio        # launches the local server + opens the Mission Console
 → watch departments run live (route → depts → synth → inspect)
 → get the dossier + deliverable, with generated images and a spoken summary
 ```
+
+## Usage
+
+```
+agency-studio                       # serve the Mission Console on 127.0.0.1:8765
+agency-studio --port 9000           # custom port
+agency-studio --path /some/project  # project dir where missions/ + studio_assets/ live
+```
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--host` | `127.0.0.1` | Bind host — **loopback only**; a non-loopback host is refused (see `docs/SECURITY.md`). |
+| `--port` | `8765` | Bind port. |
+| `--path` | `.` | Project dir where mission history (`missions/`) and generated assets (`studio_assets/`) are written. |
+| `--static-root` | `<path>/app/studio/dist` if built | Path to the built GUI (the API still serves without it). |
+| `--media-budget-mb` | `2048` | Cap `studio_assets/` size in MB; oldest generated assets are evicted first. `0` disables the cap. |
+| `--version` | — | Print the version and exit. |
 
 ## Documentation
 
