@@ -142,6 +142,29 @@ def test_ingest_empty_document_raises(local_retriever):
         local_retriever.ingest(b"   \n\n  ", "blank.md")
 
 
+def test_store_is_usable_across_threads(local_retriever):
+    # The server caches one retriever and calls it from different request threads. A
+    # thread-bound sqlite connection (check_same_thread default) would raise here; the
+    # store opens with check_same_thread=False + a lock, so cross-thread use is safe.
+    import threading
+    local_retriever.ingest(b"# H\nsolar panels and sunlight", "a.md")
+    errors = []
+
+    def _worker():
+        try:
+            local_retriever.list_docs()
+            local_retriever.ingest(b"# H2\nwind turbines", "b.md")
+            local_retriever.retrieve("solar sunlight", k=1)
+        except Exception as exc:  # a thread-binding violation would land here
+            errors.append(exc)
+
+    t = threading.Thread(target=_worker)
+    t.start()
+    t.join()
+    assert errors == []
+    assert len(local_retriever.list_docs()) == 2
+
+
 def test_markitdown_absent_raises_media_unavailable():
     # markitdown ships in [studio]; absent offline, the real converter must raise
     # MediaUnavailable (→ the server's 501), mirroring the media/embed extras.

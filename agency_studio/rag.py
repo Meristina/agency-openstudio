@@ -28,6 +28,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import struct
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -163,7 +164,12 @@ class _VectorStore:
     def __init__(self, db_path: Path, dim: int):
         self._dim = dim
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(db_path))
+        # The server caches one retriever and shares it across request threads, so the
+        # connection must not be thread-bound (check_same_thread=False) — and every method
+        # that touches it holds ``self._lock`` so concurrent requests can't interleave on
+        # the one connection (sqlite is safe when access is serialized).
+        self._lock = threading.Lock()
+        self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.has_vec = _try_load_sqlite_vec(self.conn)
         self._init_schema()
@@ -190,57 +196,61 @@ class _VectorStore:
         self.conn.commit()
 
     def add_document(self, meta: DocMeta, chunks: "List[tuple[str, str]]", vectors: "List[List[float]]") -> None:
-        cur = self.conn.cursor()
-        cur.execute(
-            "INSERT INTO docs (id, filename, title, n_chunks, created) VALUES (?, ?, ?, ?, ?)",
-            (meta.id, meta.filename, meta.title, meta.n_chunks, meta.created),
-        )
-        for ordinal, ((title, text), vec) in enumerate(zip(chunks, vectors)):
-            blob = _pack(vec)
+        with self._lock:
+            cur = self.conn.cursor()
             cur.execute(
-                "INSERT INTO chunks (doc_id, ord, title, text, embedding) VALUES (?, ?, ?, ?, ?)",
-                (meta.id, ordinal, title, text, blob),
+                "INSERT INTO docs (id, filename, title, n_chunks, created) VALUES (?, ?, ?, ?, ?)",
+                (meta.id, meta.filename, meta.title, meta.n_chunks, meta.created),
             )
-            if self.has_vec:
+            for ordinal, ((title, text), vec) in enumerate(zip(chunks, vectors)):
+                blob = _pack(vec)
                 cur.execute(
-                    "INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)",
-                    (cur.lastrowid, blob),
+                    "INSERT INTO chunks (doc_id, ord, title, text, embedding) VALUES (?, ?, ?, ?, ?)",
+                    (meta.id, ordinal, title, text, blob),
                 )
-        self.conn.commit()
+                if self.has_vec:
+                    cur.execute(
+                        "INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)",
+                        (cur.lastrowid, blob),
+                    )
+            self.conn.commit()
 
     def list_docs(self) -> "List[DocMeta]":
-        rows = self.conn.execute(
-            "SELECT id, filename, title, n_chunks, created FROM docs ORDER BY created DESC"
-        ).fetchall()
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, filename, title, n_chunks, created FROM docs ORDER BY created DESC"
+            ).fetchall()
         return [DocMeta(r["id"], r["filename"], r["title"], r["n_chunks"], r["created"]) for r in rows]
 
     def delete(self, doc_id: str) -> bool:
-        cur = self.conn.cursor()
-        ids = [r["id"] for r in cur.execute("SELECT id FROM chunks WHERE doc_id = ?", (doc_id,)).fetchall()]
-        if self.has_vec and ids:
-            cur.executemany("DELETE FROM vec_chunks WHERE rowid = ?", [(i,) for i in ids])
-        cur.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
-        cur.execute("DELETE FROM docs WHERE id = ?", (doc_id,))
-        self.conn.commit()
-        return cur.rowcount > 0
+        with self._lock:
+            cur = self.conn.cursor()
+            ids = [r["id"] for r in cur.execute("SELECT id FROM chunks WHERE doc_id = ?", (doc_id,)).fetchall()]
+            if self.has_vec and ids:
+                cur.executemany("DELETE FROM vec_chunks WHERE rowid = ?", [(i,) for i in ids])
+            cur.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
+            cur.execute("DELETE FROM docs WHERE id = ?", (doc_id,))
+            self.conn.commit()
+            return cur.rowcount > 0
 
     def knn(self, query_vec: "List[float]", k: int) -> "List[Chunk]":
-        if self.has_vec:
+        with self._lock:
+            if self.has_vec:
+                rows = self.conn.execute(
+                    "SELECT c.doc_id, c.ord, c.title, c.text, v.distance AS distance "
+                    "FROM vec_chunks v JOIN chunks c ON c.id = v.rowid "
+                    "WHERE v.embedding MATCH ? ORDER BY v.distance LIMIT ?",
+                    (_pack(query_vec), k),
+                ).fetchall()
+                return [
+                    Chunk(r["doc_id"], r["ord"], r["title"], r["text"], score=-float(r["distance"]))
+                    for r in rows
+                ]
+            # Fallback: cosine (== dot, vectors are normalized) over every stored chunk. Fine
+            # for a single-user corpus; the sqlite-vec path takes over at scale on the Mac.
             rows = self.conn.execute(
-                "SELECT c.doc_id, c.ord, c.title, c.text, v.distance AS distance "
-                "FROM vec_chunks v JOIN chunks c ON c.id = v.rowid "
-                "WHERE v.embedding MATCH ? ORDER BY v.distance LIMIT ?",
-                (_pack(query_vec), k),
+                "SELECT doc_id, ord, title, text, embedding FROM chunks"
             ).fetchall()
-            return [
-                Chunk(r["doc_id"], r["ord"], r["title"], r["text"], score=-float(r["distance"]))
-                for r in rows
-            ]
-        # Fallback: cosine (== dot, vectors are normalized) over every stored chunk. Fine
-        # for a single-user corpus; the sqlite-vec path takes over at scale on the Mac.
-        rows = self.conn.execute(
-            "SELECT doc_id, ord, title, text, embedding FROM chunks"
-        ).fetchall()
         scored: "List[Chunk]" = []
         for r in rows:
             vec = _unpack(r["embedding"], self._dim)
@@ -250,7 +260,8 @@ class _VectorStore:
         return scored[:k]
 
     def close(self) -> None:
-        self.conn.close()
+        with self._lock:
+            self.conn.close()
 
 
 # ── retriever protocol + the local implementation ─────────────────────────────

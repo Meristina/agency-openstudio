@@ -848,6 +848,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         file as the body). The body is streamed to a short-lived temp file (bounded, never
         held whole in RAM), converted + chunked + embedded + stored, then the temp removed.
         Absent [studio] extra → 501; unreadable/empty document → 400."""
+        import shutil
         import tempfile
         query = parse_qs(urlparse(self.path).query)
         filename = Path((query.get("filename", ["upload"])[0] or "upload")).name
@@ -870,8 +871,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                 traceback.print_exc()
                 return self._send_error_json(500, "document ingestion failed")
         finally:
-            upload.unlink(missing_ok=True)
-            tmp_dir.rmdir()
+            shutil.rmtree(tmp_dir, ignore_errors=True)  # remove the transient upload + its dir
         self._send_json({
             "id": meta.id, "filename": meta.filename, "title": meta.title,
             "n_chunks": meta.n_chunks, "created": meta.created,
