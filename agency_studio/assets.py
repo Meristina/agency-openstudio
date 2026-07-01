@@ -110,29 +110,84 @@ _FENCE_OPEN = "```asset"
 _FENCE_CLOSE = "```"
 
 
+def _first_nonspace(s: str) -> int:
+    """Index of the first non-whitespace char in ``s`` (``len(s)`` if all-whitespace), by a
+    forward scan — no throwaway stripped copy of the (up to block-size) region."""
+    i, n = 0, len(s)
+    while i < n and s[i].isspace():
+        i += 1
+    return i
+
+
+_JSON_DECODER = json.JSONDecoder()  # stateless for raw_decode; one shared instance
+
+
+def _marker_end(region: str) -> Optional[int]:
+    """Char offset in ``region`` (the text right after an unterminated opener) just past the
+    leading marker — the **first** complete JSON object the region begins with, after any leading
+    whitespace, *when that object is a recognized asset marker* — or None otherwise.
+
+    The marker convention is *one opener → one object*, so exactly that first object is the marker.
+    Guards, each closing an edge the reviews surfaced:
+
+      * a single ``raw_decode`` pass finds the object's end (O(region), no growing re-parse) and
+        stops there, so content after it — prose OR further JSON the model wrote — is never scanned
+        into the strip and is **preserved** by the caller (we don't guess later JSON is a 2nd marker);
+      * the object must be a real asset marker (``dict`` with a known ``type``), so a legitimate
+        *non-marker* data object right after a stray opener is **not** deleted — it falls to the
+        verbatim path with the fence, losing no reader content;
+      * the region is byte-bounded (matching the parser's ``MAX_BLOCK_BYTES`` *byte* budget, not a
+        char count) before decoding, so a giant unclosed object can't make the scan super-linear;
+      * a region that doesn't begin with ``{`` (prose / array / scalar) or whose object is malformed
+        / over-budget returns None → the caller leaves it verbatim rather than bound the strip unsafely.
+    """
+    # Byte-bound the region: at most MAX_BLOCK_BYTES chars ⊇ the first MAX_BLOCK_BYTES bytes, then
+    # trim to that byte budget (dropping a split trailing char). A char-prefix of ``region``, so an
+    # offset into ``head`` maps straight back onto ``region``.
+    head = region[:MAX_BLOCK_BYTES].encode("utf-8")[:MAX_BLOCK_BYTES].decode("utf-8", "ignore")
+    idx = _first_nonspace(head)
+    if idx >= len(head) or head[idx] != "{":
+        return None  # must begin with a JSON object to be a bounded marker
+    try:
+        value, end = _JSON_DECODER.raw_decode(head, idx)
+    except (ValueError, RecursionError):
+        return None  # malformed, or larger than the byte bound → can't bound the strip
+    if not (isinstance(value, dict) and value.get("type") in _ROUTE_FOR_TYPE):
+        return None  # a valid JSON object but not an asset marker → preserve it, don't strip
+    return end
+
+
 def _scan_asset_blocks(delivered: str):
     """The single fence scanner shared by the parser and ``rewrite_delivered``, so the two
     can never drift on what counts as a block. Splits on ``\\n`` (byte-faithful: rewrite
     rejoins the same way) and matches each *stripped* line — a CRLF's trailing ``\\r`` is
     dropped by ``.strip()``, so ``\\r\\n`` fences still match. Yields, in document order:
 
-      ``("text", line)``    — a passthrough line (not part of a well-formed block)
+      ``("text", line)``    — a passthrough line (not part of an ``asset`` marker)
       ``("block", body)``   — a complete ```asset…``` block (opener + close both seen), as its
                               joined body; both consumers replace the whole block — the parser
                               with a request, ``rewrite_delivered`` with a reference /
                               placeholder / nothing — so a well-formed block's fences are
                               never re-emitted.
+      ``("stray_open", None)`` — an *unterminated* opener (no closing fence, or a second opener
+                              before the close). ``rewrite_delivered`` strips it; the parser
+                              ignores it (a malformed marker is never a request). When the region
+                              after the opener begins with a recognized asset marker, only the opener
+                              + that first marker object are stripped and everything after them
+                              (:func:`_marker_end`) is emitted as ordinary ``text`` (char-precise, so
+                              prose on the marker's closing line survives); a bare / whitespace-only
+                              region (e.g. back-to-back openers) strips just the opener.
 
-    An *unterminated* opener (no closing fence, or a second opener before the close) can't be
-    bounded, so — by the anti-swallow rule below — its lines are yielded as ``text`` and pass
-    through unchanged; that one malformed case is the sole way an ``asset`` fence can survive
-    a rewrite (see :func:`rewrite_delivered`).
+    An unterminated opener whose non-empty region does *not begin* with a recognized asset marker (a
+    non-marker JSON object, a malformed payload, or a prose / array / scalar line) is left verbatim,
+    fence and all (documented residual) — chosen over stripping, which would either delete legitimate
+    reader content or run to the next opener/EOF and eat an unbounded tail of real prose.
 
     Deliberately line-oriented rather than one regex: a non-greedy regex body lets an
     *unterminated* opener run forward and swallow a later, well-formed block (its opening
-    backticks read as the first opener's close). Here an unterminated opener is emitted as
-    plain ``text`` lines and the scan *restarts* at the next opener, so a malformed marker
-    can never consume a valid one that follows it.
+    backticks read as the first opener's close). Here an unterminated opener's own lines are
+    handled locally and the scan *restarts* at the next opener, so a malformed marker can never
+    consume a valid one that follows it.
     """
     lines = delivered.split("\n")
     i, n = 0, len(lines)
@@ -148,15 +203,26 @@ def _scan_asset_blocks(delivered: str):
         if j < n and lines[j].strip() == _FENCE_CLOSE:
             yield ("block", "\n".join(body))
             i = j + 1  # resume past the closing fence
-        else:  # unterminated: emit as text, resume *at* the next opener (or EOF)
-            for k in range(i, j):
-                yield ("text", lines[k])
+        else:  # unterminated opener — its region is the already-accumulated ``body``
+            region = "\n".join(body)
+            end = _marker_end(region)
+            if end is not None:  # strip opener + the leading marker object; keep the rest as text
+                yield ("stray_open", None)
+                for line in region[end:].split("\n"):
+                    yield ("text", line)  # content after the marker, char-precise (prose preserved)
+            elif not region or region.isspace():  # bare/whitespace opener (e.g. back-to-back) → drop
+                yield ("stray_open", None)
+                for line in body:
+                    yield ("text", line)  # the blank region lines (swallow_blank collapses them)
+            else:  # region doesn't begin with an asset marker → can't bound → leave verbatim
+                for k in range(i, j):
+                    yield ("text", lines[k])
             i = j
 
 
 def _iter_asset_blocks(delivered: str):
     """Yield the raw body text of each well-formed ```asset block, in order — the parser's
-    view of the shared :func:`_scan_asset_blocks` (it ignores passthrough text)."""
+    view of the shared :func:`_scan_asset_blocks` (it ignores passthrough and ``stray_open``)."""
     for kind, *rest in _scan_asset_blocks(delivered):
         if kind == "block":
             yield rest[0]
@@ -421,11 +487,13 @@ def rewrite_delivered(delivered: str, manifest: "Sequence[dict]") -> str:
         boundary (off-route, over-cap, non-allowlisted model, malformed): an illegitimate
         marker the reader should never have seen.
 
-    The one exception is an *unterminated* opener (a ```asset with no closing fence, or a
-    second opener before the close): :func:`_scan_asset_blocks` can't bound it, so — to avoid
-    deleting the unbounded tail of real prose that follows — it is left as passthrough text and
-    its fence is *not* stripped. That is a malformed-model-output edge, documented in
-    ``docs/WAVE3-PLAN.md``, not the parse-dropped / failed / skipped cases this fixes.
+    An *unterminated* opener (a ```asset with no closing fence, or a second opener before the
+    close) is stripped **surgically**: :func:`_scan_asset_blocks` removes just the opener + the
+    single leading asset-marker object (via :func:`_marker_end`), keeping everything after it —
+    prose *and* any further JSON the model wrote — so the fence goes without deleting real content.
+    The residual is an unterminated opener whose region doesn't *begin* with a recognized marker
+    (a non-marker data object, malformed JSON, or a prose line): it is left verbatim, fence and
+    all, rather than risk content loss (documented in ``docs/WAVE3-PLAN.md``).
 
     Pure: no I/O, never raises.
     """
@@ -461,6 +529,9 @@ def rewrite_delivered(delivered: str, manifest: "Sequence[dict]") -> str:
                 continue
             swallow_blank = False
             out.append(line)
+            continue
+        if kind == "stray_open":
+            swallow_blank = True  # unterminated opener + its marker JSON → strip (prose kept)
             continue
         block_ordinal += 1
         entry = by_block.get(block_ordinal)

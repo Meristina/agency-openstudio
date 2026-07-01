@@ -234,13 +234,16 @@ Parse rules (all enforced in `assets.py`):
   caption). A PDF exported *before* the prune is self-contained and unaffected.
 - **Resume regenerates** assets under a fresh mission id (no reuse) — consistent with
   how resume already re-runs the whole mission. Documented, not a bug.
-- **An unterminated `asset` opener survives rewrite.** `rewrite_delivered` (#19) strips every
-  *well-formed* (properly closed) `asset` fence, but a malformed opener with **no** closing
-  fence can't be bounded by `_scan_asset_blocks` (which, by its anti-swallow rule, emits it as
-  passthrough text so it can't consume a following valid block). Its fence is therefore left
-  in place: stripping would mean deleting the unbounded tail of real prose after it — a worse
-  failure than a stray fence. This is a model-output error (the Inspector-passed text emitted
-  an unclosed marker), not the parse-dropped / failed / skipped cases #19 resolves.
+- **Unterminated `asset` opener — surgically stripped (#23).** `rewrite_delivered` strips a
+  ` ```asset ` opener that has **no** closing fence by removing just the opener + the single
+  leading asset-marker object (identified by `_marker_end` via one byte-bounded `raw_decode`
+  pass — no quadratic re-parse) and keeping everything after it — prose *and* any further JSON
+  the model wrote — so the fence no longer survives without deleting real content. Bare
+  back-to-back openers strip the first opener; a following well-formed block still renders. The
+  **residual**: an unterminated opener whose region doesn't *begin* with a recognized marker (a
+  non-marker data object, malformed JSON, or a prose/array/scalar line) is left verbatim, fence
+  and all — chosen over stripping, which would delete legitimate content or eat an unbounded tail
+  of prose. A rare model-output error.
 
 ## Build order
 

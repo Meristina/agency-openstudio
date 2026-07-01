@@ -202,15 +202,107 @@ def test_rewrite_collapses_the_blank_a_stripped_block_leaves_behind():
     assert out == "Lead.\n\nTail."
 
 
-def test_rewrite_leaves_an_unterminated_opener_as_text_documented_edge():
-    # Documented residual: a ```asset opener with NO closing fence can't be bounded, so the
-    # scanner (anti-swallow) emits it as passthrough text and rewrite leaves it untouched —
-    # the one case a fence survives, because stripping would delete the unbounded tail of real
-    # prose that follows it. Verifies we don't over-reach and eat that trailing content.
+def test_rewrite_surgically_strips_an_unterminated_opener_keeping_trailing_prose():
+    # #23: a ```asset opener with NO closing fence is stripped surgically — the opener + its
+    # leading marker JSON go, the unbounded prose that follows is preserved.
     delivered = ("Intro\n```asset\n" + json.dumps({"type": "image", "prompt": "hero"})
                  + "\ntrailing prose the reader still needs")
     out = assets.rewrite_delivered(delivered, [])
-    assert out == delivered
+    assert "```asset" not in out and '"prompt"' not in out, "opener + marker JSON removed"
+    assert out == "Intro\ntrailing prose the reader still needs", "trailing prose kept"
+
+
+def test_rewrite_strips_unterminated_opener_with_multiline_marker_json():
+    # The marker may be pretty-printed across lines; _marker_end accumulates until the object
+    # closes, so the whole marker (and only the marker) is removed.
+    delivered = 'Lead.\n```asset\n{\n  "type": "tts",\n  "text": "hi"\n}\nAfter the marker.'
+    out = assets.rewrite_delivered(delivered, [])
+    assert "```asset" not in out and '"text"' not in out
+    assert out == "Lead.\nAfter the marker."
+
+
+def test_rewrite_strips_first_of_back_to_back_openers_and_renders_the_second():
+    # Back-to-back openers: the first is unterminated (bounded by the 2nd), the second is a
+    # well-formed rendered block. The stray first is stripped; the valid second becomes an embed.
+    delivered = (
+        "```asset\n" + json.dumps({"type": "image", "prompt": "stray"}) + "\n"
+        + _block({"type": "image", "prompt": "real"})
+    )
+    reqs = assets.parse_markers(delivered, ["marketing"])
+    assert [r.prompt for r in reqs] == ["real"], "only the well-formed block parses to a request"
+    manifest = [{"type": "image", "status": "ok", "url": "/media/r.png", "prompt": "real",
+                 "block": reqs[0].block_index}]
+    out = assets.rewrite_delivered(delivered, manifest)
+    assert "```asset" not in out and "stray" not in out, "the stray first opener is stripped"
+    assert out.count("![real](/media/r.png)") == 1, "the well-formed second block is the only embed"
+
+
+def test_rewrite_strips_only_the_first_object_marker_preserving_following_content():
+    # Per the marker convention (one opener → one object), an unterminated opener strips the
+    # opener + the FIRST JSON object only. Any further JSON the model wrote (legit data, or a
+    # second object) is PRESERVED, never guessed-away — the fence goes, real content stays.
+    delivered = ('Intro\n```asset\n' + json.dumps({"type": "image", "prompt": "hero"}) + "\n"
+                 + json.dumps({"revenue": 1000, "users": 42}) + "\ntrailing")
+    out = assets.rewrite_delivered(delivered, [])
+    assert "```asset" not in out, "the fence is stripped"
+    assert '"prompt"' not in out, "the first object (the marker) is removed"
+    assert '"revenue": 1000' in out, "a following data object is preserved, not deleted"
+    assert out.endswith("trailing")
+
+
+def test_rewrite_preserves_prose_on_the_markers_closing_line():
+    # Char-precise: text after the closing brace ON THE SAME LINE is preserved, not eaten with
+    # the marker line.
+    delivered = 'A\n```asset\n{"type": "tts", "text": "hi"} Here is the narration.\nnext'
+    out = assets.rewrite_delivered(delivered, [])
+    assert "```asset" not in out and '"text"' not in out
+    assert "Here is the narration." in out and out.endswith("next")
+
+
+def test_rewrite_strips_bare_back_to_back_openers_without_leaking_a_fence():
+    # A bare stray opener immediately followed by a well-formed block (empty region between the
+    # two openers): the bare first opener is stripped, so no raw fence leaks.
+    delivered = "Intro\n```asset\n" + _block({"type": "image", "prompt": "real"}) + "\nEnd"
+    reqs = assets.parse_markers(delivered, ["marketing"])
+    assert [r.prompt for r in reqs] == ["real"]
+    manifest = [{"type": "image", "status": "ok", "url": "/media/r.png", "prompt": "real",
+                 "block": reqs[0].block_index}]
+    out = assets.rewrite_delivered(delivered, manifest)
+    assert "```asset" not in out, "the bare first opener is stripped, no fence leaks"
+    assert out.count("![real](/media/r.png)") == 1
+
+
+def test_rewrite_does_not_over_strip_prose_after_the_marker():
+    # raw_decode stops at the first value's end, so reader-facing prose after the marker — even a
+    # line that is itself valid JSON — is never scanned into the stripped region.
+    delivered = 'A\n```asset\n{"type":"tts","text":"hi"}\nThe result was [1, 2, 3] items.'
+    out = assets.rewrite_delivered(delivered, [])
+    assert out == "A\nThe result was [1, 2, 3] items.", "trailing prose (incl. bracketed text) kept"
+
+
+def test_rewrite_leaves_unterminated_opener_with_non_marker_first_object_verbatim():
+    # The first object after a stray opener is stripped ONLY if it is a real asset marker
+    # (type image/tts). A legitimate non-marker data object must NOT be deleted — the opener
+    # falls to verbatim, losing no reader content (fence survives, documented residual).
+    delivered = 'Intro\n```asset\n' + json.dumps({"revenue": 1000, "users": 42}) + "\ntrailing"
+    out = assets.rewrite_delivered(delivered, [])
+    assert out == delivered, "a non-marker data object is preserved verbatim, never stripped"
+
+
+def test_rewrite_leaves_unterminated_opener_with_malformed_json_verbatim():
+    # Residual: an unterminated opener whose region doesn't begin with a parseable object can't
+    # be bounded (stripping would eat the unbounded tail), so it is left verbatim — the edge.
+    delivered = "Intro\n```asset\n{not valid json,, no close\nmore prose"
+    out = assets.rewrite_delivered(delivered, [])
+    assert out == delivered, "malformed unterminated marker stays verbatim (can't bound the strip)"
+
+
+def test_rewrite_leaves_unterminated_opener_not_beginning_with_an_object_verbatim():
+    # If a non-object line precedes the marker, the region doesn't *begin* with an object, so we
+    # can't safely bound it — fall back to verbatim rather than delete-until-a-later-brace.
+    delivered = 'Intro\n```asset\n[1, 2, 3]\n{"type": "image", "prompt": "hero"}\ntail'
+    out = assets.rewrite_delivered(delivered, [])
+    assert out == delivered, "region not starting with an object → verbatim (documented residual)"
 
 
 def test_rewrite_strips_over_cap_block_while_swapping_the_rendered_ones():
