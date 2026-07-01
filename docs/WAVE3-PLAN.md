@@ -220,8 +220,18 @@ Parse rules (all enforced in `assets.py`):
   (incidentally, via `delivered`), not the generated pixels. TTS is a faithful render of
   inspected text; image is the elevated-risk path — mitigated by the PASS gate +
   verbatim prompt + render-time route gate. Stated, not waved away.
-- **Disk growth.** `studio_assets/missions/<id>/` accumulates. Add a per-mission
-  asset-bytes cap or a retention note (in scope for this wave, not deferred silently).
+- **Disk growth — capped (#21).** `studio_assets/` (per-mission `missions/<id>/` +
+  the ad-hoc `images/`/`audio/` gallery) is now bounded by an oldest-first retention cap
+  (`agency_studio/retention.py`), enforced after each render (`keep={mission_id}`) and once
+  at startup. Budget defaults to 2 GiB, set with `--media-budget-mb` (0 disables). A recency
+  grace protects assets touched in the last 5 min (an in-flight mission / a just-generated
+  gallery image), and every eviction prints a one-line notice — it is **never silent**
+  (including the first boot after upgrade, where an existing >2 GiB `studio_assets/` is
+  trimmed; pass `--media-budget-mb 0` to keep everything). Transient `uploads/` is never
+  walked (STT unlinks its own uploads). Tradeoff: evicting an old mission's dir breaks its
+  live `/media` gallery links **and a later re-export of that mission to PDF loses its images**
+  (the exporter reads assets from disk at export time, dropping a missing embed to its
+  caption). A PDF exported *before* the prune is self-contained and unaffected.
 - **Resume regenerates** assets under a fresh mission id (no reuse) — consistent with
   how resume already re-runs the whole mission. Documented, not a bug.
 - **An unterminated `asset` opener survives rewrite.** `rewrite_delivered` (#19) strips every

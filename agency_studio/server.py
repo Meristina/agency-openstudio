@@ -30,10 +30,17 @@ import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Iterable
 from urllib.parse import urlparse
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+
+# Default retention budget for studio_assets/ (generated images/audio). The cap is
+# oldest-first (see agency_studio.retention): once the root exceeds this, the oldest mission
+# asset dirs / gallery files are evicted. 2 GiB holds hundreds of missions on the 16 GB target
+# Mac; overridable via serve(media_budget_mb=…) / the --media-budget-mb CLI flag (0 disables).
+DEFAULT_MEDIA_BUDGET_BYTES = 2048 * 1024 * 1024  # 2 GiB
 
 # Upper bound on a request body the studio will read. A mission request is a tiny
 # JSON object ({goal, engine}); capping the read defends the handler thread from a
@@ -190,7 +197,38 @@ def _build_render_assets(server, events: "queue.Queue", cancel_event: threading.
             dossier["assets"] = manifest
         if new_delivered != delivered:
             dossier["delivered"] = new_delivered
+        # Bound studio_assets/ growth: evict the oldest missions/gallery assets once the
+        # root exceeds the budget. keep={this mission} so a just-rendered deliverable is
+        # never the eviction target; best-effort (never raises) so cleanup can't lose it.
+        if manifest:
+            _prune_assets_best_effort(server, keep={str(dossier.get("mission_id"))})
     return render_assets
+
+
+def _prune_assets_best_effort(server, *, keep: "Iterable[str]" = ()) -> None:
+    """Run the retention cap over the server's assets root under ``retention_lock`` (so two
+    finishing missions can't prune concurrently), protecting recently-touched assets via a
+    grace window. Prints a one-line notice when anything is evicted — eviction is real data
+    loss, so it must never be silent; the user sees what was reclaimed and how to opt out.
+    Swallows everything — retention is a housekeeping nicety, never a reason to fail a mission
+    or a boot."""
+    from agency_studio import retention
+    try:
+        with server.retention_lock:
+            result = retention.prune_assets(
+                server.assets_root, budget_bytes=server.media_budget_bytes, keep=keep,
+                min_age_seconds=retention.DEFAULT_RECENT_GRACE_SECONDS,
+            )
+        if result.removed:
+            budget_mb = server.media_budget_bytes // (1024 * 1024)
+            print(
+                f"retention: evicted {len(result.removed)} old asset unit(s), freed "
+                f"{result.bytes_freed / (1024 * 1024):.0f} MB — studio_assets/ was over the "
+                f"{budget_mb} MB cap (raise or disable with --media-budget-mb, 0 = off)",
+                flush=True,
+            )
+    except Exception:
+        pass
 
 
 def path_inside(root: Path, requested: str) -> Path | None:
@@ -982,6 +1020,7 @@ def make_server(
     port: int = DEFAULT_PORT,
     project_root: str = ".",
     static_root: "str | Path | None" = None,
+    media_budget_bytes: int = DEFAULT_MEDIA_BUDGET_BYTES,
 ) -> ThreadingHTTPServer:
     """Build (but do not start) the Studio HTTP server.
 
@@ -1012,6 +1051,11 @@ def make_server(
     httpd.assets_root = Path(project_root).resolve() / "studio_assets"  # type: ignore[attr-defined]
     httpd.media = None  # type: ignore[attr-defined]
     httpd.media_lock = threading.Lock()  # type: ignore[attr-defined]
+    # Retention cap on studio_assets/: bounds cumulative disk growth (oldest-first eviction).
+    # Enforced after each render and once at startup; retention_lock serializes concurrent prunes.
+    httpd.media_budget_bytes = media_budget_bytes  # type: ignore[attr-defined]
+    httpd.retention_lock = threading.Lock()  # type: ignore[attr-defined]
+    _prune_assets_best_effort(httpd)  # bound growth even if a prior run was killed pre-prune
     return httpd
 
 
@@ -1020,12 +1064,16 @@ def serve(
     port: int = DEFAULT_PORT,
     project_root: str = ".",
     static_root: "str | Path | None" = None,
+    media_budget_mb: "int | None" = None,
 ) -> None:
     """Start the Studio server and serve forever (Ctrl-C to stop).
 
     The loopback bind is enforced inside ``make_server`` (``_require_loopback``).
+    ``media_budget_mb`` caps ``studio_assets/`` size (oldest-first eviction); None uses the
+    2 GiB default, 0 disables the cap.
     """
-    httpd = make_server(host, port, project_root, static_root)
+    budget = DEFAULT_MEDIA_BUDGET_BYTES if media_budget_mb is None else media_budget_mb * 1024 * 1024
+    httpd = make_server(host, port, project_root, static_root, media_budget_bytes=budget)
     where = httpd.static_root if httpd.static_root else "(GUI not built)"  # type: ignore[attr-defined]
     print(f"Agency Studio → http://{host}:{port}   serving {where}", flush=True)
     try:

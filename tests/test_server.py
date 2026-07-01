@@ -885,6 +885,7 @@ def test_build_render_assets_renders_rewrites_and_emits(tmp_path):
 
     fake_server = SimpleNamespace(
         media_lock=threading.Lock(), media=_FakeMgr(), assets_root=tmp_path,
+        retention_lock=threading.Lock(), media_budget_bytes=10**12,  # huge → prune is a no-op
     )
     events: "queue.Queue" = queue.Queue()
     cancel = threading.Event()
@@ -922,7 +923,10 @@ def test_build_render_assets_stop_skips_render_without_gpu(tmp_path):
             raise AssertionError("render must not run once the mission is cancelled")
 
     mgr = _FakeMgr()
-    fake_server = SimpleNamespace(media_lock=threading.Lock(), media=mgr, assets_root=tmp_path)
+    fake_server = SimpleNamespace(
+        media_lock=threading.Lock(), media=mgr, assets_root=tmp_path,
+        retention_lock=threading.Lock(), media_budget_bytes=10**12,
+    )
     cancel = threading.Event()
     cancel.set()  # Stop already requested before render
     render_assets = server._build_render_assets(fake_server, queue.Queue(), cancel)
@@ -967,6 +971,59 @@ def test_build_render_assets_strips_off_route_fence_without_touching_gpu(tmp_pat
     assert "```asset" not in dossier["delivered"], "the off-route fence is stripped"
     assert dossier["delivered"] == "Intro\nOutro"
     assert "assets" not in dossier  # nothing rendered/attempted → no manifest attached
+
+
+def test_build_render_assets_prunes_old_missions_after_render(tmp_path):
+    # Post-render retention: an old mission's assets are evicted once the budget is exceeded,
+    # while the just-rendered mission (keep={id}) is protected even though it is newest.
+    import os
+    import queue
+    from types import SimpleNamespace
+    from pathlib import Path
+
+    old = tmp_path / "missions" / "000-old" / "images" / "big.png"
+    old.parent.mkdir(parents=True, exist_ok=True)
+    old.write_bytes(b"\0" * 5000)
+    os.utime(old, (1000, 1000))  # ancient → first to evict
+    os.utime(tmp_path / "missions" / "000-old", (1000, 1000))  # backdate the dir past the grace
+
+    class _FakeMgr:
+        def generate_image(self, prompt, *, model, width, height, out_dir):
+            p = Path(out_dir) / "images" / "a.png"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"\x89PNG")
+            return SimpleNamespace(path=p, model=model, seconds=1.0)
+
+    fake_server = SimpleNamespace(
+        media_lock=threading.Lock(), media=_FakeMgr(), assets_root=tmp_path,
+        retention_lock=threading.Lock(), media_budget_bytes=1000,  # tiny → must evict the old one
+    )
+    render_assets = server._build_render_assets(fake_server, queue.Queue(), threading.Event())
+    dossier = {
+        "mission_id": "001-new", "route": ["marketing"],
+        "delivered": "```asset\n" + json.dumps({"type": "image", "prompt": "hero"}) + "\n```",
+    }
+    render_assets(dossier)
+    assert not (tmp_path / "missions" / "000-old").exists(), "old mission evicted by the cap"
+    assert (tmp_path / "missions" / "001-new").is_dir(), "the just-rendered mission is kept"
+
+
+def test_make_server_prunes_over_budget_assets_at_startup(tmp_path):
+    # Boot-time prune bounds growth even if a prior run was killed before it could prune.
+    import os
+    assets = tmp_path / "studio_assets"
+    stale = assets / "missions" / "000" / "images" / "big.png"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_bytes(b"\0" * 5000)
+    os.utime(stale, (1000, 1000))
+    os.utime(assets / "missions" / "000", (1000, 1000))  # backdate the dir past the grace window
+    httpd = server.make_server(
+        host="127.0.0.1", port=0, project_root=str(tmp_path), media_budget_bytes=1000,
+    )
+    try:
+        assert not (assets / "missions" / "000").exists(), "startup prune evicts over-budget assets"
+    finally:
+        httpd.server_close()
 
 
 def test_post_mission_passes_asset_hook_to_runner(monkeypatch, tmp_path):

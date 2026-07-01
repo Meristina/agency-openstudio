@@ -30,6 +30,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="project dir where missions/ output is written (default: .)")
     p.add_argument("--static-root", default=None,
                    help="path to the built GUI (default: <path>/app/studio/dist if present)")
+    p.add_argument("--media-budget-mb", type=int, default=None,
+                   help="cap studio_assets/ size in MB — oldest generated assets are evicted "
+                        "first (default: 2048; 0 disables the cap)")
     return p
 
 
@@ -52,6 +55,7 @@ def main(argv=None) -> int:
         server.serve(
             host=args.host, port=args.port,
             project_root=args.path, static_root=args.static_root,
+            media_budget_mb=args.media_budget_mb,
         )
     except ValueError as e:  # loopback guard / bad host
         print(f"error: {e}", file=sys.stderr)
