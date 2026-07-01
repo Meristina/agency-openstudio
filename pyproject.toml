@@ -62,6 +62,26 @@ studio = [
     "mlx-embedding-models",    # MIT — MLX-native text embeddings (nomic-embed / bge-m3)
     "sqlite-vec",              # Apache-2.0/MIT — loadable SQLite vector search extension
 ]
+# Wave 5 — local web search (see docs/WAVE5-PLAN.md). Pure-Python, cross-platform (no
+# Metal), so it lives in its own portable extra — NOT the Mac-heavy [media]/[studio] ones.
+# Imported LAZILY inside agency_studio.websearch, so the core server still boots and missions
+# still run with this extra absent — an opted-in mission's web step is then simply skipped
+# (a `websearch: skipped` SSE frame with the reason), and an explicit search returns 501.
+# Web search is opt-in per mission (default off): it duplicates the Claude path's own
+# WebSearch and costs a network round-trip, so it runs only when the mission requests it.
+web = [
+    "ddgs",              # MIT — DuckDuckGo/metasearch client (the renamed duckduckgo-search)
+]
+# Wave 5 — MCP resources as mission context (see docs/WAVE5-PLAN.md). The official MIT SDK,
+# imported LAZILY inside agency_studio.mcp_client, so the core server still boots and missions
+# still run with this extra absent — an opted-in mission's MCP step is then simply skipped
+# (an `mcp: skipped` SSE frame with the reason), and GET /api/mcp still lists mcp.json (config
+# parsing is pure stdlib, no SDK needed). MCP is opt-in per mission (default off) and read-only
+# (resources as context; tool-calling is the claude --mcp-config path, deferred to Wave 6).
+# Pinned < 2: the v2 stable SDK lands ~2026-07-27 with API changes — pin until validated.
+mcp = [
+    "mcp>=1.0,<2",       # MIT — official Model Context Protocol SDK (client: stdio/http)
+]
 # PDF export of a mission deliverable (agency-kit's exporter.export_pdf), exposed
 # at GET /api/mission/{id}/pdf. Both imported lazily inside export_pdf, so the
 # server runs fine without them — the endpoint returns 501 until installed.

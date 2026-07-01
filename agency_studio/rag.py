@@ -118,21 +118,14 @@ def build_context_clause(chunks: "List[Chunk]") -> Optional[str]:
     block appended to each department prompt. Returns ``None`` when there is nothing to
     inject (no docs / no hits), so a mission with no relevant local docs is byte-identical
     to one run without RAG (the same default-None contract as asset_clause)."""
-    if not chunks:
-        return None
-    lines = [
+    from .context_block import format_context_block
+    header = (
         "REFERENCE DOCUMENTS (excerpts retrieved from the user's own uploaded files). "
         "Treat these as authoritative context for THIS mission and cite them by their "
         "[n] title when you use them. Do NOT invent content beyond what they say; if they "
-        "do not cover something, fall back to your normal sourced web research.",
-        "",
-    ]
-    for i, c in enumerate(chunks, start=1):
-        label = c.title or c.doc_id
-        lines.append(f"[{i}] {label}")
-        lines.append(c.text)
-        lines.append("")
-    return "\n".join(lines).rstrip()
+        "do not cover something, fall back to your normal sourced web research."
+    )
+    return format_context_block(header, [(c.title or c.doc_id, c.text) for c in chunks])
 
 
 # ── vector store (sqlite-vec fast path + pure-Python fallback) ─────────────────

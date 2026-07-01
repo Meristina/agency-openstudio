@@ -36,9 +36,17 @@ a clean web GUI.
 > **`context_clause`** hook (twin of `asset_clause`), and the `POST/GET/DELETE /api/docs`
 > endpoints + best-effort mission retrieval injection with a `retrieval` SSE phase, and the
 > **GUI "Docs" tab** (upload / list / delete + the retrieval timeline). Offline suite runs
-> anywhere; the live embedding path needs the Apple Silicon Mac. **Waves 5-6 remain
-> deferred** (web search, MCP, extensions; plus Wave-6 visual RAG / knowledge graphs); see
-> `ROADMAP.md`. Do **not** invent implementation that the roadmap/WAVE-PLANs defer.
+> anywhere; the live embedding path needs the Apple Silicon Mac. **Wave 5 — local web search +
+> MCP — is BUILT** (offline-first slice), tracked in `docs/WAVE5-PLAN.md`: both land as
+> *web-RAG* — the studio fetches web results (`websearch.py`, ddgs, `[web]`) and reads MCP
+> server resources (`mcp_client.py`, the official MIT `mcp` SDK, `[mcp]`) **itself** and injects
+> them through the **same additive `context_clause` hook** as Wave 4 (no new agency-kit surface),
+> each **opt-in per mission** (default off — the Claude path already searches / speaks MCP).
+> A shared `context_block.format_context_block` + server `_resolve_clause` back RAG/web/MCP alike;
+> MCP is read-only **resources-as-context** (tool-calling is the `claude --mcp-config` path,
+> deferred). Offline suite runs anywhere; the live web/MCP paths need a network / a real MCP
+> server (deferred like Wave 2). **Wave 6 remains deferred** (advanced extensions; visual RAG /
+> knowledge graphs); see `ROADMAP.md`. Do **not** invent implementation that the roadmap/WAVE-PLANs defer.
 >
 > **Running Wave 2 (target Mac):** a **Python 3.10+ venv** with the `[media]` extra
 > (`pip install -e ".[media]"`), plus **`ffmpeg`** on PATH for speech-to-text

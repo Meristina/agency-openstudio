@@ -1269,3 +1269,222 @@ def test_mission_without_docs_injects_no_context(monkeypatch, tmp_path):
 
     assert captured["context_clause"] is None
     assert not [e for e in events if e.get("phase") == "retrieval"]
+
+
+# ── Wave 5 — web search: opt-in web context injection ───────────────────────────
+
+def _capture_run(monkeypatch, captured):
+    """Stub runner_bridge.run to record the context_clause and emit a minimal timeline."""
+    from agency_cli import runner_bridge
+
+    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
+                  asset_clause=None, render_assets=None, context_clause=None):
+        captured["context_clause"] = context_clause
+        on_event({"phase": "route", "status": "done", "route": []})
+        return runner_bridge.MissionResult(path=None, dossier={"verdicts": [], "mission_id": "id"})
+
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
+
+
+def _stub_web_search(monkeypatch, results):
+    from agency_studio import websearch
+    monkeypatch.setattr(websearch, "web_search", lambda goal, k=5: results)
+
+
+def test_mission_with_web_flag_injects_web_context_and_emits_phase(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio.websearch import WebResult
+    _use_fake_retriever(monkeypatch, _FakeRetriever())  # no docs → RAG contributes nothing
+    _stub_web_search(monkeypatch, [WebResult("Solar 101", "https://a.example", "sun to power")])
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "solar plan", "web_search": True}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    web = [e for e in events if e.get("phase") == "websearch"]
+    assert any(e["status"] == "done" and e["hits"] == 1 for e in web)
+    assert captured["context_clause"] is not None
+    assert "WEB SEARCH RESULTS" in captured["context_clause"]
+
+
+def test_mission_without_web_flag_does_no_web_search(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _use_fake_retriever(monkeypatch, _FakeRetriever())
+
+    called = {"n": 0}
+
+    def _boom(goal, k=5):
+        called["n"] += 1
+        raise AssertionError("web_search must not run when the flag is absent")
+
+    from agency_studio import websearch
+    monkeypatch.setattr(websearch, "web_search", _boom)
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=json.dumps({"goal": "x"}),  # no web_search
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    assert called["n"] == 0
+    assert captured["context_clause"] is None
+    assert not [e for e in events if e.get("phase") == "websearch"]
+
+
+def test_mission_composes_rag_then_web_context(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio.rag import Chunk
+    from agency_studio.websearch import WebResult
+    fake = _FakeRetriever(hits=[Chunk("d1", 0, "Solar", "panels convert sunlight", score=0.9)])
+    fake.ingest(b"seed", "solar.md")   # one doc → RAG contributes a block
+    _use_fake_retriever(monkeypatch, fake)
+    _stub_web_search(monkeypatch, [WebResult("Fresh", "https://n.example", "latest figures")])
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "solar plan", "web_search": True}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    clause = captured["context_clause"]
+    assert "REFERENCE DOCUMENTS" in clause and "WEB SEARCH RESULTS" in clause
+    # User docs (RAG) first, fresh web after — the compose order.
+    assert clause.index("REFERENCE DOCUMENTS") < clause.index("WEB SEARCH RESULTS")
+
+
+# ── Wave 5 — MCP: opt-in resource context injection + GET /api/mcp ──────────────
+
+def _stub_mcp_resources(monkeypatch, items):
+    from agency_studio import mcp_client
+    monkeypatch.setattr(mcp_client, "read_resources", lambda goal, k=5: items)
+
+
+def test_mission_with_mcp_flag_injects_mcp_context_and_emits_phase(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio.mcp_client import McpResource
+    _use_fake_retriever(monkeypatch, _FakeRetriever())  # no docs
+    _stub_mcp_resources(monkeypatch, [McpResource("wiki", "u://1", "Onboarding", "hire steps")])
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "hiring plan", "mcp": True}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    mcp = [e for e in events if e.get("phase") == "mcp"]
+    assert any(e["status"] == "done" and e["hits"] == 1 for e in mcp)
+    assert "MCP RESOURCES" in captured["context_clause"]
+
+
+def test_mission_without_mcp_flag_does_no_mcp(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _use_fake_retriever(monkeypatch, _FakeRetriever())
+
+    called = {"n": 0}
+
+    def _boom(goal, k=5):
+        called["n"] += 1
+        raise AssertionError("MCP must not run when the flag is absent")
+
+    from agency_studio import mcp_client
+    monkeypatch.setattr(mcp_client, "read_resources", _boom)
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=json.dumps({"goal": "x"}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    assert called["n"] == 0
+    assert not [e for e in events if e.get("phase") == "mcp"]
+
+
+def test_mission_composes_rag_web_then_mcp(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio.rag import Chunk
+    from agency_studio.websearch import WebResult
+    from agency_studio.mcp_client import McpResource
+    fake = _FakeRetriever(hits=[Chunk("d1", 0, "Solar", "panels", score=0.9)])
+    fake.ingest(b"seed", "solar.md")
+    _use_fake_retriever(monkeypatch, fake)
+    _stub_web_search(monkeypatch, [WebResult("Fresh", "https://n.example", "latest")])
+    _stub_mcp_resources(monkeypatch, [McpResource("wiki", "u://1", "Wiki", "note")])
+    captured = {}
+    _capture_run(monkeypatch, captured)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "plan", "web_search": True, "mcp": True}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    clause = captured["context_clause"]
+    # RAG → web → MCP, in that order.
+    assert clause.index("REFERENCE DOCUMENTS") < clause.index("WEB SEARCH RESULTS") < clause.index("MCP RESOURCES")
+
+
+def test_get_mcp_lists_configured_servers(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio import mcp_client
+    monkeypatch.setattr(mcp_client, "list_servers", lambda: [
+        {"name": "wiki", "transport": "stdio", "enabled": True,
+         "command": "run", "args": [], "url": None},
+    ])
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _get(host, port, "/api/mcp")
+        assert resp.status == 200
+        payload = json.loads(body)
+        assert payload["servers"][0]["name"] == "wiki"
+    finally:
+        httpd.shutdown()
+
+
+def test_get_mcp_malformed_config_is_400(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio import mcp_client
+
+    def _boom():
+        raise ValueError("unreadable mcp.json")
+
+    monkeypatch.setattr(mcp_client, "list_servers", _boom)
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, _body = _get(host, port, "/api/mcp")
+        assert resp.status == 400
+    finally:
+        httpd.shutdown()

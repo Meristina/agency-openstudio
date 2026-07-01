@@ -167,6 +167,8 @@ button.ghost { background: transparent; color: var(--text); border: 1px solid va
 .error { color: var(--error); font-size: 0.88rem; }
 .notice { color: var(--accent); font-size: 0.88rem; line-height: 1.45; }
 .hint { color: var(--muted); font-size: 0.75rem; margin-left: auto; }
+.toggle { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: var(--muted); cursor: pointer; user-select: none; }
+.toggle input { cursor: pointer; }
 
 /* elapsed-time indicator on the live timeline */
 .elapsed { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--muted); font-size: 0.78rem; font-variant-numeric: tabular-nums; }

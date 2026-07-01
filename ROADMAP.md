@@ -21,8 +21,14 @@
 > pluggable `Retriever`), agency-kit's additive `context_clause` hook, and the `/api/docs`
 > endpoints + best-effort mission retrieval injection with a `retrieval` SSE phase, and the
 > **GUI "Docs" tab** (upload / list / delete + retrieval timeline). Its offline suite runs
-> anywhere; the live embedding path needs the Apple Silicon Mac. Waves **5-6** (web search, MCP, extensions) —
-> plus Wave-6 visual RAG (PixelRAG) / knowledge graphs (Hyper-Extract) — remain deferred.
+> anywhere; the live embedding path needs the Apple Silicon Mac. **Wave 5 — local web search +
+> MCP — is BUILT** (`docs/WAVE5-PLAN.md`): both land as *web-RAG* — the studio fetches web
+> results (`websearch.py`, ddgs, `[web]`) and reads MCP server resources (`mcp_client.py`, the
+> official MIT SDK, `[mcp]`) itself and injects them through the **same additive
+> `context_clause` hook** as Wave 4 (no new agency-kit surface), each **opt-in per mission**
+> (default off — the Claude path already searches / speaks MCP). Offline suite runs anywhere;
+> the live web/MCP paths need a network / a real MCP server (deferred like Wave 2). **Wave 6**
+> (advanced extensions; visual RAG (PixelRAG) / knowledge graphs (Hyper-Extract)) remains deferred.
 > Setup for Wave 2: Python 3.10+ venv
 > + `[media]` extra + system `ffmpeg` (STT); image defaults to a non-gated 8-bit
 > FLUX.1-schnell mirror (no HF login).
@@ -223,10 +229,20 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
 - **GUI "Docs" tab** — upload / list / delete + the retrieval timeline (source chips). ✅
 - ❌ Not `chunkr` (AGPL + Rust/Docker/Postgres too heavy). ❌ Not `Blaizzy/mlx-embeddings` (GPL).
 
-### Wave 5 — Local web search + MCP *(deferred)*
-- **`agency_studio/websearch.py`** (DuckDuckGo, fresh code): sourcing for the optional local
-  path (the Claude path already has WebSearch). Satisfies Art. I offline.
-- **`agency_studio/mcp_client.py`**: MCP client, MIT, inspired by Jan **without reusing its code**.
+### Wave 5 — Local web search + MCP *(BUILT — see `docs/WAVE5-PLAN.md`)*
+> The naive "sourcing for the optional local path" framing is **superseded by
+> `docs/WAVE5-PLAN.md`**: the local-LLM path is off on 16 GB and the Claude path already has
+> WebSearch + native MCP, so both bricks land instead as **web-RAG / context injection** — the
+> studio fetches the content itself and injects it via the shipped `context_clause` hook, which
+> benefits **every** engine. Each is **opt-in per mission** (default off).
+- ✅ **`agency_studio/websearch.py`** (ddgs, MIT, fresh code) → `build_web_context_clause`; the
+  `[web]` extra; the `web_search` mission flag + `websearch` SSE phase + GUI toggle/timeline.
+- ✅ **`agency_studio/mcp_client.py`** (the official MIT `mcp` SDK — Jan's *ideas*, not its AGPL
+  code): read-only **resources as context** (tool-calling deferred to Wave 6), `mcp.json` config
+  under the never-web-served `rag.data_dir()` (outside `assets_root`), the `[mcp]` extra,
+  `GET /api/mcp`, the `mcp` flag + SSE phase + GUI.
+- Shared: `context_block.format_context_block` (one home for the `[n]`-citation convention) and
+  the server's `_resolve_clause` scaffold, used by RAG + web + MCP alike.
 
 ### Wave 6 — Advanced extensions (plug-ins behind flags, MIT/Apache) *(deferred)*
 - `hyper-extract` (Apache-2.0) → `agency_studio/knowledge.py`: knowledge graphs over docs + history.

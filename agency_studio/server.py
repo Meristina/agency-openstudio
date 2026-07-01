@@ -211,31 +211,92 @@ def _build_render_assets(server, events: "queue.Queue", cancel_event: threading.
     return render_assets
 
 
-def _resolve_context_clause(retriever, goal, emit, should_cancel):
-    """Retrieve RAG context for ``goal`` → a ``context_clause`` string (or None). Runs on the
-    mission worker thread: it emits its ``retrieval`` SSE frames through ``emit`` (events.put)
-    so the handler's heartbeat loop writes them and stays responsive during a possibly-slow
-    first-run embed-model load, and it bails on ``should_cancel`` before the embed. Best-effort
-    — a missing [studio] extra or any store failure is surfaced as a ``skipped`` frame WITH a
-    reason (never swallowed silently) and returns None, so the mission still runs. Module-level
-    (not a handler method) so the worker closes over no handler state."""
-    if retriever is None or should_cancel():
+def _resolve_clause(phase, emit, should_cancel, *, produce, unavailable_exc, unavailable_reason):
+    """Shared best-effort context resolver for the pre-route steps (RAG · web · MCP). Emits the
+    phase's ``start`` frame, runs ``produce()`` → ``(hits, sources, clause)``, emits ``done``,
+    and returns the clause. Any failure is surfaced as a ``skipped`` frame WITH a reason and
+    returns None — a best-effort context step NEVER aborts the mission (CLAUDE.md invariant).
+    The extra-absent case is the specific ``unavailable_exc`` mapped to ``unavailable_reason``;
+    every OTHER error (including an *unrelated* ImportError raised deep in a backend) falls to
+    the generic arm and reports its real reason, so a genuine failure is never mislabeled
+    'extra not installed'. Runs on the worker thread; module-level so it closes over no handler
+    state. Bails on ``should_cancel`` before doing any work."""
+    if should_cancel():
         return None
     try:
-        emit({"phase": "retrieval", "status": "start"})
-        from agency_studio.rag import build_context_clause
-        chunks = retriever.retrieve(goal, k=5)
-        emit({"phase": "retrieval", "status": "done", "hits": len(chunks),
-              "sources": [{"title": c.title, "doc_id": c.doc_id} for c in chunks]})
-        return build_context_clause(chunks)
-    except ImportError:  # [studio] extra absent though docs exist — run without RAG
-        emit({"phase": "retrieval", "status": "skipped", "reason": "local-docs extra not installed"})
+        emit({"phase": phase, "status": "start"})
+        hits, sources, clause = produce()
+        emit({"phase": phase, "status": "done", "hits": hits, "sources": sources})
+        return clause
+    except unavailable_exc:  # the [extra] is absent — run without this context source
+        emit({"phase": phase, "status": "skipped", "reason": unavailable_reason})
         return None
-    except Exception as exc:  # non-fatal — surface WHY, then run the mission without RAG
+    except Exception as exc:  # non-fatal — surface the real WHY, then run without it
         import traceback
         traceback.print_exc()
-        emit({"phase": "retrieval", "status": "skipped", "reason": str(exc)[:200]})
+        emit({"phase": phase, "status": "skipped", "reason": str(exc)[:200]})
         return None
+
+
+def _resolve_context_clause(retriever, goal, emit, should_cancel):
+    """RAG (Wave 4): the user's own ingested docs → a ``context_clause`` block (or None).
+    Auto-runs whenever docs exist. See ``_resolve_clause`` for the best-effort contract."""
+    if retriever is None:
+        return None
+
+    def _produce():
+        from agency_studio.rag import build_context_clause
+        chunks = retriever.retrieve(goal, k=5)
+        sources = [{"title": c.title, "doc_id": c.doc_id} for c in chunks]
+        return len(chunks), sources, build_context_clause(chunks)
+
+    return _resolve_clause("retrieval", emit, should_cancel, produce=_produce,
+                           unavailable_exc=ImportError,
+                           unavailable_reason="local-docs extra not installed")
+
+
+def _resolve_web_clause(goal, emit, should_cancel):
+    """Web search (Wave 5, opt-in): fresh web results → a ``context_clause`` block (or None).
+    See ``_resolve_clause`` for the best-effort contract."""
+    from agency_studio.websearch import WebSearchUnavailable
+
+    def _produce():
+        from agency_studio.websearch import build_web_context_clause, web_search
+        results = web_search(goal, k=5)
+        sources = [{"title": r.title, "url": r.url} for r in results]
+        return len(results), sources, build_web_context_clause(results)
+
+    return _resolve_clause("websearch", emit, should_cancel, produce=_produce,
+                           unavailable_exc=WebSearchUnavailable,
+                           unavailable_reason="web-search extra not installed")
+
+
+def _resolve_mcp_clause(goal, emit, should_cancel):
+    """MCP (Wave 5, opt-in): resources from the user's configured MCP servers → a
+    ``context_clause`` block (or None). See ``_resolve_clause`` for the best-effort contract."""
+    from agency_studio.mcp_client import McpUnavailable
+
+    def _produce():
+        from agency_studio import mcp_client
+        items = mcp_client.read_resources(goal)
+        sources = [{"name": r.name, "server": r.server} for r in items]
+        return len(items), sources, mcp_client.build_mcp_context_clause(items)
+
+    return _resolve_clause("mcp", emit, should_cancel, produce=_produce,
+                           unavailable_exc=McpUnavailable,
+                           unavailable_reason="mcp extra not installed")
+
+
+def _compose_context_clause(*blocks: "Optional[str]") -> "Optional[str]":
+    """Join the non-None ``context_clause`` blocks (RAG, web, and — Brick B — MCP) into the
+    single ``context_clause`` string threaded to ``run_mission_cli``. Returns None when every
+    block is None, so a mission with no injected context is byte-identical to one run without
+    any of these features (the shared default-None contract). Order is caller-defined: the
+    user's own documents (RAG) come first, fresh web results after."""
+    present = [b for b in blocks if b]
+    if not present:
+        return None
+    return "\n\n".join(present)
 
 
 def _prune_assets_best_effort(server, *, keep: "Iterable[str]" = ()) -> None:
@@ -511,6 +572,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_models_status()
         if path == "/api/docs":
             return self._handle_list_docs()
+        if path == "/api/mcp":
+            return self._handle_list_mcp_servers()
         if path.startswith("/api/mission/"):
             rest = path[len("/api/mission/"):]
             if rest.endswith("/pdf"):
@@ -622,7 +685,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         request = self._parse_mission_request()
         if request is None:
             return  # a 400 was already sent
-        goal, engine = request
+        goal, engine, web_search, use_mcp = request
         self._begin_sse()
         # Register an ephemeral run id BEFORE streaming, and announce it as the first
         # frame, so the GUI can stop this exact run via POST /api/mission/{id}/cancel
@@ -632,7 +695,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         self._register_run(run_id, cancel_event)
         try:
             self._write_sse({"phase": "run", "run_id": run_id})
-            result_box = self._stream_mission(goal, engine, cancel_event)
+            result_box = self._stream_mission(goal, engine, cancel_event, web_search, use_mcp)
         finally:
             # Deregister the instant the run is over — BEFORE writing the terminal
             # frame — so a cancel arriving during that (socket-write) window gets a
@@ -670,11 +733,14 @@ class StudioHandler(BaseHTTPRequestHandler):
         cancel_event.set()
         self._send_json({"status": "cancelling", "run_id": run_id}, status=202)
 
-    def _parse_mission_request(self) -> "tuple[str, str] | None":
-        """Read + validate the JSON body. Returns ``(goal, engine)``, or ``None``
-        after sending the matching error: a 400 for bad JSON / a non-object body /
+    def _parse_mission_request(self) -> "tuple[str, str, bool, bool] | None":
+        """Read + validate the JSON body. Returns ``(goal, engine, web_search, use_mcp)``, or
+        ``None`` after sending the matching error: a 400 for bad JSON / a non-object body /
         missing goal, or the error ``_read_body`` already sent (400/408/411/413) for a
-        malformed, withheld, chunked, or oversized body."""
+        malformed, withheld, chunked, or oversized body. ``web_search`` and ``use_mcp`` are
+        the Wave-5 opt-in flags (default false) — any truthy JSON value enables the matching
+        best-effort context step; absent/false leaves the mission byte-identical to a
+        pre-Wave-5 run."""
         payload = self._read_json_body()
         if payload is None:
             return None  # _read_json_body already sent the error (and closed if needed)
@@ -682,7 +748,8 @@ class StudioHandler(BaseHTTPRequestHandler):
         if not goal:
             self._send_error_json(400, "missing 'goal'")
             return None
-        return goal, payload.get("engine") or "claude-code"
+        return (goal, payload.get("engine") or "claude-code",
+                bool(payload.get("web_search")), bool(payload.get("mcp")))
 
     def _begin_sse(self) -> None:
         """Emit the SSE response headers. The Mission Console consumes this via
@@ -699,7 +766,8 @@ class StudioHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _stream_mission(
-        self, goal: str, engine: str, cancel_event: threading.Event
+        self, goal: str, engine: str, cancel_event: threading.Event,
+        web_search: bool = False, use_mcp: bool = False,
     ) -> "dict | None":
         """Run the mission on a worker thread and stream its progress events.
 
@@ -733,23 +801,37 @@ class StudioHandler(BaseHTTPRequestHandler):
             from agency_cli import runner_bridge
             from agency_cli.engines.cli_engine import MissionCancelled
             try:
-                context_clause = _resolve_context_clause(
-                    retriever, goal, events.put, cancel_event.is_set
-                )
                 run_kwargs = dict(
                     goal=goal, project_root=project_root, engine=engine,
                     on_event=events.put, should_cancel=cancel_event.is_set,
                     asset_clause=ASSET_CLAUSE, render_assets=render_assets,
                 )
-                # Forward the RAG context only if the installed agency-kit actually has the
-                # additive context_clause hook — a mismatched (older) agency-kit would else
-                # TypeError on the unexpected kwarg and break EVERY mission. Degrade gracefully.
-                if context_clause is not None:
-                    if "context_clause" in inspect.signature(runner_bridge.run).parameters:
+                # Only resolve context if the installed agency-kit actually has the additive
+                # context_clause hook. Check FIRST — before any retrieval/search/MCP work — so
+                # an older agency-kit never pays a network round-trip (web/MCP) whose result
+                # would then be silently discarded. A mismatched agency-kit would else TypeError
+                # on the unexpected kwarg and break EVERY mission; here it degrades gracefully.
+                if "context_clause" in inspect.signature(runner_bridge.run).parameters:
+                    # Wave 4 (RAG, auto when the user has docs) + Wave 5 (web search + MCP, each
+                    # opt-in per mission) each produce an independent block; compose into the
+                    # single context_clause. User docs first, fresh web results, then MCP.
+                    rag_clause = _resolve_context_clause(
+                        retriever, goal, events.put, cancel_event.is_set
+                    )
+                    web_clause = (
+                        _resolve_web_clause(goal, events.put, cancel_event.is_set)
+                        if web_search else None
+                    )
+                    mcp_clause = (
+                        _resolve_mcp_clause(goal, events.put, cancel_event.is_set)
+                        if use_mcp else None
+                    )
+                    context_clause = _compose_context_clause(rag_clause, web_clause, mcp_clause)
+                    if context_clause is not None:
                         run_kwargs["context_clause"] = context_clause
-                    else:
-                        print("[studio] installed agency-kit lacks the context_clause hook; "
-                              "running without RAG context")
+                elif retriever is not None or web_search or use_mcp:
+                    print("[studio] installed agency-kit lacks the context_clause hook; "
+                          "running without RAG / web / MCP context")
                 result_box["result"] = runner_bridge.run(**run_kwargs)
             except MissionCancelled:
                 # Stopped before any persistence. Recorded so that — when the client
@@ -925,6 +1007,16 @@ class StudioHandler(BaseHTTPRequestHandler):
              "n_chunks": d.n_chunks, "created": d.created}
             for d in docs
         ]})
+
+    def _handle_list_mcp_servers(self) -> None:
+        """List the configured MCP servers (GET /api/mcp) from mcp.json — config only, no
+        connection attempt (a GET must never hang on a dead server), and needs no [mcp] extra
+        (parsing the file is pure stdlib). A malformed mcp.json surfaces as a 400 with why."""
+        try:
+            from agency_studio import mcp_client
+            self._send_json({"servers": mcp_client.list_servers()})
+        except ValueError as exc:  # malformed mcp.json
+            self._send_error_json(400, str(exc))
 
     def _handle_delete_doc(self, doc_id: str) -> None:
         """Delete an ingested document and its chunks (DELETE /api/docs/{id}). 404 for an
