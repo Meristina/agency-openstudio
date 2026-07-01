@@ -31,16 +31,30 @@ describe("<AssetGallery>", () => {
     expect(container.querySelector("audio")?.getAttribute("src")).toBe("/media/missions/m1/audio/a.wav");
   });
 
-  it("surfaces failed/skipped renders as residual rows with their reason", () => {
+  it("renders an ok video entry as a <video> player captioned with its prompt + model", () => {
+    const items: AssetManifestItem[] = [
+      { type: "video", status: "ok", url: "/media/missions/m1/videos/v.mp4", model: "seedance-2.0", seconds: 8, prompt: "a drone shot of a city" },
+    ];
+    const { container } = render(<AssetGallery items={items} />);
+    expect(container.querySelector("video")?.getAttribute("src")).toBe("/media/missions/m1/videos/v.mp4");
+    expect(screen.getByText(/seedance-2.0 · 8s/)).toBeTruthy();
+    expect(container.querySelector("img")).toBeNull();  // a video is never an <img>
+  });
+
+  it("surfaces failed/skipped renders (incl. video) as residual rows with their reason", () => {
     const items: AssetManifestItem[] = [
       { type: "image", status: "failed", reason: "Metal OOM" },
       { type: "tts", status: "skipped", reason: "cancelled" },
+      { type: "video", status: "failed", reason: "no API key" },
     ];
     const { container } = render(<AssetGallery items={items} />);
     // No media elements for non-ok entries — they never reached a served url.
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("audio")).toBeNull();
+    expect(container.querySelector("video")).toBeNull();
     expect(container.textContent).toContain("failed — Metal OOM");
     expect(container.textContent).toContain("skipped — cancelled");
+    expect(container.textContent).toContain("video");
+    expect(container.textContent).toContain("failed — no API key");
   });
 });

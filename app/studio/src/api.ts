@@ -115,7 +115,7 @@ export async function cancelMission(runId: string): Promise<boolean> {
 export async function runMission(
   goal: string,
   onEvent: (event: MissionEvent) => void,
-  opts: { engine?: string; signal?: AbortSignal; webSearch?: boolean; mcp?: boolean; knowledge?: boolean; mcpTools?: boolean; personas?: boolean; visual?: boolean } = {},
+  opts: { engine?: string; signal?: AbortSignal; webSearch?: boolean; mcp?: boolean; knowledge?: boolean; mcpTools?: boolean; personas?: boolean; visual?: boolean; video?: boolean } = {},
 ): Promise<void> {
   const res = await fetch("/api/mission", {
     method: "POST",
@@ -132,6 +132,7 @@ export async function runMission(
       mcp_tools: opts.mcpTools ?? false,
       personas: opts.personas ?? false,
       visual: opts.visual ?? false,
+      video: opts.video ?? false,
     }),
     signal: opts.signal,
   });

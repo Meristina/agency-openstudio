@@ -1,10 +1,12 @@
 # Wave 6 — Advanced extensions · Implementation Plan
 
 > Wave 6 is a **basket of five independent plug-ins** (knowledge graphs · MCP tool-calling ·
-> persona doctrine · visual RAG · cloud video). This plan tracks the bricks as they land. Four
-> are **BUILT** so far — the **knowledge-graph** brick (below), the **MCP tool-calling** brick
-> (second section), the **persona-doctrine** brick (third section), and the **visual-RAG** brick
-> (fourth section); the remaining one (cloud video) stays deferred and is **not** built here.
+> persona doctrine · visual RAG · cloud video). This plan tracks the bricks as they land. **All
+> five** are now **BUILT** — the **knowledge-graph** brick (below), the **MCP tool-calling** brick
+> (second section), the **persona-doctrine** brick (third section), the **visual-RAG** brick
+> (fourth section), and the **cloud-video (seedance)** brick (fifth section). Their offline suites
+> run anywhere; the live model / network / MCP-server / import / captioning / video-render paths
+> need the Apple Silicon Mac or the network (deferred like Wave 2).
 
 ## Brick 1 — Knowledge graphs (graph-RAG over docs + history)
 
@@ -446,4 +448,99 @@ when local.
   `path_inside`-guarded route and is out of scope.
 - **Native visual embeddings (ColPali-style).** The brick is caption-to-text (reuses the text
   embedder); a multi-vector visual store is a later, larger build.
-- **The last Wave-6 plug-in — cloud video (`seedance-2.0`).** Its own brick.
+- **The last Wave-6 plug-in — cloud video (`seedance-2.0`).** Its own brick (below).
+
+
+## Brick 5 — Cloud video (seedance) — a department deliverable, rendered off-machine
+
+> Status: **BUILT** — the fifth and final Wave 6 brick, **studio-only** (a single repo). Unlike
+> Bricks 2/3, it needs **no new agency-kit surface**: cloud video rides the SHIPPED Wave-3
+> `asset_clause` / `render_assets` hooks (the same way visual RAG rode `context_clause`). The
+> module (`agency_studio/seedance.py`), the `video` asset type in `assets.py`, the
+> `ModelManager.generate_video` render seam, the server wiring (`video` opt-in flag, dynamic asset
+> clause, `.mp4` MIME), the GUI (toggle + `<video>` gallery), and the offline suites
+> (`tests/test_seedance.py` + video cases across `test_assets.py` / `test_assets_render.py` /
+> `test_server.py`; frontend gallery + api tests) all land here. The **live render path** (the
+> seedance cloud POST + task-poll + mp4 download) is validated on the network, deferred like Wave
+> 2/5's live model/network paths.
+
+### The load-bearing correction (why seedance is NOT another `context_clause` brick)
+
+Bricks 1/4/5-of-Wave-5 all inject *retrieved context* through the additive `context_clause` hook.
+Seedance is the opposite shape: it produces an **asset deliverable** (a rendered file), not context
+for the prompt. So its natural home is the **Wave-3 asset pipeline** (`parse_markers` → `render` →
+`rewrite_delivered`), which already exists and is already threaded via `asset_clause` /
+`render_assets`. The brick therefore adds **no agency-kit hook at all** — it extends the studio's
+own marker parser + render step with one new type (`video`) and one new backend (the seedance
+cloud API). This is the cleanest brick of Wave 6: single repo, reuses a shipped pipeline end-to-end.
+
+### The load-bearing security correction (the first *mission-time* off-machine flow)
+
+Every prior brick preserved the invariant **"a mission never touches the network."** Brick 4's
+cloud VLM only runs at INGEST time, on an image the user picked and consented to upload. A *video*
+marker is categorically different: it is emitted by a department (MODEL OUTPUT — untrusted) and
+rendered **during** a mission. Left ungated, an untrusted marker alone could trigger an off-machine
+call mid-mission. So video is **triple-gated** — all three must hold before one byte leaves the box:
+
+1. **A per-mission `video` opt-in flag** (default off). Threaded straight into
+   `assets.parse_markers(..., allow_video=...)`: with it false, every `video` marker is dropped at
+   the parse boundary, so the render path (and any network call) is unreachable and the mission is
+   byte-identical to one with no video markers. This is the primary gate — it means the *untrusted
+   marker* can never be the thing that decides to network.
+2. **An env-only API key** (`AGENCY_STUDIO_VIDEO_API_KEY`), read at call time in
+   `seedance._probe_cloud` / `_run_cloud` — never a request field, never persisted, never logged,
+   never returned by an endpoint. Absent ⇒ a clean `SeedanceUnavailable` (→ 501), never a silent
+   attempt. Mirrors Brick 4's cloud-key fence.
+3. **An https-only endpoint** (SECURITY.md #4), enforced in `_probe_cloud`; asserted for every
+   registry entry in `test_seedance.py`.
+
+The marker itself never chooses the **model tier, clip duration, or resolution** — those are the
+parser's fixed safe caps (`MAX_VIDEO = 1`, a fixed short/720p render), so an untrusted marker can't
+weaponise a long/4k clip as a cost-DoS. A `video` marker is additionally route-gated to
+`marketing` (a campaign video is a marketing deliverable), exactly like an `image`.
+
+### The decisions (final)
+
+- **Cloud-only backend.** Unlike visual RAG (local MLX default + optional cloud), text-to-video
+  does not fit a 16 GB Mac, so `seedance-2.0` is intrinsically remote; the `(probe, load, run)`
+  seam carries a single `cloud` triple. No new `[…]` extra — the cloud call is stdlib `urllib`
+  (network-deferred like `visual._run_cloud`), and "unavailable" means *no API key*, not a missing
+  package.
+- **`generate_video` rides `ModelManager`** (keyed `video:<id>`) for uniformity with the
+  cloud-caption path — a cloud client has zero residency cost, but flowing it through the residency
+  seam keeps evict/warm logic special-case-free.
+- **Renders last.** In `assets.render` the video renders *after* the local GPU models (image, tts),
+  which are grouped to avoid warm-slot thrash; a cloud call has no residency, so it goes last.
+- **Rewrite → a labelled link** (`[Generated video — <prompt>](url)`), the same shape as an audio
+  caption (a PDF/markdown reader can't embed video), so the shipped exporter `_MEDIA_LINK` pass
+  localizes it with **zero exporter change**. A failed/skipped render → `_[video unavailable]_`.
+- **Dynamic asset clause.** The `video` stanza is appended to `ASSET_CLAUSE` *only* when the mission
+  opted in (`_asset_clause(allow_video)`), so a department is never invited to emit a marker the
+  studio would only drop.
+
+### File-by-file (built)
+
+- `agency_studio/seedance.py` — `SeedanceUnavailable`, `VideoModel` + `VIDEO_MODELS` registry,
+  the cloud `(probe, load, run)` seam (https + env-key gated; `_run_cloud` network-deferred),
+  `video_model` / `_backend`.
+- `agency_studio/engines/local_media.py` — `VideoResult` + `ModelManager.generate_video`.
+- `agency_studio/assets.py` — `video` in `_ROUTE_FOR_TYPE`; `parse_markers(..., allow_video=)`
+  gate; `_build_video`; `MAX_VIDEO`; `_RENDER_ORDER`; render + `_reference` + `_placeholder` cases.
+- `agency_studio/server.py` — `video` opt-in flag (parse → stream → run); `allow_video` into
+  `_build_render_assets`; `_asset_clause(allow_video)`; `.mp4`/`.mov` MIME.
+- GUI (`app/studio/src/`) — the "Use cloud video" toggle (`App.tsx`), the `<video>` gallery
+  (`AssetGallery.tsx`), the `video` flag (`api.ts`), and the `video` kind in `types.ts` /
+  `timeline.ts` / `Timeline.tsx`.
+- Tests — `tests/test_seedance.py` (registry + gates + `generate_video` dispatch), video cases in
+  `test_assets.py` (the `allow_video` gate), `test_assets_render.py` (render/order/rewrite), and
+  `test_server.py` (the render-hook gate + the dynamic clause); frontend `AssetGallery.test.tsx` +
+  `api.test.ts`.
+
+### Non-goals (deferred — do not build here)
+
+- **The live render surface.** The marker → render → rewrite pipeline + the cloud gates are built
+  and offline-tested; the actual seedance POST + task-poll + mp4 download is validated live on the
+  network (deferred like Wave 2/5). Until then `_run_cloud` raises `SeedanceUnavailable`.
+- **Multiple videos / caller-chosen duration / resolution.** Fixed at one short 720p clip per
+  mission (the cost-DoS + untrusted-input guard). A configurable tier is a later polish.
+- **A local video model.** Text-to-video doesn't fit the 16 GB Mac — cloud is the only backend.

@@ -38,9 +38,18 @@ class _FakeManager:
             path=f"{out_dir}/audio/{len(self.calls)}.wav", voice=voice, seconds=2.0
         )
 
+    def generate_video(self, prompt, *, out_dir):
+        self.calls.append(("video", prompt))
+        if prompt in self._fail_on:
+            raise RuntimeError("seedance cloud unavailable")
+        return SimpleNamespace(
+            path=f"{out_dir}/videos/{len(self.calls)}.mp4", model="seedance-2.0", seconds=8.0
+        )
+
 
 IMG = assets.AssetRequest(type="image", prompt="hero", model="flux-schnell", width=1024, height=1024)
 TTS = assets.AssetRequest(type="tts", text="hello", voice="af_heart")
+VIDEO = assets.AssetRequest(type="video", prompt="a drone shot")
 
 
 def _to_url(path):
@@ -68,6 +77,45 @@ def test_manifest_records_url_and_metadata():
     assert img["seconds"] == 1.0
     assert tts["url"].startswith("/media/") and tts["voice"] == "af_heart" and tts["text"] == "hello"
     assert tts["seconds"] == 2.0
+
+
+# ── render: cloud video (seedance, Wave 6) ────────────────────────────────────
+
+def test_video_renders_last_after_local_models():
+    mgr = _FakeManager()
+    manifest = assets.render(mgr, [VIDEO, IMG, TTS], out_dir="/m", to_url=_to_url)
+    # Manifest keeps document order (video, image, tts)...
+    assert [m["type"] for m in manifest] == ["video", "image", "tts"]
+    # ...but the cloud video renders LAST, after the fast local GPU models.
+    assert [c[0] for c in mgr.calls] == ["image", "tts", "video"]
+
+
+def test_video_manifest_records_url_model_and_prompt():
+    mgr = _FakeManager()
+    manifest = assets.render(mgr, [VIDEO], out_dir="/m", to_url=_to_url)
+    vid = manifest[0]
+    assert vid["type"] == "video" and vid["status"] == "ok"
+    assert vid["url"].startswith("/media/") and vid["url"].endswith(".mp4")
+    assert vid["model"] == "seedance-2.0" and vid["prompt"] == "a drone shot" and vid["seconds"] == 8.0
+
+
+def test_video_failure_is_isolated_and_becomes_a_placeholder():
+    mgr = _FakeManager(fail_on={"a drone shot"})
+    delivered = "Before.\n```asset\n" + json.dumps({"type": "video", "prompt": "a drone shot"}) + "\n```\nAfter."
+    req = assets.AssetRequest(type="video", prompt="a drone shot", block_index=0)
+    manifest = assets.render(mgr, [req], out_dir="/m", to_url=_to_url)
+    assert manifest[0]["status"] == "failed" and "seedance" in manifest[0]["reason"]
+    rewritten = assets.rewrite_delivered(delivered, manifest)
+    assert "_[video unavailable]_" in rewritten and "```asset" not in rewritten
+
+
+def test_rewrite_swaps_rendered_video_for_a_labelled_link():
+    mgr = _FakeManager()
+    delivered = "Intro.\n```asset\n" + json.dumps({"type": "video", "prompt": "a drone shot"}) + "\n```\nOutro."
+    req = assets.AssetRequest(type="video", prompt="a drone shot", block_index=0)
+    manifest = assets.render(mgr, [req], out_dir="/m", to_url=_to_url)
+    rewritten = assets.rewrite_delivered(delivered, manifest)
+    assert "[Generated video — a drone shot](" in rewritten and "```asset" not in rewritten
 
 
 # ── render: never-raises isolation + cancel ───────────────────────────────────

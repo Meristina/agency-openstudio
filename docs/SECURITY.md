@@ -106,6 +106,35 @@ so the default remains fully local (covered by `tests/test_visual.py` + `tests/t
   additive `context_clause` (composed after RAG/web/MCP/knowledge); they reach the department +
   synthesis prompts only, never the router or Inspector, and the veto loop is unchanged.
 
+## Wave 6 — Cloud video / seedance (rules #4, #5, #6, implemented)
+
+Cloud video (`seedance-2.0`) renders a short marketing clip as a department deliverable, via an
+off-machine API. It is the studio's **first *mission-time* off-machine flow** — a video marker is
+MODEL OUTPUT (untrusted) rendered *during* a mission, categorically different from Visual RAG's
+ingest-only, user-consented upload. So it carries a **stricter, triple gate** (covered by
+`tests/test_seedance.py` + video cases in `tests/test_assets.py` / `test_server.py`):
+
+- **A per-mission `video` opt-in flag is the primary gate.** It is threaded straight into the
+  untrusted-boundary parser — `assets.parse_markers(..., allow_video=<flag>)`. With it off (the
+  default), every `video` marker is dropped *at parse time*, before a request is ever built, so the
+  render path — and any network call — is structurally unreachable and the mission is byte-identical
+  to one with no video markers. This means **an untrusted marker alone can never decide to
+  network**: a human must have opted this specific mission into cloud video.
+- **An env-only API key** (`AGENCY_STUDIO_VIDEO_API_KEY`) is read at call time in
+  `seedance._probe_cloud` / `_run_cloud` — never a request field, never persisted, never returned by
+  an endpoint, never logged or placed in an error/SSE frame (rule #6). Absent ⇒ a clean
+  `SeedanceUnavailable` (→ 501), never a silent attempt.
+- **An https-only endpoint** is enforced in `_probe_cloud` before any socket (rule #4); every entry
+  in `VIDEO_MODELS` is asserted https in the suite. Video is **cloud-only** (no local backend — the
+  model doesn't fit the 16 GB Mac), so there is no local-fallback path to reason about.
+- **The marker never chooses compute.** Model tier, clip duration, and resolution are fixed safe
+  caps (`MAX_VIDEO = 1`, a short 720p render) in the parser — an untrusted marker can't weaponise a
+  long/4k clip as a cost-DoS, the same discipline as the image model/canvas allowlist. Video is also
+  route-gated to `marketing`, like an image.
+- **Rendered clips live under the served assets root** (`studio_assets/missions/<id>/videos/`,
+  reached only through the existing `path_inside`-guarded `/media` route with a `video/mp4` MIME);
+  a failed render leaves no file, only a `_[video unavailable]_` placeholder in the deliverable.
+
 ## `path_inside()` reference implementation
 
 Mirrors the shipped guard in `agency_studio/server.py` (the source of truth). It takes the

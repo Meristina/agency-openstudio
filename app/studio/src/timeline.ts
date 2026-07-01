@@ -20,7 +20,7 @@ export interface InspectStep {
 }
 
 export interface AssetStep {
-  kind: "image" | "tts";
+  kind: "image" | "tts" | "video";
   status: "running" | "ok" | "failed" | "skipped";
   url: string | null;
   reason: string | null;

@@ -974,6 +974,66 @@ def test_build_render_assets_strips_off_route_fence_without_touching_gpu(tmp_pat
     assert "assets" not in dossier  # nothing rendered/attempted → no manifest attached
 
 
+# ── Wave 6: cloud-video (seedance) gating at the render hook + the dynamic clause ──
+
+def test_build_render_assets_video_off_strips_fence_without_touching_manager(tmp_path):
+    # THE seedance server-side invariant: without the per-mission opt-in, a video marker never
+    # reaches the manager (no off-machine call), and its raw fence is stripped from `delivered`.
+    from types import SimpleNamespace
+    import queue
+
+    class _BoomMgr:
+        def __getattr__(self, name):
+            raise AssertionError("the manager must not be touched when video is off")
+
+    fake_server = SimpleNamespace(media_lock=threading.Lock(), media=_BoomMgr(), assets_root=tmp_path)
+    render_assets = server._build_render_assets(  # allow_video defaults False
+        fake_server, queue.Queue(), threading.Event())
+    dossier = {
+        "mission_id": "001-x", "route": ["marketing"],
+        "delivered": "Intro\n```asset\n" + json.dumps({"type": "video", "prompt": "a clip"}) + "\n```\nOutro",
+    }
+    render_assets(dossier)
+    assert "```asset" not in dossier["delivered"] and "a clip" not in dossier["delivered"]
+    assert dossier["delivered"] == "Intro\nOutro"
+    assert "assets" not in dossier
+
+
+def test_build_render_assets_video_on_renders_via_manager(tmp_path):
+    # With allow_video=True the video marker IS honored and rendered through generate_video.
+    from types import SimpleNamespace
+    from pathlib import Path
+    import queue
+
+    class _FakeMgr:
+        def generate_video(self, prompt, *, out_dir):
+            p = Path(out_dir) / "videos" / "v.mp4"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"\x00mp4")
+            return SimpleNamespace(path=p, model="seedance-2.0", seconds=8.0)
+
+    fake_server = SimpleNamespace(
+        media_lock=threading.Lock(), media=_FakeMgr(), assets_root=tmp_path,
+        retention_lock=threading.Lock(), media_budget_bytes=10**12,
+    )
+    render_assets = server._build_render_assets(
+        fake_server, queue.Queue(), threading.Event(), allow_video=True)
+    dossier = {
+        "mission_id": "001-x", "route": ["marketing"],
+        "delivered": "Hi\n```asset\n" + json.dumps({"type": "video", "prompt": "a clip"}) + "\n```\nBye",
+    }
+    render_assets(dossier)
+    assert dossier["assets"][0]["status"] == "ok" and dossier["assets"][0]["type"] == "video"
+    assert "[Generated video — a clip](/media/missions/001-x/videos/v.mp4)" in dossier["delivered"]
+
+
+def test_asset_clause_only_offers_video_when_opted_in():
+    base = server._asset_clause(allow_video=False)
+    withvid = server._asset_clause(allow_video=True)
+    assert base == server.ASSET_CLAUSE and '"type": "video"' not in base
+    assert '"type": "video"' in withvid and withvid.startswith(server.ASSET_CLAUSE)
+
+
 def test_build_render_assets_prunes_old_missions_after_render(tmp_path):
     # Post-render retention: an old mission's assets are evicted once the budget is exceeded,
     # while the just-rendered mission (keep={id}) is protected even though it is newest.

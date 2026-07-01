@@ -132,6 +132,8 @@ _CONTENT_TYPES = {
     ".ogg": "audio/ogg",
     ".webm": "audio/webm",
     ".flac": "audio/flac",
+    ".mp4": "video/mp4",   # Wave 6 — seedance cloud video renders land here (served via /media)
+    ".mov": "video/quicktime",
     ".woff": "font/woff",
     ".woff2": "font/woff2",
     ".ttf": "font/ttf",
@@ -162,8 +164,29 @@ ASSET_CLAUSE = (
     "no asset is warranted — never invent one to fill space."
 )
 
+# The extra stanza appended to ASSET_CLAUSE only when a mission opts into cloud video. Kept OFF
+# the base clause so a department is never invited to emit a ```asset video marker the studio
+# would only drop (wasted tokens + a phantom "I made a video") — the offer appears exactly when
+# the render path is actually enabled, mirroring how the video marker is parse-gated on the flag.
+ASSET_CLAUSE_VIDEO = (
+    "\nYou may also request ONE short marketing video (rendered via a cloud model):\n"
+    "```asset\n"
+    '{"type": "video", "prompt": "<concise description of the ~5s clip>"}\n'
+    "```\n"
+    "At most one video per mission; only `type` and `prompt` are honored."
+)
 
-def _build_render_assets(server, events: "queue.Queue", cancel_event: threading.Event):
+
+def _asset_clause(allow_video: bool = False) -> str:
+    """The department/synthesis asset-capability clause. Adds the cloud-video stanza only when the
+    mission opted into video (``allow_video``) — so the base image/TTS offer is byte-identical to
+    Wave 3 whenever video is off, and the video offer never appears for a mission that couldn't
+    render it."""
+    return ASSET_CLAUSE + ASSET_CLAUSE_VIDEO if allow_video else ASSET_CLAUSE
+
+
+def _build_render_assets(server, events: "queue.Queue", cancel_event: threading.Event,
+                         allow_video: bool = False):
     """Build the best-effort asset renderer the headless bridge calls after a clean PASS,
     closed over the long-lived ``server`` (its single warm ``ModelManager`` + assets root),
     this run's SSE ``events`` queue, and its ``cancel_event``.
@@ -174,11 +197,16 @@ def _build_render_assets(server, events: "queue.Queue", cancel_event: threading.
     and cosmetically rewrites ``dossier['delivered']`` — building both before assigning, so a
     failure can't persist a half-rewritten dossier. Assets are written under
     ``studio_assets/missions/<mission_id>/`` (a subtree of the assets root the existing
-    ``/media`` route already serves through ``path_inside``)."""
+    ``/media`` route already serves through ``path_inside``).
+
+    ``allow_video`` is the per-mission cloud-video opt-in, threaded straight into
+    ``parse_markers``: with it false every video marker is dropped at the parse boundary, so the
+    render path (and any off-machine call) is unreachable unless the user opted this mission in."""
     def render_assets(dossier: dict) -> None:
         from agency_studio import assets
         delivered = dossier.get("delivered") or ""
-        requests = assets.parse_markers(delivered, dossier.get("route") or [])
+        requests = assets.parse_markers(
+            delivered, dossier.get("route") or [], allow_video=allow_video)
         # Render only when there is something to render — spinning up the warm ModelManager
         # (and importing the [media] backends) is gated on a non-empty request set.
         manifest: "list[dict]" = []
@@ -813,7 +841,8 @@ class StudioHandler(BaseHTTPRequestHandler):
         request = self._parse_mission_request()
         if request is None:
             return  # a 400 was already sent
-        goal, engine, web_search, use_mcp, use_knowledge, use_mcp_tools, use_personas, use_visual = request
+        (goal, engine, web_search, use_mcp, use_knowledge, use_mcp_tools,
+         use_personas, use_visual, use_video) = request
         self._begin_sse()
         # Register an ephemeral run id BEFORE streaming, and announce it as the first
         # frame, so the GUI can stop this exact run via POST /api/mission/{id}/cancel
@@ -824,7 +853,8 @@ class StudioHandler(BaseHTTPRequestHandler):
         try:
             self._write_sse({"phase": "run", "run_id": run_id})
             result_box = self._stream_mission(goal, engine, cancel_event, web_search, use_mcp,
-                                              use_knowledge, use_mcp_tools, use_personas, use_visual)
+                                              use_knowledge, use_mcp_tools, use_personas,
+                                              use_visual, use_video)
         finally:
             # Deregister the instant the run is over — BEFORE writing the terminal
             # frame — so a cancel arriving during that (socket-write) window gets a
@@ -862,18 +892,20 @@ class StudioHandler(BaseHTTPRequestHandler):
         cancel_event.set()
         self._send_json({"status": "cancelling", "run_id": run_id}, status=202)
 
-    def _parse_mission_request(self) -> "tuple[str, str, bool, bool, bool, bool, bool, bool] | None":
+    def _parse_mission_request(self) -> "tuple[str, str, bool, bool, bool, bool, bool, bool, bool] | None":
         """Read + validate the JSON body. Returns ``(goal, engine, web_search, use_mcp,
-        use_knowledge, use_mcp_tools, use_personas, use_visual)``, or ``None`` after sending the
-        matching error: a 400 for bad JSON / a non-object body / missing goal, or the error
-        ``_read_body`` already sent (400/408/411/413) for a malformed, withheld, chunked, or
+        use_knowledge, use_mcp_tools, use_personas, use_visual, use_video)``, or ``None`` after
+        sending the matching error: a 400 for bad JSON / a non-object body / missing goal, or the
+        error ``_read_body`` already sent (400/408/411/413) for a malformed, withheld, chunked, or
         oversized body. ``web_search`` / ``use_mcp`` (Wave 5) and ``knowledge`` / ``mcp_tools`` /
-        ``personas`` / ``visual`` (Wave 6) are the opt-in flags (default false) — any truthy JSON
-        value enables the matching feature; absent/false leaves the mission byte-identical to a run
-        without that feature. ``mcp_tools`` is the tool-calling counterpart to Wave 5's read-only
-        ``mcp`` resources flag; ``personas`` injects the user's curated per-department persona
-        doctrine; ``visual`` retrieves captions of the user's ingested images (a pure-local vector
-        lookup — the off-machine captioning, if any, happened at ingest time)."""
+        ``personas`` / ``visual`` / ``video`` (Wave 6) are the opt-in flags (default false) — any
+        truthy JSON value enables the matching feature; absent/false leaves the mission
+        byte-identical to a run without that feature. ``mcp_tools`` is the tool-calling counterpart
+        to Wave 5's read-only ``mcp`` resources flag; ``personas`` injects the user's curated
+        per-department persona doctrine; ``visual`` retrieves captions of the user's ingested images
+        (a pure-local vector lookup); ``video`` lets a department request ONE cloud-rendered
+        marketing video (the studio's only off-machine mission-time render — gated here, plus an
+        env API key at render time)."""
         payload = self._read_json_body()
         if payload is None:
             return None  # _read_json_body already sent the error (and closed if needed)
@@ -884,7 +916,8 @@ class StudioHandler(BaseHTTPRequestHandler):
         return (goal, payload.get("engine") or "claude-code",
                 bool(payload.get("web_search")), bool(payload.get("mcp")),
                 bool(payload.get("knowledge")), bool(payload.get("mcp_tools")),
-                bool(payload.get("personas")), bool(payload.get("visual")))
+                bool(payload.get("personas")), bool(payload.get("visual")),
+                bool(payload.get("video")))
 
     def _begin_sse(self) -> None:
         """Emit the SSE response headers. The Mission Console consumes this via
@@ -904,6 +937,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         self, goal: str, engine: str, cancel_event: threading.Event,
         web_search: bool = False, use_mcp: bool = False, use_knowledge: bool = False,
         use_mcp_tools: bool = False, use_personas: bool = False, use_visual: bool = False,
+        use_video: bool = False,
     ) -> "dict | None":
         """Run the mission on a worker thread and stream its progress events.
 
@@ -926,7 +960,9 @@ class StudioHandler(BaseHTTPRequestHandler):
         # over no handler state, exactly like project_root.
         docs_root = self.server.docs_root  # type: ignore[attr-defined]
         # Built over the server (never `self`) so the daemon worker doesn't pin the handler.
-        render_assets = _build_render_assets(self.server, events, cancel_event)  # type: ignore[attr-defined]
+        # ``use_video`` is threaded straight into the parse gate: with it off, every video marker
+        # is dropped and the cloud render path is unreachable (a mission never touches the network).
+        render_assets = _build_render_assets(self.server, events, cancel_event, allow_video=use_video)  # type: ignore[attr-defined]
         # Wave 4 — RAG: resolve the retriever on the handler thread (cheap: build + list_docs,
         # no embed), but do the actual retrieval INSIDE the worker so the embed/model-load runs
         # under the heartbeat loop and observes should_cancel. It's a server-scoped object, so
@@ -954,7 +990,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                 run_kwargs = dict(
                     goal=goal, project_root=project_root, engine=engine,
                     on_event=events.put, should_cancel=cancel_event.is_set,
-                    asset_clause=ASSET_CLAUSE, render_assets=render_assets,
+                    asset_clause=_asset_clause(use_video), render_assets=render_assets,
                 )
                 # Only resolve context if the installed agency-kit actually has the additive
                 # context_clause hook. Check FIRST — before any retrieval/search/MCP work — so

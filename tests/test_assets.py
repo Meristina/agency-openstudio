@@ -23,6 +23,60 @@ def _asset_block(payload: dict) -> str:
     return "```asset\n" + json.dumps(payload) + "\n```"
 
 
+# ── Wave 6 — cloud video (seedance): the per-mission opt-in gate ───────────────
+def test_video_marker_dropped_without_allow_video():
+    # THE core seedance safety invariant: video is a CLOUD render, so a video marker alone (with
+    # allow_video defaulting False) yields NO request — an untrusted marker can never trigger an
+    # off-machine call. Byte-identical to a mission with no video markers.
+    text = _asset_block({"type": "video", "prompt": "a drone shot of a city"})
+    assert assets.parse_markers(text, FULL_ROUTE) == []
+
+
+def test_video_marker_parsed_with_allow_video():
+    text = _asset_block({"type": "video", "prompt": "a drone shot of a city"})
+    reqs = assets.parse_markers(text, FULL_ROUTE, allow_video=True)
+    assert len(reqs) == 1
+    assert reqs[0].type == "video" and reqs[0].prompt == "a drone shot of a city"
+
+
+def test_video_marker_route_gated_to_marketing():
+    # Even opted-in, a video is a marketing deliverable — dropped when marketing didn't run.
+    text = _asset_block({"type": "video", "prompt": "a clip"})
+    assert assets.parse_markers(text, ["product", "solve"], allow_video=True) == []
+    assert len(assets.parse_markers(text, ["marketing"], allow_video=True)) == 1
+
+
+def test_video_marker_ignores_model_duration_resolution_fields():
+    # Untrusted output never chooses the model tier / clip length / resolution (cost-DoS guard).
+    text = _asset_block({
+        "type": "video", "prompt": "a clip",
+        "model": "expensive-4k-model", "duration": 60, "resolution": "4k", "path": "/etc/passwd",
+    })
+    reqs = assets.parse_markers(text, FULL_ROUTE, allow_video=True)
+    assert len(reqs) == 1 and reqs[0].model == "" and reqs[0].width == 0 and reqs[0].height == 0
+
+
+def test_video_capped_at_one_per_mission():
+    text = "\n".join(_asset_block({"type": "video", "prompt": f"clip {i}"}) for i in range(3))
+    reqs = assets.parse_markers(text, FULL_ROUTE, allow_video=True)
+    assert len([r for r in reqs if r.type == "video"]) == assets.MAX_VIDEO == 1
+
+
+def test_video_oversized_prompt_dropped():
+    text = _asset_block({"type": "video", "prompt": "x" * (assets.MAX_TEXT_BYTES + 1)})
+    assert assets.parse_markers(text, FULL_ROUTE, allow_video=True) == []
+
+
+def test_dropped_video_marker_fence_is_still_stripped_from_delivered():
+    # Whether or not video is enabled, a raw ```asset fence must never survive into the deliverable.
+    # With video OFF the marker is parse-dropped (no manifest entry) → rewrite strips the fence.
+    text = "Before.\n" + _asset_block({"type": "video", "prompt": "a clip"}) + "\nAfter."
+    assert assets.parse_markers(text, FULL_ROUTE) == []          # dropped (video off)
+    rewritten = assets.rewrite_delivered(text, [])               # no manifest → strip
+    assert "```asset" not in rewritten and "a clip" not in rewritten
+    assert "Before." in rewritten and "After." in rewritten
+
+
 # ── happy path ────────────────────────────────────────────────────────────────
 
 def test_parses_a_valid_image_marker():

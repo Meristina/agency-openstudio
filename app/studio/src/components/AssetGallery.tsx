@@ -5,19 +5,27 @@
 
 import type { AssetManifestItem } from "../types";
 
-/** The caption for an `ok` entry: the verbatim prompt (image) or narration text (tts). */
+/** The caption for an `ok` entry: the verbatim prompt (image/video) or narration text (tts). */
 function caption(item: AssetManifestItem): string {
   if (item.type === "image") return item.prompt || "generated image";
+  if (item.type === "video") return item.prompt || "generated video";
   return item.text || "generated narration";
 }
 
 /** The render metadata suffix (model/voice · Ns), shown under a successful asset. */
 function meta(item: AssetManifestItem): string {
   const parts: string[] = [];
-  if (item.type === "image" && item.model) parts.push(item.model);
+  if ((item.type === "image" || item.type === "video") && item.model) parts.push(item.model);
   if (item.type === "tts" && item.voice) parts.push(item.voice);
   if (typeof item.seconds === "number") parts.push(`${item.seconds}s`);
   return parts.join(" · ");
+}
+
+/** The residual-list label for a `failed`/`skipped` entry, by marker type. */
+function residualLabel(type: AssetManifestItem["type"]): string {
+  if (type === "image") return "image";
+  if (type === "video") return "video";
+  return "narration";
 }
 
 export default function AssetGallery({ items }: { items?: AssetManifestItem[] }) {
@@ -34,6 +42,8 @@ export default function AssetGallery({ items }: { items?: AssetManifestItem[] })
             <figure key={`${item.url}-${i}`} className="gallery-item">
               {item.type === "image" ? (
                 <img src={item.url} alt={caption(item)} loading="lazy" />
+              ) : item.type === "video" ? (
+                <video controls src={item.url} preload="metadata" />
               ) : (
                 <audio controls src={item.url} />
               )}
@@ -49,7 +59,7 @@ export default function AssetGallery({ items }: { items?: AssetManifestItem[] })
         <ul className="steps asset-residuals">
           {other.map((item, i) => (
             <li key={`${item.type}-${i}`} className="step">
-              <span className="step-dot" /> {item.type === "image" ? "image" : "narration"}
+              <span className="step-dot" /> {residualLabel(item.type)}
               <span className="step-state">
                 {item.status}
                 {item.reason ? ` — ${item.reason}` : ""}

@@ -45,8 +45,14 @@
 > (local MLX default + an opt-in, triple-gated cloud API — the studio's first off-machine flow, at
 > ingest only), the new `[visual]` extra, `visual` opt-in flag + `visual` SSE phase +
 > `POST/GET/DELETE /api/visual` + GUI Visual tab & toggle. All shipped offline-first (live paths
-> need the Mac / a real MCP server / the network). The remaining Wave-6 plug-in (cloud video
-> (seedance)) remains deferred. See `docs/WAVE6-PLAN.md`.
+> need the Mac / a real MCP server / the network). The **last Wave-6 plug-in — cloud video
+> (seedance) — is now BUILT too** (studio-only, zero new agency-kit surface): cloud video rides
+> the shipped Wave-3 `asset_clause`/`render_assets` pipeline as a new `video` asset type
+> (`agency_studio/seedance.py` + `ModelManager.generate_video`), **triple-gated** (per-mission
+> `video` opt-in + env `AGENCY_STUDIO_VIDEO_API_KEY` + https-only) since it is the first
+> *mission-time* off-machine flow; `video` SSE frames on the `asset` phase + GUI toggle & `<video>`
+> gallery. Live render (the seedance POST) is network-deferred. **Wave 6 is complete.** See
+> `docs/WAVE6-PLAN.md`.
 > Setup for Wave 2: Python 3.10+ venv
 > + `[media]` extra + system `ffmpeg` (STT); image defaults to a non-gated 8-bit
 > FLUX.1-schnell mirror (no HF login).
@@ -262,7 +268,7 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
 - Shared: `context_block.format_context_block` (one home for the `[n]`-citation convention) and
   the server's `_resolve_clause` scaffold, used by RAG + web + MCP alike.
 
-### Wave 6 — Advanced extensions (plug-ins behind flags, MIT/Apache) *(mostly deferred)*
+### Wave 6 — Advanced extensions (plug-ins behind flags, MIT/Apache) *(all five bricks BUILT)*
 - ✅ **Knowledge graphs — BUILT & MERGED** (offline-first slice; studio PR #30 → `main`; see
   `docs/WAVE6-PLAN.md`). The first
   Wave-6 brick lands as **graph-RAG**, the exact parallel of Waves 4/5: `agency_studio/knowledge.py`
@@ -313,7 +319,18 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
   `POST/GET/DELETE /api/visual`, and the GUI "Visual" tab + "Use visual RAG" toggle + timeline
   step. Offline suite runs anywhere (VLM + embed stubbed); the live captioning path needs the Mac /
   the network, deferred like Wave 2/5.
-- *(deferred)* `seedance-2.0` (MIT): **cloud video** modality as a department tool.
+- ✅ **`agency_studio/seedance.py`** (`seedance-2.0`, MIT): **cloud video** as a department
+  deliverable — the fifth Wave-6 brick, **studio-only** (no new agency-kit surface). Cloud video
+  rides the shipped Wave-3 `asset_clause`/`render_assets` pipeline as a new `video` asset type
+  (`assets.py` `_build_video` + `MAX_VIDEO=1`; `ModelManager.generate_video`; `VideoResult`), so a
+  department can request one short marketing clip. **Cloud-only** (text-to-video doesn't fit the 16
+  GB Mac) and **triple-gated** — the first *mission-time* off-machine flow, so a per-mission `video`
+  opt-in flag (default off; drops the marker at the parse boundary so an untrusted marker alone can
+  never network) + env-only `AGENCY_STUDIO_VIDEO_API_KEY` + https-only endpoint must ALL hold. The
+  marker never picks the model tier/duration/resolution (fixed safe caps). `video` SSE frames on the
+  `asset` phase, the `.mp4` MIME on `/media`, and the GUI "Use cloud video" toggle + `<video>`
+  gallery. Offline suite runs anywhere (`_run_cloud` network-deferred → `SeedanceUnavailable`); the
+  live render (the seedance POST + poll + mp4 download) needs the network, deferred like Wave 2/5.
 - 📚 `awesome-llm-apps`: inspiration catalog, not a dependency.
 
 ---

@@ -275,7 +275,7 @@ export default function Timeline({ events }: { events: MissionEvent[] }) {
           <ul className="steps">
             {model.assets.map((a, i) => (
               <li key={`${a.kind}-${i}`} className={`step ${a.status === "running" ? "active" : "done"}`}>
-                <span className="step-dot" /> {a.kind === "image" ? "image" : "narration"}
+                <span className="step-dot" /> {a.kind === "image" ? "image" : a.kind === "video" ? "video" : "narration"}
                 <span className="step-state">{assetStateLabel(a)}</span>
               </li>
             ))}

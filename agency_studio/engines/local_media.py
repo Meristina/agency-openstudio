@@ -73,6 +73,14 @@ class SpeechResult:
     seconds: float
 
 
+@dataclass(frozen=True)
+class VideoResult:
+    path: Path
+    prompt: str
+    seconds: float
+    model: str
+
+
 # ── back-end adapters (lazy, defensive, monkeypatchable) ──────────────────────
 # Split into three roles so the ModelManager can keep memory safe AND fail fast:
 #   _probe_*  — CHEAP import check (raises MediaUnavailable if the [media] extra is
@@ -474,3 +482,36 @@ class ModelManager:
                 lambda: load(entry),
             )
             return run(backend, entry, images=images)
+
+    def generate_video(
+        self, prompt: str, *, model: "Optional[str]" = None,
+        out_dir: "str | Path | None" = None,
+    ) -> VideoResult:
+        """Render one video from ``prompt`` via the CLOUD seedance backend (Wave 6 — the seedance
+        brick) and write the mp4 under ``videos/``. The studio's FIRST *cloud* asset render:
+        text-to-video does not fit a 16 GB Mac, so this is an off-machine call — reachable only
+        after the caller has already passed the per-mission ``video`` opt-in (enforced upstream in
+        ``assets.parse_markers``) AND the env API key is present (enforced in ``seedance._probe_cloud``).
+
+        Keyed by ``video:<id>`` so it flows through the same residency seam as every other model —
+        a cloud client has no residency cost, but this keeps evict/warm logic uniform with the
+        cloud-caption path. The backend is lazy-imported, so a missing key raises
+        ``SeedanceUnavailable`` (→ 501) from the probe, before any eviction."""
+        if not prompt.strip():
+            raise ValueError("prompt must not be empty")
+        from .. import seedance  # lazy: avoids a load-time cycle, keeps the module self-contained
+        entry = seedance.video_model(model or seedance.DEFAULT_VIDEO_MODEL)  # ValueError on unknown id
+        probe, load, run = seedance._backend(entry)
+        out = self._asset_path("videos", "mp4", out_dir)
+        started = time.monotonic()
+        with self._lock:
+            backend = self._ensure(
+                f"video:{entry.id}",
+                lambda: probe(entry),   # the cloud probe needs the entry (endpoint + env key)
+                lambda: load(entry),
+            )
+            run(backend, entry, prompt=prompt, out_path=out)
+        return VideoResult(
+            path=out, prompt=prompt,
+            seconds=round(time.monotonic() - started, 2), model=entry.id,
+        )

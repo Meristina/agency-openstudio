@@ -45,7 +45,7 @@ a clean web GUI.
 > A shared `context_block.format_context_block` + server `_resolve_clause` back RAG/web/MCP alike;
 > MCP is read-only **resources-as-context** (tool-calling is the `claude --mcp-config` path,
 > deferred). Offline suite runs anywhere; the live web/MCP paths need a network / a real MCP
-> server (deferred like Wave 2). **Wave 6 — advanced extensions — is partly BUILT (four bricks)**,
+> server (deferred like Wave 2). **Wave 6 — advanced extensions — is BUILT (all five bricks)**,
 > tracked
 > in `docs/WAVE6-PLAN.md`: the **knowledge-graph brick** (offline-first slice; studio PR #30) lands as *graph-RAG*,
 > the exact parallel of Waves 4/5 — `agency_studio/knowledge.py` extracts `(subject, relation,
@@ -87,8 +87,24 @@ a clean web GUI.
 > off-machine data flow, **fenced** by an env-only API key + explicit per-upload consent (`?cloud=1`)
 > + https-only, and **only at ingest time** (a mission never touches the network). Opt-in per
 > mission (`visual` flag) + `visual` SSE phase + `POST/GET/DELETE /api/visual` + GUI Visual tab &
-> toggle. The **remaining Wave-6 plug-in** (cloud video (seedance)) **remains deferred**; see
-> `ROADMAP.md`. Do **not** invent implementation that the roadmap/WAVE-PLANs defer.
+> toggle. The **fifth and final Wave-6 brick — cloud video (seedance) — is also BUILT**, completing
+> Wave 6. It is the one brick that is **studio-only** (no new agency-kit surface): cloud video is a
+> department *deliverable*, not context, so it rides the shipped **Wave-3 `asset_clause` /
+> `render_assets` asset pipeline** as a new `video` marker type (`agency_studio/seedance.py`'s
+> cloud `(probe, load, run)` backend + `ModelManager.generate_video` + `VideoResult`; `assets.py`
+> `_build_video` + `MAX_VIDEO=1`). It is **cloud-only** (text-to-video doesn't fit the 16 GB Mac)
+> and the studio's first *mission-time* off-machine flow, so — unlike Brick 4's ingest-only cloud —
+> it is **triple-gated**: a per-mission `video` opt-in flag (default off; drops the marker at the
+> parse boundary via `parse_markers(..., allow_video=...)`, so an **untrusted marker alone can never
+> trigger a network call** and a mission stays byte-identical when off) **+** an env-only
+> `AGENCY_STUDIO_VIDEO_API_KEY` (never a request field/persisted/logged) **+** an https-only
+> endpoint. The marker never chooses the model tier/duration/resolution (fixed safe caps, a cost-DoS
+> guard); a rendered clip becomes a labelled `/media` link (the exporter localizes it with **zero
+> exporter change**), a failed one a `_[video unavailable]_` placeholder. `video` SSE frames on the
+> `asset` phase, `.mp4` MIME on `/media`, GUI "Use cloud video" toggle + `<video>` gallery. Offline
+> suite runs anywhere (`_run_cloud` network-deferred → `SeedanceUnavailable`); the live render (the
+> seedance POST + poll + download) needs the network, deferred like Wave 2/5. See `ROADMAP.md` /
+> `docs/WAVE6-PLAN.md`. Do **not** invent implementation that the roadmap/WAVE-PLANs defer.
 >
 > **Running Wave 2 (target Mac):** a **Python 3.10+ venv** with the `[media]` extra
 > (`pip install -e ".[media]"`), plus **`ffmpeg`** on PATH for speech-to-text
@@ -145,12 +161,12 @@ Agency Studio does **not** reimplement agency-kit's mission loop. It wraps it:
 Follow `ROADMAP.md` exactly. Waves **0-1** (stdlib server + event hook + React/Vite
 Mission Console) are buildable and testable on Linux. **Wave 2** (FLUX/Whisper/Kokoro on
 Metal), **Wave 3** (multimodal as a department deliverable), **Wave 4** (RAG / LocalDocs,
-incl. the GUI "Docs" tab), **Wave 5** (local web search + MCP resources-as-context), and the
-first four **Wave 6** bricks (knowledge graphs + MCP tool-calling + persona doctrine + visual RAG)
-are **shipped** — their unit/HTTP/GUI tests run offline anywhere (backends + network stubbed), but
-the live model / web / MCP-server / import / captioning runs require the Apple Silicon Mac (or the
-network, for the opt-in cloud VLM). The **remaining Wave-6 plug-in** (cloud video (seedance))
-remains deferred.
+incl. the GUI "Docs" tab), **Wave 5** (local web search + MCP resources-as-context), and **all five
+Wave 6** bricks (knowledge graphs + MCP tool-calling + persona doctrine + visual RAG + cloud video
+(seedance)) are **shipped** — their unit/HTTP/GUI tests run offline anywhere (backends + network
+stubbed), but the live model / web / MCP-server / import / captioning / video-render runs require
+the Apple Silicon Mac (or the network, for the opt-in cloud VLM / seedance video). **Wave 6 is
+complete;** there is no remaining deferred Wave-6 plug-in.
 
 ## Conventions
 

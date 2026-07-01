@@ -43,6 +43,9 @@ export default function App() {
   const [personaCount, setPersonaCount] = useState<number | null>(null);
   const [useVisual, setUseVisual] = useState(false);
   const [visualCount, setVisualCount] = useState<number | null>(null);
+  // Wave 6 — cloud video (seedance): opt-in per mission (default off) so a mission never
+  // reaches off-machine unless the user enables it AND an API key is present at render time.
+  const [useVideo, setUseVideo] = useState(false);
   const [events, setEvents] = useState<MissionEvent[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -176,7 +179,7 @@ export default function App() {
           if (e.phase === "done" && e.mission_id) completedId = e.mission_id;
           if (e.phase === "cancelled") cancelled = true;
         },
-        { signal: ctrl.signal, webSearch, mcp: useMcp, knowledge: useKnowledge, mcpTools: useMcpTools, personas: usePersonas, visual: useVisual },
+        { signal: ctrl.signal, webSearch, mcp: useMcp, knowledge: useKnowledge, mcpTools: useMcpTools, personas: usePersonas, visual: useVisual, video: useVideo },
       );
       // The stream ended on a terminal frame. Always refresh first so a mission that
       // won the cancel race (finished before the stop landed) still shows in History.
@@ -211,7 +214,7 @@ export default function App() {
       // mutually-exclusive rule), so refresh the warm-model chip when it ends.
       void refreshModelStatus();
     }
-  }, [goal, webSearch, useMcp, useKnowledge, useMcpTools, usePersonas, useVisual, running, refreshMissions, openMission, refreshModelStatus]);
+  }, [goal, webSearch, useMcp, useKnowledge, useMcpTools, usePersonas, useVisual, useVideo, running, refreshMissions, openMission, refreshModelStatus]);
 
   // "Stop mission" cancels this exact run via the explicit endpoint (the server then
   // kills the in-flight engine subprocess before persistence). `cancelMission` is
@@ -404,6 +407,18 @@ export default function App() {
                 disabled={running}
               />
               Use visual RAG{visualCount ? ` (${visualCount})` : ""}
+            </label>
+            <label
+              className="toggle"
+              title="Let a department request ONE short marketing video, rendered by a cloud model (off-machine). Needs an API key in $AGENCY_STUDIO_VIDEO_API_KEY; off by default, so a mission never touches the network unless you enable this."
+            >
+              <input
+                type="checkbox"
+                checked={useVideo}
+                onChange={(ev) => setUseVideo(ev.target.checked)}
+                disabled={running}
+              />
+              Use cloud video
             </label>
             <span className="hint">⌘/Ctrl+Enter to run</span>
           </div>

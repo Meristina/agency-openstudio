@@ -40,12 +40,14 @@ export interface InspectEvent {
  * Wave 3 — one multimodal asset render, streamed from `assets.render` after a clean
  * PASS (cli_engine emits these inside the worker scope, before the `done` sentinel).
  * `start` opens a render; `done` carries the served `url`; `failed`/`skipped` carry a
- * `reason`. `kind` mirrors the marker type (`image` | `tts`).
+ * `reason`. `kind` mirrors the marker type (`image` | `tts` | `video`). `video` is the
+ * Wave-6 seedance brick — a cloud render, emitted on the same `asset` phase as the local
+ * image/tts renders (only when the mission opted into cloud video).
  */
 export interface AssetEvent {
   phase: "asset";
   status: "start" | "done" | "failed" | "skipped";
-  kind: "image" | "tts";
+  kind: "image" | "tts" | "video";
   url?: string;
   reason?: string;
 }
@@ -56,16 +58,16 @@ export interface AssetEvent {
  * `failed`/`skipped` entries carry a `reason` instead. Field names track `assets.render`.
  */
 export interface AssetManifestItem {
-  type: "image" | "tts";
+  type: "image" | "tts" | "video";
   status: "ok" | "failed" | "skipped";
   url?: string;
   reason?: string;
-  /** image-only — the model that rendered it. */
+  /** image/video — the model that rendered it. */
   model?: string;
   /** tts-only — the voice that spoke it. */
   voice?: string;
   seconds?: number;
-  /** image-only — the verbatim prompt (the caption). */
+  /** image/video — the verbatim prompt (the caption). */
   prompt?: string;
   /** tts-only — the verbatim narration text. */
   text?: string;

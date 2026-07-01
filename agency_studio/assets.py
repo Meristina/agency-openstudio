@@ -15,14 +15,17 @@ the safe defaults are forced *here*, not silently inside the shared ``ModelManag
 (which also serves the trusted HTTP routes and must not have its callers' inputs
 quietly rewritten). So this module — not the manager — decides:
 
-  * which **type** is allowed (``image`` / ``tts``; STT is never marker-triggered);
+  * which **type** is allowed (``image`` / ``tts`` / ``video``; STT is never marker-triggered).
+    ``video`` is the studio's only *cloud* render (seedance, off-machine) so it carries an EXTRA
+    gate on top of everything below — the per-mission ``allow_video`` opt-in — without which every
+    video marker is dropped here, so an untrusted marker alone can never trigger an off-machine call;
   * which **model** an image marker may name (a tiny allowlist — never ``boogu-base``,
     the minutes-per-image model, which an untrusted marker could weaponise as a DoS);
   * the **fixed, safe canvas** (untrusted output never chooses compute size);
   * the **voice** (must be a known Kokoro voice, else the default);
   * **length** bounds (a marker can't smuggle a multi-KB prompt);
-  * **per-mission caps** (≤4 images, ≤2 TTS) and **route gating** (an image only when
-    the mission actually ran ``marketing``; TTS only when it ran ``comms``).
+  * **per-mission caps** (≤4 images, ≤2 TTS, ≤1 video) and **route gating** (an image or
+    video only when the mission actually ran ``marketing``; TTS only when it ran ``comms``).
 
 ``parse_markers`` is **pure** — no I/O, no model loading, no network. It is fully
 offline-testable, and rendering (which needs a warm ``ModelManager`` and a per-mission
@@ -91,6 +94,10 @@ _check_invariants()
 # Per-mission caps (honored in document order; markers past the cap are dropped).
 MAX_IMAGES = 4
 MAX_TTS = 2
+# Video is a CLOUD render (seedance) — slow and metered — so at most one per mission. An
+# untrusted marker can't raise this, and video is additionally gated by the per-mission
+# ``allow_video`` opt-in (see ``parse_markers``): both must hold before a single clip renders.
+MAX_VIDEO = 1
 
 # Byte bounds. A whole fenced block over this is skipped *before* ``json.loads`` (a
 # cheap DoS guard against a giant blob). A prompt/text over its bound skips that one
@@ -99,10 +106,10 @@ MAX_BLOCK_BYTES = 8 * 1024
 MAX_TEXT_BYTES = 2 * 1024
 
 # Which department must be in the mission's route for a marker type to be honored. An
-# image is a marketing deliverable; a narration is a comms deliverable. A marker for a
-# type whose department didn't run is dropped (robust to *where* the marker sits — the
-# gate reads the route, not the marker's location).
-_ROUTE_FOR_TYPE = {"image": "marketing", "tts": "comms"}
+# image is a marketing deliverable; a narration is a comms deliverable; a video is a
+# marketing deliverable. A marker for a type whose department didn't run is dropped (robust
+# to *where* the marker sits — the gate reads the route, not the marker's location).
+_ROUTE_FOR_TYPE = {"image": "marketing", "tts": "comms", "video": "marketing"}
 
 # A fence line is exactly ``` (optionally indented / trailing-spaced); an opener also
 # carries the ``asset`` info-string. Compared against each stripped line by the scanner.
@@ -251,15 +258,24 @@ class AssetRequest:
     block_index: int = -1
 
 
-def parse_markers(delivered: str, route: Sequence[str]) -> "list[AssetRequest]":
+def parse_markers(
+    delivered: str, route: Sequence[str], *, allow_video: bool = False,
+) -> "list[AssetRequest]":
     """Extract, validate, route-gate and cap the asset markers in ``delivered``.
 
     ``delivered`` is the inspected mission text (model output — untrusted). ``route`` is
     the mission's department route (``dossier['route']``); a marker type is honored only
-    when its department actually ran. Returns at most ``MAX_IMAGES`` image requests and
-    ``MAX_TTS`` TTS requests, in document order, each already safe to render. Pure: never
-    raises, never does I/O — a malformed/oversized/over-cap/off-route marker is silently
-    dropped, not an error.
+    when its department actually ran. Returns at most ``MAX_IMAGES`` image requests,
+    ``MAX_TTS`` TTS requests, and ``MAX_VIDEO`` video requests, in document order, each
+    already safe to render. Pure: never raises, never does I/O — a malformed/oversized/
+    over-cap/off-route marker is silently dropped, not an error.
+
+    ``allow_video`` is the per-mission cloud-video opt-in (default ``False``). Video is the
+    studio's only *cloud* asset render (seedance, an off-machine call), so — unlike image/tts
+    — it is gated on an explicit per-mission flag ON TOP OF the route gate: with ``allow_video``
+    false, every ``video`` marker is dropped here, before it is ever built, so an untrusted
+    marker alone can never trigger an off-machine call and a mission without the opt-in is
+    byte-identical to one with no video markers at all.
     """
     requests: "list[AssetRequest]" = []
     if not isinstance(delivered, str) or not delivered:
@@ -269,8 +285,8 @@ def parse_markers(delivered: str, route: Sequence[str]) -> "list[AssetRequest]":
     if isinstance(route, str):
         route = [route]
     allowed = {str(dept).strip().lower() for dept in (route or [])}
-    counts = {"image": 0, "tts": 0}
-    caps = {"image": MAX_IMAGES, "tts": MAX_TTS}
+    counts = {"image": 0, "tts": 0, "video": 0}
+    caps = {"image": MAX_IMAGES, "tts": MAX_TTS, "video": MAX_VIDEO}
 
     # ``block_index`` counts EVERY well-formed block (incl. dropped ones), so a kept
     # request's ordinal matches the same block's position when ``rewrite_delivered`` later
@@ -288,11 +304,18 @@ def parse_markers(delivered: str, route: Sequence[str]) -> "list[AssetRequest]":
         kind = marker.get("type")
         if kind not in _ROUTE_FOR_TYPE:  # unknown / missing type → ignore
             continue
+        if kind == "video" and not allow_video:  # cloud opt-in off → drop (rewrite strips the fence)
+            continue
         if _ROUTE_FOR_TYPE[kind] not in allowed:  # route gate
             continue
         if counts[kind] >= caps[kind]:  # per-mission cap (drop the overflow)
             continue
-        req = _build_image(marker) if kind == "image" else _build_tts(marker)
+        if kind == "image":
+            req = _build_image(marker)
+        elif kind == "tts":
+            req = _build_tts(marker)
+        else:  # video
+            req = _build_video(marker)
         if req is None:  # failed field validation → drop this marker
             continue
         requests.append(replace(req, block_index=block_index))
@@ -345,7 +368,26 @@ def _build_tts(marker: dict) -> Optional[AssetRequest]:
     return AssetRequest(type="tts", text=text, voice=voice)
 
 
+def _build_video(marker: dict) -> Optional[AssetRequest]:
+    """Validate a video marker's single whitelisted field (``prompt``). The cloud model, the
+    clip duration, and the resolution are NOT the marker's to choose — the model is fixed to the
+    seedance registry default and the render params are its fixed safe caps — so an untrusted
+    marker can't select an expensive tier / long clip as a cost-DoS. Every other key
+    (``model``/``duration``/``resolution``/``path``/``filename``) is ignored. Returns None (drop)
+    on a bad/oversized prompt. The per-mission ``allow_video`` gate has already been applied in
+    ``parse_markers`` — reaching here means the mission opted into cloud video."""
+    prompt = _clean_text(marker, "prompt")
+    if prompt is None:
+        return None
+    return AssetRequest(type="video", prompt=prompt)
+
+
 # ── render (step 5 — the consumer half: needs a warm ModelManager) ────────────
+
+# Render order: local GPU models first (image, then TTS — grouped to avoid warm-slot thrash),
+# the cloud video call last. An unknown type sorts last too (defensive; never reached).
+_RENDER_ORDER = {"image": 0, "tts": 1, "video": 2}
+
 
 def _emit(on_event: "Optional[Callable[[dict], None]]", event: dict) -> None:
     """Fire an optional progress callback, swallowing any error — purely observational
@@ -389,8 +431,10 @@ def render(
     offline-testable with stubbed backends.
     """
     manifest: "list[Optional[dict]]" = [None] * len(requests)
-    # Render images first, then TTS — but keep each result at its original index.
-    order = sorted(range(len(requests)), key=lambda i: 0 if requests[i].type == "image" else 1)
+    # Render images first, then TTS, then video last — but keep each result at its original
+    # index. Images/TTS are the local, mutually-exclusive GPU models (grouped to avoid warm-slot
+    # thrash); video is a cloud call (no residency) so it goes last, after the fast local renders.
+    order = sorted(range(len(requests)), key=lambda i: _RENDER_ORDER.get(requests[i].type, 9))
     cancelled = False
     for i in order:
         req = requests[i]
@@ -409,6 +453,13 @@ def render(
                 )
                 entry = {
                     "type": "image", "status": "ok", "url": to_url(result.path),
+                    "model": result.model, "seconds": result.seconds, "prompt": req.prompt,
+                    "block": req.block_index,
+                }
+            elif req.type == "video":
+                result = manager.generate_video(req.prompt, out_dir=out_dir)
+                entry = {
+                    "type": "video", "status": "ok", "url": to_url(result.path),
                     "model": result.model, "seconds": result.seconds, "prompt": req.prompt,
                     "block": req.block_index,
                 }
@@ -444,14 +495,19 @@ def _escape_caption(text: str) -> str:
 
 
 def _reference(entry: dict) -> str:
-    """The clean markdown reference that replaces a rendered ``asset`` block: an image embed
-    or an audio caption (a PDF/markdown reader can't play audio, so it gets a labelled link)."""
+    """The clean markdown reference that replaces a rendered ``asset`` block: an image embed, or
+    a labelled link for audio/video (a PDF/markdown reader can't play either, so each gets a
+    link the same way — the caption is the untrusted prompt, escaped)."""
     url = entry.get("url", "")
-    if entry.get("type") == "image":
+    kind = entry.get("type")
+    if kind == "image":
         caption = _escape_caption((entry.get("prompt") or "generated image").strip())
         return f"![{caption}]({url})"
     secs = entry.get("seconds")
     dur = f" ({secs}s)" if secs is not None else ""
+    if kind == "video":
+        caption = _escape_caption((entry.get("prompt") or "generated video").strip())
+        return f"[Generated video — {caption}]({url}){dur}"
     return f"[Generated audio narration]({url}){dur}"
 
 
@@ -467,6 +523,8 @@ def _placeholder(entry: dict) -> str:
         return "_[image unavailable]_"
     if kind == "tts":
         return "_[audio narration unavailable]_"
+    if kind == "video":
+        return "_[video unavailable]_"
     return "_[asset unavailable]_"
 
 
