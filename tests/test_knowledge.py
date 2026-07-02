@@ -335,6 +335,47 @@ def test_rebuild_failure_leaves_previous_graph_intact(tmp_path):
     assert gr.stats() == before   # untouched — no wipe on a failed build
 
 
+# ── strict project scope: the KG must not absorb other projects' missions ─────────
+
+def _scoped_store():
+    return _FakeStore({
+        "m_a": {"goal": "alpha", "delivered": "x", "project_root": "/proj/a"},
+        "m_legacy": {"goal": "beta", "delivered": "y"},                       # unstamped (legacy)
+        "m_b": {"goal": "gamma", "delivered": "z", "project_root": "/proj/b"},
+    })
+
+
+def test_history_strict_scope_includes_only_explicitly_stamped_project(tmp_path):
+    rec = []
+    gr = _retriever(tmp_path, _TRIPLES, rec)
+    gr.build_from_history(_scoped_store(), project_root="/proj/a", strict_scope=True)
+    # Only the mission stamped to /proj/a is extracted — the unstamped legacy mission and the
+    # /proj/b mission are both excluded (the KG is injected as context, so it must not leak).
+    assert [ref for _, ref in rec] == ["mission:m_a"]
+
+
+def test_history_default_scope_still_includes_unstamped(tmp_path):
+    # Default (non-strict) keeps the history-list leniency: an unstamped mission belongs everywhere,
+    # so this behaviour is byte-identical to before the strict-scope option.
+    rec = []
+    gr = _retriever(tmp_path, _TRIPLES, rec)
+    gr.build_from_history(_scoped_store(), project_root="/proj/a")
+    assert sorted(ref for _, ref in rec) == ["mission:m_a", "mission:m_b", "mission:m_legacy"]
+
+
+def test_rebuild_threads_strict_scope_to_history(tmp_path):
+    rec = []
+    gr = _retriever(tmp_path, _TRIPLES, rec)
+    gr.rebuild(_FakeChunkRetriever([]), _scoped_store(), project_root="/proj/a", strict_scope=True)
+    assert [ref for _, ref in rec] == ["mission:m_a"]
+
+
+def test_canon_normalizes_equivalent_paths():
+    # A stamp and a project root that name the same dir compare equal however typed.
+    assert kg._canon("/proj/a") == kg._canon("/proj/./a") == kg._canon("/proj/a/")
+    assert kg._canon("/proj/a") != kg._canon("/proj/b")
+
+
 # ── extractor seam: default = the `claude` CLI brain (subprocess boundary stubbed) ───────
 
 def _fake_call(response, record=None):

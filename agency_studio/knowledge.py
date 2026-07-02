@@ -167,6 +167,18 @@ def _norm(text: str, limit: int) -> str:
     return " ".join((text or "").split())[:limit].strip()
 
 
+def _canon(path: "object") -> str:
+    """Canonical string form of a project-root path — resolve symlinks/relativity so the same
+    directory compares equal however it was typed (mirrors agency-kit's ``canonical_project_root``,
+    replicated here so the strict-scope filter needs nothing off the duck-typed ``store``). A
+    non-resolvable value falls back to its ``str`` — never raises, so a build can't be sunk by a
+    weird stamp."""
+    try:
+        return str(Path(str(path)).resolve())
+    except Exception:
+        return str(path)
+
+
 def _tokens(text: str) -> "List[str]":
     """Lowercase alphanumeric tokens, minus stop-words and very short ones — the unit both
     seeding (goal → node match) and node tokenisation share, so they match consistently."""
@@ -737,9 +749,20 @@ class GraphRetriever:
         chunks = retriever.all_chunks() if hasattr(retriever, "all_chunks") else []
         return [(c.text, f"doc:{c.doc_id}") for c in chunks]
 
-    def _history_items(self, store, *, project_root: "Optional[str]" = None) -> "List[tuple[str, str]]":
+    def _history_items(self, store, *, project_root: "Optional[str]" = None,
+                       strict_scope: bool = False) -> "List[tuple[str, str]]":
         """The ``(text, source_ref)`` pairs from saved mission dossiers (the agency-kit ``store``).
-        A missing/corrupt dossier is skipped, never sinking the whole build."""
+        A missing/corrupt dossier is skipped, never sinking the whole build.
+
+        ``strict_scope`` (with a ``project_root``) tightens the scope BEYOND what ``list_missions``
+        gives: it includes only missions whose dossier is EXPLICITLY stamped to this project, so an
+        UNSTAMPED (legacy, pre-``project_root``) mission is EXCLUDED. This deliberately diverges from
+        the history-list semantics, where ``list_missions`` treats an unstamped mission as belonging
+        to every project (so upgrading never hides a user's history). That leniency is right for a
+        visible list but wrong for the knowledge graph: the graph is injected as ``context_clause``
+        into THIS project's missions, so it must not absorb unrelated missions from other projects
+        the user happens to have run on the same machine. Default ``False`` ⇒ unchanged behaviour."""
+        wanted = _canon(project_root) if (strict_scope and project_root) else None
         items: "List[tuple[str, str]]" = []
         for summary in store.list_missions(project_root=project_root):
             mission_id = summary.get("mission_id")
@@ -749,6 +772,10 @@ class GraphRetriever:
                 dossier = store.load(mission_id)
             except Exception:
                 continue   # a missing/corrupt dossier never sinks the whole rebuild
+            if wanted is not None:
+                stamped = dossier.get("project_root") if isinstance(dossier, dict) else None
+                if not stamped or _canon(stamped) != wanted:
+                    continue   # strict: drop unstamped/legacy or other-project missions
             items.append((_dossier_text(dossier), f"mission:{mission_id}"))
         return items
 
@@ -756,11 +783,15 @@ class GraphRetriever:
         """Build from the Wave-4 RAG chunks (additive). No docs ⇒ nothing built (0)."""
         return self.build_from_texts(self._doc_items(retriever))
 
-    def build_from_history(self, store, *, project_root: "Optional[str]" = None) -> int:
-        """Build from saved mission dossiers (additive)."""
-        return self.build_from_texts(self._history_items(store, project_root=project_root))
+    def build_from_history(self, store, *, project_root: "Optional[str]" = None,
+                           strict_scope: bool = False) -> int:
+        """Build from saved mission dossiers (additive). ``strict_scope`` restricts to missions
+        explicitly stamped to ``project_root`` (see ``_history_items``)."""
+        return self.build_from_texts(
+            self._history_items(store, project_root=project_root, strict_scope=strict_scope))
 
-    def rebuild(self, retriever, store, *, project_root: "Optional[str]" = None) -> int:
+    def rebuild(self, retriever, store, *, project_root: "Optional[str]" = None,
+                strict_scope: bool = False) -> int:
         """FULL rebuild from both local sources (docs + mission history) as ONE replace. A build
         reads the entire current snapshot every time, so replacing (not accumulating) is what keeps
         ``weight`` = number of distinct SOURCES asserting a fact across re-runs (an unchanged source
@@ -772,8 +803,11 @@ class GraphRetriever:
         graph fully intact — it never wipes a good graph and leaves an empty one. The final
         clear + stores aren't one SQL transaction, but a build is a rare, manual, single-request
         operation and retrieval tolerates an empty/partial graph (clause just None), so a concurrent
-        mid-build read is harmless. Returns the total triples stored."""
-        items = self._doc_items(retriever) + self._history_items(store, project_root=project_root)
+        mid-build read is harmless. ``strict_scope`` restricts the history source to missions
+        explicitly stamped to ``project_root`` (see ``_history_items``). Returns the total triples
+        stored."""
+        items = self._doc_items(retriever) + self._history_items(
+            store, project_root=project_root, strict_scope=strict_scope)
         # Extract everything BEFORE touching the store — if any extraction raises, the existing
         # graph is left untouched.
         extracted = [(self._extractor.extract(text, ref), ref)

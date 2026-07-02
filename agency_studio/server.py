@@ -1484,7 +1484,11 @@ class StudioHandler(BaseHTTPRequestHandler):
             # history, so re-extracting an unchanged source must not re-count its triples (which
             # would inflate weight — weight counts distinct SOURCES, not restatements) nor strand
             # triples from since-deleted docs/missions. See GraphRetriever.rebuild.
-            extracted = retriever.rebuild(self._retriever(), store, project_root=server.project_root)  # type: ignore[attr-defined]
+            # strict_scope=True: the graph is injected as context into THIS project's missions, so
+            # it must include only missions EXPLICITLY stamped to this project — never the unstamped
+            # legacy missions that list_missions (rightly, for a visible history) treats as global.
+            extracted = retriever.rebuild(self._retriever(), store, project_root=server.project_root,  # type: ignore[attr-defined]
+                                          strict_scope=True)
         except ImportError as exc:  # KnowledgeUnavailable (claude CLI) — or [studio] for the docs source
             return self._send_error_json(501, str(exc))
         except Exception:
