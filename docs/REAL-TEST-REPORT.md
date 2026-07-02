@@ -68,6 +68,18 @@ machine (not just the default):
 So **6 of the 7 registered models work live**; only `boogu-base` fails, and only because it
 exceeds the 16 GB memory budget (**[#39]**) — a hardware limit, not a code defect.
 
+> **Live-environment caveat — image generation is the memory peak; don't co-run other heavy apps.**
+> During a later sweep, a **macOS jetsam (OOM) kill** fired at 21:58 while `POST /api/image` was
+> generating a FLUX image. The jetsam snapshot showed the studio server (`python3.12`) resident at
+> **~12 GB** during FLUX generation, colliding with a **BlueStacks Android emulator at ~8 GB** the
+> user had open — ~20 GB of demand on a 16 GB machine, so jetsam killed the largest process (the
+> studio server). This is **not a code defect**: it's the same 16 GB mutual-exclusivity limit as
+> **[#39]**, aggravated by an *external* multi-GB app the studio can't see (it only mutually-excludes
+> its own models). The image/visual models (~12 GB) are the only heavy tenants — TTS/STT, embeddings,
+> and every mission flag (RAG/graph/web/MCP/personas) are light. **Operational guidance:** close
+> other multi-GB apps (emulators, extra IDEs) before running `POST /api/image` / `POST /api/visual`
+> on the 16 GB reference Mac.
+
 ### Wave 4 — RAG / LocalDocs
 
 | Element | Live test | Result |
