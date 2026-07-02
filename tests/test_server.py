@@ -240,13 +240,15 @@ def test_cancel_endpoint_sets_event_then_404s_unknown_and_malformed(tmp_path):
     # unknown or malformed run id is a 404 and never mutates the registry.
     httpd, host, port = _start(tmp_path)
     cancel_event = threading.Event()
+    explicit_cancel = threading.Event()
     run_id = "a" * 32
-    httpd.runs[run_id] = cancel_event  # inject a fake in-flight run
+    httpd.runs[run_id] = {"cancel": cancel_event, "explicit": explicit_cancel}  # fake in-flight run
     try:
         resp, body = _post(host, port, f"/api/mission/{run_id}/cancel")
         assert resp.status == 202
         assert json.loads(body) == {"status": "cancelling", "run_id": run_id}
         assert cancel_event.is_set(), "cancel must set the registered run's event"
+        assert explicit_cancel.is_set(), "an endpoint cancel is an explicit stop"
 
         unknown, _ = _post(host, port, "/api/mission/" + ("b" * 32) + "/cancel")
         assert unknown.status == 404  # unknown run
@@ -300,6 +302,230 @@ def test_endpoint_cancel_stops_an_in_flight_mission_and_emits_cancelled(monkeypa
     assert phases[0] == "run", "the run id is announced first"
     assert phases[-1] == "cancelled", "an endpoint cancel ends the stream with a cancelled frame"
     assert "done" not in phases, "a cancelled mission must not also report done"
+
+
+# ── mission checkpoint / resume (crash-recovery) ──────────────────────────────
+
+def _checkpoints_dir(project_root):
+    return Path(project_root) / ".agency-studio" / "checkpoints"
+
+
+def _plant_checkpoint(project_root, cid, *, goal="resume me", engine="claude-code",
+                      flags=None, state=None):
+    """Write a checkpoint envelope directly (as the server would), for the resume tests."""
+    d = _checkpoints_dir(project_root)
+    d.mkdir(parents=True, exist_ok=True)
+    state = state or {"version": 1, "phase": "cycle", "goal": goal, "engine": engine,
+                      "route": ["solve"], "dept_outputs": {"solve": "o"}, "delivered": "draft",
+                      "verdicts": [{"engine": "claude-code", "verdict": "VETO", "iteration": 1}],
+                      "iteration": 1, "fixes": "source it"}
+    env = {"id": cid, "created": "2026-01-01T00:00:00+00:00", "goal": goal, "engine": engine,
+           "flags": flags or {"web_search": False, "mcp": False, "knowledge": False,
+                               "mcp_tools": False, "personas": False, "visual": False, "video": False},
+           "state": state}
+    (d / f"{cid}.json").write_text(json.dumps(env), encoding="utf-8")
+    return env
+
+
+def test_error_terminal_frame_is_resumable_and_keeps_checkpoint(monkeypatch, tmp_path):
+    # A mission that crashes after a checkpoint ends with an `error` frame that is resumable and
+    # names the surviving checkpoint (the first test of the mission error terminal frame at all).
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_cli import runner_bridge
+
+    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
+                  asset_clause=None, render_assets=None, on_checkpoint=None, **kw):
+        on_checkpoint({"version": 1, "phase": "cycle", "goal": goal, "engine": engine,
+                       "route": ["solve"], "dept_outputs": {"solve": "o"}, "delivered": "d",
+                       "verdicts": [{"verdict": "VETO", "iteration": 1}], "iteration": 1, "fixes": "f"})
+        raise RuntimeError("API Error: Connection closed mid-response")
+
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=json.dumps({"goal": "g"}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+    err = events[-1]
+    assert err["phase"] == "error" and err["resumable"] is True and err["checkpoint"]
+    # The envelope survives on disk, atomically (no .tmp residue), self-describing.
+    cp = _checkpoints_dir(tmp_path) / f'{err["checkpoint"]}.json'
+    assert cp.exists()
+    assert not list(_checkpoints_dir(tmp_path).glob("*.tmp"))
+    env = json.loads(cp.read_text())
+    assert env["goal"] == "g" and env["state"]["phase"] == "cycle" and "flags" in env
+
+
+def test_checkpoint_deleted_on_done(monkeypatch, tmp_path):
+    # A clean finish leaves no checkpoint (the real run_mission_cli fires on_checkpoint through the
+    # server, then the done disposition deletes it).
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _stub_engine(monkeypatch, inspector="VERDICT: PASS")
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=json.dumps({"goal": "ship a feature"}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+    assert events[-1]["phase"] == "done"
+    d = _checkpoints_dir(tmp_path)
+    assert not d.exists() or not list(d.glob("*.json"))   # nothing left behind
+
+
+def test_checkpoint_deleted_on_explicit_cancel(monkeypatch, tmp_path):
+    # An explicit Stop deletes the checkpoint (charter: a voluntary cancel leaves no trace).
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_cli import runner_bridge
+    from agency_cli.engines.cli_engine import MissionCancelled
+
+    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
+                  asset_clause=None, render_assets=None, on_checkpoint=None, **kw):
+        on_checkpoint({"version": 1, "phase": "dept", "goal": goal, "engine": engine,
+                       "route": ["solve"], "dept_outputs": {"solve": "o"}, "delivered": "",
+                       "verdicts": [], "iteration": 0, "fixes": None})
+        for _ in range(500):
+            on_event({"phase": "dept", "status": "start"})  # a write attempt each tick
+            if should_cancel():
+                raise MissionCancelled()
+            time.sleep(0.01)
+        return runner_bridge.MissionResult(path=tmp_path, dossier={"verdicts": [], "mission_id": "x"})
+
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
+    httpd, host, port = _start(tmp_path)
+
+    def _cancel_when_registered():
+        for _ in range(500):
+            with httpd.runs_lock:
+                ids = list(httpd.runs)
+            if ids:
+                c = http.client.HTTPConnection(host, port)
+                c.request("POST", f"/api/mission/{ids[0]}/cancel")
+                c.getresponse().read()
+                return
+            time.sleep(0.01)
+
+    try:
+        threading.Thread(target=_cancel_when_registered, daemon=True).start()
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=json.dumps({"goal": "g"}),
+                     headers={"Content-Type": "application/json"})
+        events = _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+    assert events[-1]["phase"] == "cancelled"
+    d = _checkpoints_dir(tmp_path)
+    assert not d.exists() or not list(d.glob("*.json"))   # explicit stop → deleted
+
+
+def test_resume_from_loads_envelope_and_forwards_resume_state(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_cli import runner_bridge
+    cid = "c" * 32
+    env = _plant_checkpoint(tmp_path, cid, goal="resume me")
+    captured = {}
+
+    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
+                  asset_clause=None, render_assets=None, on_checkpoint=None, resume_state=None, **kw):
+        captured["goal"] = goal
+        captured["resume_state"] = resume_state
+        return runner_bridge.MissionResult(path=tmp_path, dossier={"verdicts": [], "mission_id": "m"})
+
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=json.dumps({"resume_from": cid}),
+                     headers={"Content-Type": "application/json"})
+        _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+    assert captured["goal"] == "resume me"                 # goal reconstructed from the envelope
+    assert captured["resume_state"] == env["state"]        # snapshot forwarded to the engine
+
+
+def test_resume_from_unknown_corrupt_and_traversal_ids(tmp_path):
+    httpd, host, port = _start(tmp_path)
+    # A decoy outside the checkpoints dir must never be reached by a traversal id.
+    decoy = Path(tmp_path) / ".agency-studio" / "secret.json"
+    decoy.parent.mkdir(parents=True, exist_ok=True)
+    decoy.write_text('{"id":"secret"}', encoding="utf-8")
+    try:
+        # Unknown (valid shape, no file) → 404.
+        resp, _ = _post(host, port, "/api/mission",
+                        body=json.dumps({"resume_from": "d" * 32}))
+        assert resp.status == 404
+        # Corrupt envelope → 404.
+        _plant_bad = _checkpoints_dir(tmp_path); _plant_bad.mkdir(parents=True, exist_ok=True)
+        (_plant_bad / f'{"e" * 32}.json').write_text("{not json", encoding="utf-8")
+        resp, _ = _post(host, port, "/api/mission",
+                        body=json.dumps({"resume_from": "e" * 32}))
+        assert resp.status == 404
+        # Traversal id → 400, decoy untouched.
+        resp, _ = _post(host, port, "/api/mission",
+                        body=json.dumps({"resume_from": "../secret"}))
+        assert resp.status == 400
+        assert decoy.read_text() == '{"id":"secret"}'
+    finally:
+        httpd.shutdown()
+
+
+def test_resume_from_goal_mismatch_is_409(tmp_path):
+    httpd, host, port = _start(tmp_path)
+    cid = "f" * 32
+    _plant_checkpoint(tmp_path, cid, goal="the original goal")
+    try:
+        resp, body = _post(host, port, "/api/mission",
+                           body=json.dumps({"resume_from": cid, "goal": "a different goal"}))
+        assert resp.status == 409
+        assert "different goal" in json.loads(body)["error"]
+    finally:
+        httpd.shutdown()
+
+
+def test_resume_from_501_when_kit_lacks_resume_state(monkeypatch, tmp_path):
+    from agency_cli import runner_bridge
+    cid = "a" * 32
+    _plant_checkpoint(tmp_path, cid)
+
+    def _fake_run_no_resume(goal, project_root, engine, on_event=None, should_cancel=None,
+                            asset_clause=None, render_assets=None):
+        return runner_bridge.MissionResult(path=tmp_path, dossier={"verdicts": []})
+
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run_no_resume)
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _post(host, port, "/api/mission", body=json.dumps({"resume_from": cid}))
+        assert resp.status == 501
+        assert "resume" in json.loads(body)["error"].lower()
+    finally:
+        httpd.shutdown()
+
+
+def test_list_and_delete_checkpoints_endpoints(tmp_path):
+    httpd, host, port = _start(tmp_path)
+    _plant_checkpoint(tmp_path, "a" * 32, goal="mission one")
+    _plant_checkpoint(tmp_path, "b" * 32, goal="mission two")
+    try:
+        resp, body = _get(host, port, "/api/checkpoints")
+        assert resp.status == 200
+        cps = json.loads(body)["checkpoints"]
+        assert {c["goal"] for c in cps} == {"mission one", "mission two"}
+        assert all("depts_done" in c and "iteration" in c and "phase" in c for c in cps)
+        # Delete one → 204; it disappears from the listing.
+        resp, _ = _delete(host, port, "/api/checkpoints/" + "a" * 32)
+        assert resp.status == 204
+        _, body = _get(host, port, "/api/checkpoints")
+        assert {c["goal"] for c in json.loads(body)["checkpoints"]} == {"mission two"}
+        # Deleting an unknown id → 404.
+        resp, _ = _delete(host, port, "/api/checkpoints/" + "z" * 32)
+        assert resp.status == 404
+    finally:
+        httpd.shutdown()
 
 
 def test_post_mission_missing_goal_is_400(tmp_path):

@@ -86,6 +86,21 @@ describe("runMission SSE parsing", () => {
       web_search: true, mcp: true, knowledge: true, mcp_tools: true, personas: true, visual: true, video: true,
     });
   });
+
+  it("omits resume_from by default and sends it (with the goal) when resuming", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve({ ok: true, status: 200, body: sseStream([]) }),
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await runMission("g", () => {});
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).not.toHaveProperty("resume_from");
+
+    await runMission("g", () => {}, { resumeFrom: "c".repeat(32) });
+    expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toMatchObject({
+      goal: "g", resume_from: "c".repeat(32),
+    });
+  });
 });
 
 describe("getPersonaStats", () => {

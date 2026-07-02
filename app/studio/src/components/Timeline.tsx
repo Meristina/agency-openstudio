@@ -21,7 +21,7 @@ function assetStateLabel(a: AssetStep): string {
   return a.reason ? `${a.status} — ${a.reason}` : a.status;
 }
 
-export default function Timeline({ events }: { events: MissionEvent[] }) {
+export default function Timeline({ events, onResume }: { events: MissionEvent[]; onResume?: (checkpointId: string) => void }) {
   // Re-fold only when the event list itself changes — not on the per-second
   // `elapsed`-tick re-renders App fires during a run.
   const model = useMemo(() => groupTimeline(events), [events]);
@@ -296,12 +296,23 @@ export default function Timeline({ events }: { events: MissionEvent[] }) {
         </section>
       )}
 
-      {model.terminal?.kind === "error" && (
-        <section className="phase terminal">
-          <h4>Error</h4>
-          <p className="error">{model.terminal.message}</p>
-        </section>
-      )}
+      {model.terminal?.kind === "error" && (() => {
+        const checkpoint = model.terminal.resumable ? model.terminal.checkpoint : null;
+        return (
+          <section className="phase terminal">
+            <h4>Error</h4>
+            <p className="error">{model.terminal.message}</p>
+            {checkpoint && onResume && (
+              <p>
+                <button type="button" className="resume" onClick={() => onResume(checkpoint)}>
+                  Reprendre la mission
+                </button>{" "}
+                <span className="muted">— le travail déjà fait est repris depuis le dernier point de contrôle.</span>
+              </p>
+            )}
+          </section>
+        );
+      })()}
 
       {model.terminal?.kind === "cancelled" && (
         <section className="phase terminal">

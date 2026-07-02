@@ -190,10 +190,14 @@ export interface DoneEvent {
   assets_total?: number;
 }
 
-/** Terminal frame the server appends if the worker raised. */
+/** Terminal frame the server appends if the worker raised. When the interrupted run left a
+ * checkpoint on disk, `resumable` is true and `checkpoint` names it, so the GUI can offer to
+ * resume the mission from its last completed phase instead of losing the work. */
 export interface ErrorEvent {
   phase: "error";
   message: string;
+  resumable?: boolean;
+  checkpoint?: string | null;
 }
 
 /** Terminal frame the server appends when an explicit cancel stopped the run

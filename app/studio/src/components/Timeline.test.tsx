@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import Timeline from "./Timeline";
 import type { MissionEvent } from "../types";
 
@@ -26,6 +26,25 @@ describe("<Timeline>", () => {
     expect(text).toContain("Departments");
     expect(text).toContain("PASS");
     expect(text).toContain("m1");
+  });
+
+  it("offers a resume button on a resumable error and fires onResume with the checkpoint id", () => {
+    const cid = "c".repeat(32);
+    const onResume = vi.fn();
+    const events: MissionEvent[] = [
+      { phase: "run", run_id: "r".repeat(32) },
+      { phase: "error", message: "API disconnect", resumable: true, checkpoint: cid },
+    ];
+    const { getByText } = render(<Timeline events={events} onResume={onResume} />);
+    fireEvent.click(getByText("Reprendre la mission"));
+    expect(onResume).toHaveBeenCalledWith(cid);
+  });
+
+  it("shows no resume button when the error is not resumable", () => {
+    const onResume = vi.fn();
+    const events: MissionEvent[] = [{ phase: "error", message: "boom" }];
+    const { queryByText } = render(<Timeline events={events} onResume={onResume} />);
+    expect(queryByText("Reprendre la mission")).toBeNull();
   });
 
   it("renders the live asset phase with rendering / done / failed states", () => {

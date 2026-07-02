@@ -75,7 +75,7 @@ export interface PersonaStep {
 
 export type Terminal =
   | { kind: "done"; verdict: string | null; missionId: string | null; path: string; residualRisk: string | null }
-  | { kind: "error"; message: string }
+  | { kind: "error"; message: string; resumable: boolean; checkpoint: string | null }
   | { kind: "cancelled" };
 
 export interface TimelineModel {
@@ -201,7 +201,12 @@ export function groupTimeline(events: MissionEvent[]): TimelineModel {
         };
         break;
       case "error":
-        model.terminal = { kind: "error", message: e.message };
+        model.terminal = {
+          kind: "error",
+          message: e.message,
+          resumable: e.resumable ?? false,
+          checkpoint: e.checkpoint ?? null,
+        };
         break;
       case "cancelled":
         model.terminal = { kind: "cancelled" };

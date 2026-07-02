@@ -13,21 +13,25 @@ Security (non-negotiable, from Wave 0 — see docs/SECURITY.md):
     escapes the GUI root (``/../../etc/passwd``) gets a 404, not the file.
 
 Endpoints:
-  POST /api/mission           run a mission, stream SSE progress
+  POST /api/mission           run (or resume, via body {"resume_from": id}) a mission, stream SSE
   GET  /api/missions          list saved missions (JSON)
   GET  /api/mission/{id}      load one saved dossier (JSON)
   GET  /api/mission/{id}/pdf  export the deliverable as PDF ([pdf] extra)
+  GET  /api/checkpoints       list resumable mission checkpoints (crash-recovery)
+  DELETE /api/checkpoints/{id} discard a checkpoint
   GET  /  /<static>           serve the built GUI (app/studio/dist)
 """
 
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
 import socket
 import threading
 import uuid
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterable, Optional
@@ -516,6 +520,74 @@ def _safe_mission_id(raw: str) -> "str | None":
     return cleaned if _MISSION_ID_RE.match(cleaned) else None
 
 
+# ── mission checkpoints (crash-recovery, never web-served) ────────────────────
+# A checkpoint is a transient snapshot of an in-flight mission written under docs_root (the same
+# never-/media-served tree as the RAG/KG stores) so a mission killed mid-run (a transient API drop,
+# a browser disconnect) can be resumed from its last completed phase instead of losing minutes of
+# paid work. The id is the run's uuid4 hex (or, on resume, the id resumed from — stable across a
+# crash→resume→crash chain), so it already matches the strict `_MISSION_ID_RE` shape.
+
+def _safe_checkpoint_id(raw: str) -> "str | None":
+    """Validate a request-supplied checkpoint id (same traversal defense as ``_safe_mission_id``:
+    strip the URL wrapper, require the strict ``[A-Za-z0-9_-]`` shape) before it reaches the
+    filesystem. Returns the validated id, or ``None``."""
+    cleaned = urlparse(raw).path.strip("/")
+    return cleaned if _MISSION_ID_RE.match(cleaned) else None
+
+
+def _checkpoint_dir(docs_root: "str | Path") -> Path:
+    return Path(docs_root) / "checkpoints"
+
+
+def _checkpoint_path(docs_root: "str | Path", cid: str) -> "Path | None":
+    """The on-disk path for a validated checkpoint id, or ``None`` if it isn't safe. Belt-and-braces
+    ``path_inside`` on top of the id validation, so even a future caller that skipped
+    ``_safe_checkpoint_id`` can't escape the checkpoints dir."""
+    if _safe_checkpoint_id(cid) is None:
+        return None
+    return path_inside(_checkpoint_dir(docs_root), f"{cid}.json")
+
+
+def _write_checkpoint(docs_root: "str | Path", envelope: dict) -> None:
+    """Persist a checkpoint envelope atomically (write ``<id>.json.tmp`` then ``os.replace`` — no
+    reader ever sees a half-written file). Best-effort like the store: a disk error must never
+    break the live mission (the checkpoint is a recovery convenience, not the durable dossier)."""
+    dest = _checkpoint_path(docs_root, envelope.get("id", ""))
+    if dest is None:
+        return
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(envelope), encoding="utf-8")
+        os.replace(tmp, dest)
+    except OSError:
+        pass
+
+
+def _load_checkpoint(docs_root: "str | Path", cid: str) -> "dict | None":
+    """Read + parse a checkpoint envelope, or ``None`` for an unsafe id / missing / corrupt file."""
+    path = _checkpoint_path(docs_root, cid)
+    if path is None:
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _delete_checkpoint(docs_root: "str | Path", cid: str) -> bool:
+    """Remove a checkpoint file. Returns True if a file was deleted, False otherwise. Best-effort."""
+    path = _checkpoint_path(docs_root, cid)
+    if path is None:
+        return False
+    try:
+        path.unlink()
+        return True
+    except OSError:
+        return False
+
+
 def _is_loopback_origin(origin: str) -> bool:
     """True only for http(s) origins whose host is loopback (127.0.0.1 / localhost).
 
@@ -722,6 +794,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_graph_stats()
         if path == "/api/personas":
             return self._handle_personas_stats()
+        if path == "/api/checkpoints":
+            return self._handle_list_checkpoints()
         if path.startswith("/api/mission/"):
             rest = path[len("/api/mission/"):]
             if rest.endswith("/pdf"):
@@ -765,6 +839,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_delete_doc(path[len("/api/docs/"):])
         if path.startswith("/api/visual/"):
             return self._handle_delete_visual(path[len("/api/visual/"):])
+        if path.startswith("/api/checkpoints/"):
+            return self._handle_delete_checkpoint(path[len("/api/checkpoints/"):])
         self._reject(404, "not found")
 
     # ── API: list / get saved missions ───────────────────────────────────────
@@ -842,19 +918,39 @@ class StudioHandler(BaseHTTPRequestHandler):
         if request is None:
             return  # a 400 was already sent
         (goal, engine, web_search, use_mcp, use_knowledge, use_mcp_tools,
-         use_personas, use_visual, use_video) = request
+         use_personas, use_visual, use_video, resume_from) = request
+        # Resume: resolve the checkpoint BEFORE _begin_sse so any failure is a clean JSON error
+        # (a broken SSE stream would be far worse UX). The envelope pins goal/engine/flags, so a
+        # resumed run reconstructs the exact mission — the body's flags are ignored on resume.
+        resume_envelope = None
+        if resume_from:
+            resume_envelope = self._resolve_resume(resume_from, goal)
+            if resume_envelope is None:
+                return  # _resolve_resume already sent the matching error (400/404/409/501)
+            goal = resume_envelope.get("goal") or ""
+            engine = resume_envelope.get("engine") or engine
+            f = resume_envelope.get("flags") or {}
+            web_search, use_mcp, use_knowledge = bool(f.get("web_search")), bool(f.get("mcp")), bool(f.get("knowledge"))
+            use_mcp_tools, use_personas = bool(f.get("mcp_tools")), bool(f.get("personas"))
+            use_visual, use_video = bool(f.get("visual")), bool(f.get("video"))
         self._begin_sse()
         # Register an ephemeral run id BEFORE streaming, and announce it as the first
         # frame, so the GUI can stop this exact run via POST /api/mission/{id}/cancel
         # without relying on a connection drop. Always unregistered on the way out.
         run_id = uuid.uuid4().hex
         cancel_event = threading.Event()
-        self._register_run(run_id, cancel_event)
+        # Distinguish an EXPLICIT stop (the endpoint, "Stop mission") from a mere disconnect: the
+        # worker deletes the checkpoint on an explicit stop (charter: a voluntary cancel leaves no
+        # trace) but KEEPS it on a disconnect (an accidental tab-close shouldn't lose the run).
+        explicit_cancel = threading.Event()
+        self._register_run(run_id, cancel_event, explicit_cancel)
         try:
             self._write_sse({"phase": "run", "run_id": run_id})
             result_box = self._stream_mission(goal, engine, cancel_event, web_search, use_mcp,
                                               use_knowledge, use_mcp_tools, use_personas,
-                                              use_visual, use_video)
+                                              use_visual, use_video, run_id=run_id,
+                                              explicit_cancel=explicit_cancel,
+                                              resume_envelope=resume_envelope)
         finally:
             # Deregister the instant the run is over — BEFORE writing the terminal
             # frame — so a cancel arriving during that (socket-write) window gets a
@@ -863,10 +959,79 @@ class StudioHandler(BaseHTTPRequestHandler):
         if result_box is not None:  # None ⇒ client disconnected mid-stream
             self._send_terminal_frame(result_box)
 
-    def _register_run(self, run_id: str, cancel_event: threading.Event) -> None:
+    def _resolve_resume(self, resume_from: str, body_goal: str) -> "dict | None":
+        """Load + validate a resume checkpoint, sending the matching error and returning None on
+        failure: an unsafe id → 400; the installed agency-kit lacking the ``resume_state`` hook →
+        501 (a resume must NEVER silently re-run from scratch and re-spend the saved work — unlike
+        the context hooks, which degrade gracefully); a missing/corrupt envelope → 404; a body goal
+        that disagrees with the pinned envelope goal → 409 (stale-checkpoint guard). Returns the
+        envelope otherwise."""
+        import inspect
+        from agency_cli import runner_bridge
+        cid = _safe_checkpoint_id(resume_from)
+        if cid is None:
+            self._send_error_json(400, "invalid checkpoint id")
+            return None
+        if "resume_state" not in inspect.signature(runner_bridge.run).parameters:
+            self._send_error_json(
+                501, "the installed agency-kit has no mission-resume support — upgrade agency-kit")
+            return None
+        docs_root = self.server.docs_root  # type: ignore[attr-defined]
+        envelope = _load_checkpoint(docs_root, cid)
+        if envelope is None:
+            self._send_error_json(404, "checkpoint not found")
+            return None
+        if body_goal and body_goal != (envelope.get("goal") or ""):
+            self._send_error_json(409, "checkpoint is for a different goal")
+            return None
+        return envelope
+
+    def _handle_list_checkpoints(self) -> None:
+        """List resumable checkpoints (GET /api/checkpoints). Surfaces runs that ended in an error
+        or a disconnect (and orphans left by a hard server kill) so the GUI can offer to resume one
+        even after a browser reload. Checkpoints live under docs_root (project-scoped), so no
+        cross-project filtering is needed; corrupt files are skipped. Reading needs no extra."""
+        server = self.server  # type: ignore[attr-defined]
+        out = []
+        cp_dir = _checkpoint_dir(server.docs_root)  # type: ignore[attr-defined]
+        try:
+            files = sorted(cp_dir.glob("*.json"))
+        except OSError:
+            files = []
+        for f in files:
+            env = _load_checkpoint(server.docs_root, f.stem)  # type: ignore[attr-defined]
+            if env is None:
+                continue   # a corrupt / half-written envelope never sinks the listing
+            state = env.get("state") or {}
+            out.append({
+                "id": env.get("id"), "created": env.get("created"),
+                "goal": env.get("goal"), "engine": env.get("engine"),
+                "phase": state.get("phase"),
+                "depts_done": list((state.get("dept_outputs") or {}).keys()),
+                "iteration": state.get("iteration"),
+            })
+        self._send_json({"checkpoints": out})
+
+    def _handle_delete_checkpoint(self, cid: str) -> None:
+        """Discard a checkpoint (DELETE /api/checkpoints/{id}). 204 on delete, 404 for an unknown
+        or unsafe id — the traversal defense (``_safe_checkpoint_id`` + ``path_inside`` inside
+        ``_delete_checkpoint``) means a malformed id simply misses and 404s."""
+        server = self.server  # type: ignore[attr-defined]
+        cid = _safe_checkpoint_id(cid)
+        if cid is None:
+            return self._send_error_json(404, "checkpoint not found")
+        if _delete_checkpoint(server.docs_root, cid):  # type: ignore[attr-defined]
+            self.send_response(204)
+            self._cors()
+            self.end_headers()
+        else:
+            self._send_error_json(404, "checkpoint not found")
+
+    def _register_run(self, run_id: str, cancel_event: threading.Event,
+                      explicit_cancel: threading.Event) -> None:
         server = self.server  # type: ignore[attr-defined]
         with server.runs_lock:
-            server.runs[run_id] = cancel_event
+            server.runs[run_id] = {"cancel": cancel_event, "explicit": explicit_cancel}
 
     def _unregister_run(self, run_id: str) -> None:
         server = self.server  # type: ignore[attr-defined]
@@ -881,43 +1046,52 @@ class StudioHandler(BaseHTTPRequestHandler):
         subprocess — before any persistence, so a cancelled run leaves no trace. An
         unknown or already-finished run is a 404 (a run is unregistered the moment it
         ends, so any malformed/stale id simply misses the registry). Idempotent: a
-        second cancel of the same run is just another 404."""
+        second cancel of the same run is just another 404.
+
+        Marks the run's ``explicit`` flag before setting the cancel event, so the worker knows
+        this was a voluntary Stop (delete the checkpoint) rather than a disconnect (keep it)."""
         if self._read_body() is None:
             return  # malformed/oversized body: _read_body already answered + closed
         server = self.server  # type: ignore[attr-defined]
         with server.runs_lock:
-            cancel_event = server.runs.get(run_id)
-        if cancel_event is None:
+            entry = server.runs.get(run_id)
+        if entry is None:
             return self._send_error_json(404, "unknown run")
-        cancel_event.set()
+        entry["explicit"].set()   # a deliberate stop — the checkpoint should leave no trace
+        entry["cancel"].set()
         self._send_json({"status": "cancelling", "run_id": run_id}, status=202)
 
-    def _parse_mission_request(self) -> "tuple[str, str, bool, bool, bool, bool, bool, bool, bool] | None":
+    def _parse_mission_request(self) -> "tuple[str, str, bool, bool, bool, bool, bool, bool, bool, str] | None":
         """Read + validate the JSON body. Returns ``(goal, engine, web_search, use_mcp,
-        use_knowledge, use_mcp_tools, use_personas, use_visual, use_video)``, or ``None`` after
-        sending the matching error: a 400 for bad JSON / a non-object body / missing goal, or the
-        error ``_read_body`` already sent (400/408/411/413) for a malformed, withheld, chunked, or
-        oversized body. ``web_search`` / ``use_mcp`` (Wave 5) and ``knowledge`` / ``mcp_tools`` /
-        ``personas`` / ``visual`` / ``video`` (Wave 6) are the opt-in flags (default false) — any
-        truthy JSON value enables the matching feature; absent/false leaves the mission
-        byte-identical to a run without that feature. ``mcp_tools`` is the tool-calling counterpart
-        to Wave 5's read-only ``mcp`` resources flag; ``personas`` injects the user's curated
-        per-department persona doctrine; ``visual`` retrieves captions of the user's ingested images
-        (a pure-local vector lookup); ``video`` lets a department request ONE cloud-rendered
-        marketing video (the studio's only off-machine mission-time render — gated here, plus an
-        env API key at render time)."""
+        use_knowledge, use_mcp_tools, use_personas, use_visual, use_video, resume_from)``, or
+        ``None`` after sending the matching error: a 400 for bad JSON / a non-object body / a
+        missing goal (unless ``resume_from`` is present — a resume reconstructs the goal from the
+        pinned checkpoint), or the error ``_read_body`` already sent (400/408/411/413) for a
+        malformed, withheld, chunked, or oversized body. ``web_search`` / ``use_mcp`` (Wave 5) and
+        ``knowledge`` / ``mcp_tools`` / ``personas`` / ``visual`` / ``video`` (Wave 6) are the
+        opt-in flags (default false) — any truthy JSON value enables the matching feature;
+        absent/false leaves the mission byte-identical to a run without that feature. ``mcp_tools``
+        is the tool-calling counterpart to Wave 5's read-only ``mcp`` resources flag; ``personas``
+        injects the user's curated per-department persona doctrine; ``visual`` retrieves captions of
+        the user's ingested images (a pure-local vector lookup); ``video`` lets a department request
+        ONE cloud-rendered marketing video (the studio's only off-machine mission-time render —
+        gated here, plus an env API key at render time). ``resume_from`` (Wave 7 crash-recovery) is
+        an optional checkpoint id: when present the goal/engine/flags are taken from the pinned
+        checkpoint (see ``_handle_run_mission`` / ``_resolve_resume``), so the body goal is optional
+        and only used as a stale-checkpoint cross-check."""
         payload = self._read_json_body()
         if payload is None:
             return None  # _read_json_body already sent the error (and closed if needed)
         goal = (payload.get("goal") or "").strip()
-        if not goal:
+        resume_from = (payload.get("resume_from") or "").strip()
+        if not goal and not resume_from:
             self._send_error_json(400, "missing 'goal'")
             return None
         return (goal, payload.get("engine") or "claude-code",
                 bool(payload.get("web_search")), bool(payload.get("mcp")),
                 bool(payload.get("knowledge")), bool(payload.get("mcp_tools")),
                 bool(payload.get("personas")), bool(payload.get("visual")),
-                bool(payload.get("video")))
+                bool(payload.get("video")), resume_from)
 
     def _begin_sse(self) -> None:
         """Emit the SSE response headers. The Mission Console consumes this via
@@ -937,7 +1111,9 @@ class StudioHandler(BaseHTTPRequestHandler):
         self, goal: str, engine: str, cancel_event: threading.Event,
         web_search: bool = False, use_mcp: bool = False, use_knowledge: bool = False,
         use_mcp_tools: bool = False, use_personas: bool = False, use_visual: bool = False,
-        use_video: bool = False,
+        use_video: bool = False, run_id: str = "",
+        explicit_cancel: "threading.Event | None" = None,
+        resume_envelope: "dict | None" = None,
     ) -> "dict | None":
         """Run the mission on a worker thread and stream its progress events.
 
@@ -951,10 +1127,27 @@ class StudioHandler(BaseHTTPRequestHandler):
         ``should_cancel`` both at phase boundaries AND inside the engine's in-flight
         subprocess call — so the running child is killed promptly and the mission
         raises ``MissionCancelled`` before any persistence.
+
+        ``run_id`` / ``explicit_cancel`` / ``resume_envelope`` drive crash-recovery: the worker
+        persists a checkpoint envelope after each mission phase (so a crash/disconnect is
+        resumable), keyed by ``run_id`` on a fresh run or the resumed id on a resume (stable across
+        a crash→resume chain). On exit it deletes the checkpoint for a clean finish or an EXPLICIT
+        stop (``explicit_cancel`` set), and keeps it on an ``error`` or a disconnect — surfacing the
+        keepable id on the error result so the terminal frame can offer a resume.
         """
         events: "queue.Queue[dict | None]" = queue.Queue()
         result_box: dict = {}
         project_root = self.server.project_root  # type: ignore[attr-defined]
+        # Checkpoint identity + the immutable envelope header (goal/engine/flags pin the mission so
+        # a resume reconstructs it exactly). checkpoint_id reuses the resumed id so a resumed run
+        # that crashes again overwrites the same file. `created` is stamped once (stream start).
+        checkpoint_id = (resume_envelope or {}).get("id") or run_id
+        checkpoint_flags = {
+            "web_search": web_search, "mcp": use_mcp, "knowledge": use_knowledge,
+            "mcp_tools": use_mcp_tools, "personas": use_personas,
+            "visual": use_visual, "video": use_video,
+        }
+        checkpoint_created = (resume_envelope or {}).get("created") or datetime.now(timezone.utc).isoformat()
         # Wave 6 — persona doctrine: the curated persona store lives under docs_root (never
         # web-served), beside the RAG/KG stores. Captured here (a str path) so the worker closes
         # over no handler state, exactly like project_root.
@@ -976,6 +1169,16 @@ class StudioHandler(BaseHTTPRequestHandler):
         # list_docs check on the handler thread — no VLM, no embed, no network). The caption
         # vector lookup itself runs inside the worker, under the heartbeat + should_cancel.
         visual_retriever = self._visual_retriever_if_images() if use_visual else None
+
+        def _on_checkpoint(snapshot: dict) -> None:
+            # Persist the kit's phase snapshot inside a self-describing envelope (goal/engine/flags
+            # pinned) so a later resume needs only the id. Best-effort (never raises) — a checkpoint
+            # is recovery convenience, never allowed to break the live mission.
+            _write_checkpoint(docs_root, {
+                "id": checkpoint_id, "created": checkpoint_created,
+                "goal": goal, "engine": engine, "flags": checkpoint_flags,
+                "state": snapshot,
+            })
 
         def _worker() -> None:
             # Capture only server-scoped values (`project_root` str, `render_assets`,
@@ -1049,6 +1252,13 @@ class StudioHandler(BaseHTTPRequestHandler):
                 elif use_personas:
                     print("[studio] installed agency-kit lacks the persona_doctrine hook; "
                           "running without persona doctrine")
+                # Crash-recovery (opt-in via the additive engine hooks): persist a checkpoint after
+                # each phase, and — when resuming — feed the saved snapshot so completed phases are
+                # skipped. Gated on the hooks being present, like every other additive hook above.
+                if "on_checkpoint" in run_params:
+                    run_kwargs["on_checkpoint"] = _on_checkpoint
+                if resume_envelope is not None and "resume_state" in run_params:
+                    run_kwargs["resume_state"] = resume_envelope.get("state")
                 result_box["result"] = runner_bridge.run(**run_kwargs)
             except MissionCancelled:
                 # Stopped before any persistence. Recorded so that — when the client
@@ -1066,6 +1276,18 @@ class StudioHandler(BaseHTTPRequestHandler):
                         Path(mcp_tools_config).unlink()
                     except OSError:
                         pass
+                # Checkpoint disposition (runs regardless of client connectivity — this is the one
+                # place that always sees the true outcome): delete on a clean finish or an EXPLICIT
+                # stop (voluntary cancel leaves no trace); KEEP on an error or a plain disconnect so
+                # the run stays resumable. On a kept error, surface the id (only if a file actually
+                # exists) so the terminal frame can offer "Reprendre la mission".
+                explicit_stop = bool(result_box.get("cancelled")) and (
+                    explicit_cancel is not None and explicit_cancel.is_set())
+                if "result" in result_box or explicit_stop:
+                    _delete_checkpoint(docs_root, checkpoint_id)
+                elif result_box.get("error") and _checkpoint_path(docs_root, checkpoint_id) is not None \
+                        and _checkpoint_path(docs_root, checkpoint_id).exists():
+                    result_box["checkpoint"] = checkpoint_id
                 events.put(None)  # sentinel: worker finished
 
         threading.Thread(target=_worker, daemon=True).start()
@@ -1116,7 +1338,11 @@ class StudioHandler(BaseHTTPRequestHandler):
         explicit endpoint stop landed while the client was still connected), or a
         ``done`` frame with the saved mission's id / verdict / path / residual risk."""
         if "error" in result_box:
-            self._write_sse({"phase": "error", "message": result_box["error"]})
+            # A kept checkpoint (see the worker's finally) makes this run resumable — tell the GUI
+            # so it can offer "Reprendre la mission" instead of losing the work.
+            checkpoint = result_box.get("checkpoint")
+            self._write_sse({"phase": "error", "message": result_box["error"],
+                             "resumable": checkpoint is not None, "checkpoint": checkpoint})
             return
         if result_box.get("cancelled"):
             self._write_sse({"phase": "cancelled"})

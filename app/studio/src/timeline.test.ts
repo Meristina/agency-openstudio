@@ -58,10 +58,16 @@ describe("groupTimeline", () => {
     expect(runStatus(m)).toBe("running");
   });
 
-  it("captures an error terminal", () => {
+  it("captures an error terminal (non-resumable by default)", () => {
     const m = groupTimeline([{ phase: "error", message: "engine crashed" }]);
-    expect(m.terminal).toEqual({ kind: "error", message: "engine crashed" });
+    expect(m.terminal).toEqual({ kind: "error", message: "engine crashed", resumable: false, checkpoint: null });
     expect(runStatus(m)).toBe("error");
+  });
+
+  it("captures a resumable error terminal with its checkpoint id", () => {
+    const cid = "c".repeat(32);
+    const m = groupTimeline([{ phase: "error", message: "API disconnect", resumable: true, checkpoint: cid }]);
+    expect(m.terminal).toEqual({ kind: "error", message: "API disconnect", resumable: true, checkpoint: cid });
   });
 
   it("folds the run-id frame as a control handle, not a visible step", () => {

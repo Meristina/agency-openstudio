@@ -155,9 +155,12 @@ export default function App() {
     [refreshModelStatus],
   );
 
-  const onRun = useCallback(async () => {
+  // Shared launch path for a fresh run and a resume. `resumeFrom` (a checkpoint id) restarts an
+  // interrupted mission from its last completed phase; the current goal is still sent so the server
+  // can 409 a resume whose checkpoint is for a different goal.
+  const runOrResume = useCallback(async (resumeFrom?: string) => {
     const trimmed = goal.trim();
-    if (!trimmed || running) return;
+    if ((!trimmed && !resumeFrom) || running) return;
     setRunning(true);
     setError(null);
     setNotice(null);
@@ -179,7 +182,7 @@ export default function App() {
           if (e.phase === "done" && e.mission_id) completedId = e.mission_id;
           if (e.phase === "cancelled") cancelled = true;
         },
-        { signal: ctrl.signal, webSearch, mcp: useMcp, knowledge: useKnowledge, mcpTools: useMcpTools, personas: usePersonas, visual: useVisual, video: useVideo },
+        { signal: ctrl.signal, webSearch, mcp: useMcp, knowledge: useKnowledge, mcpTools: useMcpTools, personas: usePersonas, visual: useVisual, video: useVideo, resumeFrom },
       );
       // The stream ended on a terminal frame. Always refresh first so a mission that
       // won the cancel race (finished before the stop landed) still shows in History.
@@ -215,6 +218,12 @@ export default function App() {
       void refreshModelStatus();
     }
   }, [goal, webSearch, useMcp, useKnowledge, useMcpTools, usePersonas, useVisual, useVideo, running, refreshMissions, openMission, refreshModelStatus]);
+
+  // The Run button / keyboard shortcut launch a fresh mission (no positional arg — an onClick
+  // MouseEvent must never leak in as a resume id). The Timeline's "Reprendre la mission" button
+  // resumes from the failed run's checkpoint.
+  const onRun = useCallback(() => { void runOrResume(); }, [runOrResume]);
+  const onResume = useCallback((checkpointId: string) => { void runOrResume(checkpointId); }, [runOrResume]);
 
   // "Stop mission" cancels this exact run via the explicit endpoint (the server then
   // kills the in-flight engine subprocess before persistence). `cancelMission` is
@@ -434,7 +443,7 @@ export default function App() {
               </span>
             )}
           </div>
-          <Timeline events={events} />
+          <Timeline events={events} onResume={onResume} />
         </section>
 
         <aside className="panel history-panel">

@@ -115,14 +115,16 @@ export async function cancelMission(runId: string): Promise<boolean> {
 export async function runMission(
   goal: string,
   onEvent: (event: MissionEvent) => void,
-  opts: { engine?: string; signal?: AbortSignal; webSearch?: boolean; mcp?: boolean; knowledge?: boolean; mcpTools?: boolean; personas?: boolean; visual?: boolean; video?: boolean } = {},
+  opts: { engine?: string; signal?: AbortSignal; webSearch?: boolean; mcp?: boolean; knowledge?: boolean; mcpTools?: boolean; personas?: boolean; visual?: boolean; video?: boolean; resumeFrom?: string } = {},
 ): Promise<void> {
   const res = await fetch("/api/mission", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     // web_search + mcp (Wave 5) and knowledge + mcp_tools + personas (Wave 6) are opt-in per
     // mission; all default false, so the request stays byte-identical to a pre-Wave-5 launch
-    // unless the user enabled them.
+    // unless the user enabled them. `resume_from` (crash-recovery) restarts an interrupted
+    // mission from its last checkpoint; the goal is still sent so the server can reject a resume
+    // whose checkpoint is for a different goal (409).
     body: JSON.stringify({
       goal,
       engine: opts.engine ?? "claude-code",
@@ -133,6 +135,7 @@ export async function runMission(
       personas: opts.personas ?? false,
       visual: opts.visual ?? false,
       video: opts.video ?? false,
+      ...(opts.resumeFrom ? { resume_from: opts.resumeFrom } : {}),
     }),
     signal: opts.signal,
   });
