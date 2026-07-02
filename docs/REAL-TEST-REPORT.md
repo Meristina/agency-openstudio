@@ -8,7 +8,9 @@
 > **Why it matters.** The offline suite (421 tests) is green everywhere, but it stubs the model /
 > network / CLI boundary. Running the real paths surfaced **two genuine code bugs** and **one
 > hardware limit** the offline suite could not see — exactly what a live pass is for. Both bugs
-> are fixed and merged; the limit is documented.
+> are fixed and merged; the limit is documented. A later live run also surfaced a **missing
+> capability** rather than a bug — a mission that dies mid-flight lost all its work — which became
+> the **checkpoint/resume** feature, itself then live-validated (see the crash-recovery section).
 
 ## How to reproduce
 
@@ -115,6 +117,43 @@ and this row is here so the next Mac pass knows what changed underneath it.
 | **#51** (merged) | Shape-robust adapters for the two deferred parse surfaces: `visual._caption_text` tolerates mlx-vlm `generate`'s `str` / `GenerationResult` / tuple returns; `mcp_client._text_of` drops non-`str`/blob resource parts instead of crashing `"\n".join` | On the Mac: confirm real mlx-vlm 0.6.3 captions still read correctly, and a real MCP server's blob/binary resource parts don't break `mcp: done` |
 | **#52** (merged) | Return-type annotations on the internal mission-composition helpers (`server._resolve_*`, `assets` scan generators) | Nothing — annotation-only, no runtime effect |
 | **#54** (merged) | `POST /api/graph/build` now **replaces** instead of accumulating: `GraphRetriever.rebuild` clears the store and re-extracts, so a re-run over unchanged docs/history no longer re-counts each source (weight inflation) or strands triples from since-deleted docs/missions. The replace is **failure-safe** — extraction runs to completion first, so an unreachable brain / runtime error raises with the previous graph intact (never wipes a good graph) | ✅ **live-validated on the reference Mac** (real `ClaudeCliExtractor`, real `claude` CLI): a real build extracted 3 triples (4 nodes / 3 edges); a **second** `rebuild` over the same source returned **identical counts _and_ weights** (not doubled — the fix); rebuilding after the source was removed **emptied** the graph (0/0, triples pruned). Third item — forcing the CLI unreachable mid-run — remains unit-only (`test_rebuild_failure_leaves_previous_graph_intact`); the extract-all-then-clear ordering is the same code path |
+
+## Mission checkpoint / resume (crash-recovery) — born from a live failure, then live-validated
+
+**What prompted it.** During this live pass, a full multi-department mission (`solve → product →
+marketing`, ~19.5 min of real Opus) died at synthesis iteration 3 on a transient `API Error:
+Connection closed mid-response`. Everything was lost — routing + all three completed departments +
+two synth→inspect cycles — because the mission loop persisted only once, *after* it fully returned.
+That's not a bug (the code did what it said); it's a **missing capability** a live run exposes and
+an offline suite never would.
+
+**The fix** (agency-kit **#12** + studio **#57**, both merged): two additive, default-None engine
+hooks — `on_checkpoint` (a snapshot after every completed phase) and `resume_state` (re-enter a
+mission mid-flight) — plus studio-side atomic checkpoint persistence under
+`docs_root/checkpoints/`, a `resume_from` on `POST /api/mission`, `GET`/`DELETE /api/checkpoints`,
+and a GUI « Reprendre la mission » button. Checkpoints fire **only after a verdict is recorded**
+(so a snapshot's `delivered` was always inspected) and the iteration budget **continues** on
+resume — Art. IX holds by construction. Delete on a clean finish or an explicit Stop; **keep** on
+an error or a disconnect.
+
+**Live crash-resume drill (reference Mac, real `claude` engine).** Started the studio, ran a real
+`solve` mission, then **`SIGKILL`-ed the in-flight engine subprocess the instant synthesis began**
+— the exact class of failure that lost the work above:
+
+| Checkpoint of the drill | Observed | Result |
+|---|---|---|
+| Real mission to the crash point | `route → solve` dept (**188 s** of real work) → synthesis start | ✅ |
+| Engine killed mid-synthesis | `_call` raised `RuntimeError: CLI engine 'claude' exited -9` | ✅ |
+| Resumable error terminal frame | stream ended `{"phase":"error","resumable":true,"checkpoint":…}` — not a silent loss | ✅ |
+| Checkpoint on disk | `checkpoints/<id>.json`: phase `dept`, route `["solve"]`, **full 18 671-char solve output preserved**, iteration 0 | ✅ |
+| Resume skips completed work | at **0.0 s** replayed `route` + `dept solve` as `resumed:true` — no re-route, no re-running the 188 s department | ✅ |
+| Veto loop continues on resume | synth 1 → **PASS-WITH-FIXES** → synth 2 → **PASS** (the Art. IX loop ran faithfully across the resume boundary) | ✅ |
+| Clean finish | `done`, verdict **PASS**, dossier saved (built on the preserved solve output) | ✅ |
+| Cleanup | checkpoints dir empty, `GET /api/checkpoints` → `[]` | ✅ |
+
+The failure that first cost ~19 minutes now costs **nothing**: the completed department work is
+preserved on disk and the resume picks up at synthesis without re-paying routing or the department.
+Offline suites cover it too (agency-kit +11 tests, studio +12); the drill is the live proof.
 
 ## Honest gaps / not covered live
 
