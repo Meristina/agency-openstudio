@@ -253,6 +253,88 @@ def test_build_from_docs_without_all_chunks_builds_nothing(tmp_path):
     assert gr.build_from_docs(object()) == 0
 
 
+# ── clear / rebuild: a re-run REPLACES, it does not re-count ──────────────────────
+
+class _FakeChunkRetriever:
+    """A stand-in for rag.LocalRetriever exposing all_chunks()."""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def all_chunks(self):
+        return list(self._chunks)
+
+
+def test_clear_empties_the_graph(tmp_path):
+    gr = _retriever(tmp_path, _TRIPLES)
+    gr.build_from_texts([("t", "doc:1")])
+    assert gr.stats()["nodes"] and gr.stats()["edges"]
+    gr._store.clear()
+    stats = gr.stats()
+    assert stats["nodes"] == 0 and stats["edges"] == 0 and stats["top_entities"] == []
+
+
+def test_rebuild_is_idempotent_over_unchanged_sources(tmp_path):
+    from agency_studio.rag import Chunk
+
+    docs = _FakeChunkRetriever([Chunk("d1", 0, "T", "Acme chunk")])
+    store = _FakeStore({"m1": {"goal": "Ship Widget", "delivered": "Done."}})
+    gr = _retriever(tmp_path, _TRIPLES)
+
+    first = gr.rebuild(docs, store)
+    s1 = gr.stats()
+    # A SECOND rebuild over the exact same sources must REPLACE, not accumulate: same counts,
+    # same weights — an unchanged source is not re-counted (the bug this guards against inflated
+    # every weight on each build).
+    second = gr.rebuild(docs, store)
+    s2 = gr.stats()
+
+    assert first == second
+    assert s1["nodes"] == s2["nodes"] and s1["edges"] == s2["edges"]
+    assert s1["top_entities"] == s2["top_entities"]   # identical weights, not doubled
+
+
+def test_rebuild_prunes_triples_from_removed_sources(tmp_path):
+    from agency_studio.rag import Chunk
+
+    store = _FakeStore({})   # no missions
+    gr = _retriever(tmp_path, _TRIPLES)
+
+    gr.rebuild(_FakeChunkRetriever([Chunk("d1", 0, "T", "Acme chunk")]), store)
+    assert gr.stats()["edges"] == 3
+
+    # The doc is gone on the next build → its triples must not linger (append-only would keep them).
+    gr.rebuild(_FakeChunkRetriever([]), store)
+    stats = gr.stats()
+    assert stats["nodes"] == 0 and stats["edges"] == 0
+
+
+def test_rebuild_failure_leaves_previous_graph_intact(tmp_path):
+    from agency_studio.rag import Chunk
+
+    class _BoomExtractor:
+        """Raises during extraction — the fallible step (an unreachable brain / a runtime error)."""
+
+        def extract(self, text, source_ref):
+            raise kg.KnowledgeUnavailable("brain unreachable")
+
+    docs = _FakeChunkRetriever([Chunk("d1", 0, "T", "Acme chunk")])
+    store = _FakeStore({})
+
+    # A good graph exists.
+    gr = kg.GraphRetriever(_StubExtractor(_TRIPLES), db_path=tmp_path / "kg.db")
+    gr.rebuild(docs, store)
+    before = gr.stats()
+    assert before["edges"] == 3
+
+    # Now the extractor fails: the rebuild must raise WITHOUT clearing the good graph (clear happens
+    # only after all extraction succeeds).
+    gr._extractor = _BoomExtractor()
+    with pytest.raises(kg.KnowledgeUnavailable):
+        gr.rebuild(docs, store)
+    assert gr.stats() == before   # untouched — no wipe on a failed build
+
+
 # ── extractor seam: default = the `claude` CLI brain (subprocess boundary stubbed) ───────
 
 def _fake_call(response, record=None):

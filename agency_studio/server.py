@@ -1254,8 +1254,11 @@ class StudioHandler(BaseHTTPRequestHandler):
         try:
             from agency_kit import store
             retriever = self._kg_retriever()
-            n_docs = retriever.build_from_docs(self._retriever())
-            n_hist = retriever.build_from_history(store, project_root=server.project_root)  # type: ignore[attr-defined]
+            # Full REPLACE (clear-then-rebuild): a build reads the entire current snapshot of docs +
+            # history, so re-extracting an unchanged source must not re-count its triples (which
+            # would inflate weight — weight counts distinct SOURCES, not restatements) nor strand
+            # triples from since-deleted docs/missions. See GraphRetriever.rebuild.
+            extracted = retriever.rebuild(self._retriever(), store, project_root=server.project_root)  # type: ignore[attr-defined]
         except ImportError as exc:  # KnowledgeUnavailable (claude CLI) — or [studio] for the docs source
             return self._send_error_json(501, str(exc))
         except Exception:
@@ -1263,7 +1266,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             traceback.print_exc()
             return self._send_error_json(500, "knowledge-graph build failed")
         stats = retriever.stats()
-        stats["extracted"] = n_docs + n_hist
+        stats["extracted"] = extracted
         self._send_json(stats, status=201)
 
     def _handle_personas_stats(self) -> None:

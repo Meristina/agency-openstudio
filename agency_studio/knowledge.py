@@ -252,7 +252,10 @@ class _GraphStore:
 
     def _upsert_node(self, cur: sqlite3.Cursor, label: str, kind: str) -> int:
         """Insert a node or bump its weight, returning its id. The UNIQUE ``key`` folds case so
-        "Acme" and "acme" are one entity (its first-seen casing is kept as the label)."""
+        "Acme" and "acme" are one entity (its first-seen casing is kept as the label). Note node
+        ``weight`` counts triple-ENDPOINT occurrences (a node in N distinct triples of one source
+        is bumped N times), i.e. mention frequency — a slightly different semantic from EDGE weight
+        (distinct sources); both are used only as a centrality/ranking proxy."""
         key = f"{kind}\x1f{label.casefold()}"
         cur.execute(
             "INSERT INTO nodes (label, kind, key, weight) VALUES (?, ?, ?, 1) "
@@ -364,6 +367,18 @@ class _GraphStore:
             "nodes": n_nodes, "edges": n_edges,
             "top_entities": [{"label": r["label"], "kind": r["kind"], "weight": r["weight"]} for r in top],
         }
+
+    def clear(self) -> None:
+        """Empty the graph (both tables) in one transaction. A FULL rebuild reads the entire
+        current snapshot of docs + history every time, so it must REPLACE — not accumulate onto
+        — the previous build: without this, re-running a build makes each unchanged source
+        restate its triples, inflating ``weight`` (which must count SOURCES, not restatements —
+        see ``add_triples``) and leaving triples from since-deleted docs/missions orphaned in the
+        graph forever."""
+        with self._lock:
+            self.conn.execute("DELETE FROM edges")
+            self.conn.execute("DELETE FROM nodes")
+            self.conn.commit()
 
     def close(self) -> None:
         with self._lock:
@@ -716,14 +731,15 @@ class GraphRetriever:
             total += self._store.add_triples(self._extractor.extract(text, source_ref), source_ref)
         return total
 
-    def build_from_docs(self, retriever) -> int:
-        """Build from the Wave-4 RAG chunks (a ``rag.LocalRetriever``, or anything exposing
-        ``all_chunks()``). No docs / no ``all_chunks`` ⇒ nothing built (0)."""
+    def _doc_items(self, retriever) -> "List[tuple[str, str]]":
+        """The ``(text, source_ref)`` pairs from the Wave-4 RAG chunks (a ``rag.LocalRetriever``,
+        or anything exposing ``all_chunks()``). No docs / no ``all_chunks`` ⇒ ``[]``."""
         chunks = retriever.all_chunks() if hasattr(retriever, "all_chunks") else []
-        return self.build_from_texts([(c.text, f"doc:{c.doc_id}") for c in chunks])
+        return [(c.text, f"doc:{c.doc_id}") for c in chunks]
 
-    def build_from_history(self, store, *, project_root: "Optional[str]" = None) -> int:
-        """Build from saved mission dossiers (the agency-kit ``store``)."""
+    def _history_items(self, store, *, project_root: "Optional[str]" = None) -> "List[tuple[str, str]]":
+        """The ``(text, source_ref)`` pairs from saved mission dossiers (the agency-kit ``store``).
+        A missing/corrupt dossier is skipped, never sinking the whole build."""
         items: "List[tuple[str, str]]" = []
         for summary in store.list_missions(project_root=project_root):
             mission_id = summary.get("mission_id")
@@ -734,7 +750,36 @@ class GraphRetriever:
             except Exception:
                 continue   # a missing/corrupt dossier never sinks the whole rebuild
             items.append((_dossier_text(dossier), f"mission:{mission_id}"))
-        return self.build_from_texts(items)
+        return items
+
+    def build_from_docs(self, retriever) -> int:
+        """Build from the Wave-4 RAG chunks (additive). No docs ⇒ nothing built (0)."""
+        return self.build_from_texts(self._doc_items(retriever))
+
+    def build_from_history(self, store, *, project_root: "Optional[str]" = None) -> int:
+        """Build from saved mission dossiers (additive)."""
+        return self.build_from_texts(self._history_items(store, project_root=project_root))
+
+    def rebuild(self, retriever, store, *, project_root: "Optional[str]" = None) -> int:
+        """FULL rebuild from both local sources (docs + mission history) as ONE replace. A build
+        reads the entire current snapshot every time, so replacing (not accumulating) is what keeps
+        ``weight`` = number of distinct SOURCES asserting a fact across re-runs (an unchanged source
+        re-extracted must not re-count), and drops triples from since-deleted docs/missions.
+
+        Failure-safe: extraction (the fallible step — an unreachable brain ⇒ ``KnowledgeUnavailable``,
+        a runtime error ⇒ itself) runs to completion FIRST, so the store is cleared only once every
+        source has been extracted successfully. A failed build therefore raises with the PREVIOUS
+        graph fully intact — it never wipes a good graph and leaves an empty one. The final
+        clear + stores aren't one SQL transaction, but a build is a rare, manual, single-request
+        operation and retrieval tolerates an empty/partial graph (clause just None), so a concurrent
+        mid-build read is harmless. Returns the total triples stored."""
+        items = self._doc_items(retriever) + self._history_items(store, project_root=project_root)
+        # Extract everything BEFORE touching the store — if any extraction raises, the existing
+        # graph is left untouched.
+        extracted = [(self._extractor.extract(text, ref), ref)
+                     for text, ref in items if (text or "").strip()]
+        self._store.clear()
+        return sum(self._store.add_triples(triples, ref) for triples, ref in extracted)
 
     # -- query ------------------------------------------------------------------
     def retrieve(self, query: str, *, k: "Optional[int]" = None) -> Subgraph:
