@@ -57,12 +57,15 @@ a clean web GUI.
 > (`ClaudeCliExtractor`) routes extraction through the studio's **brain**, the `claude` CLI — the
 > SAME subprocess boundary (`agency_cli.engines.cli_engine._call`) the router/departments/synthesis
 > use — because entity/relation extraction is reasoning and the charter puts all reasoning on the
-> CLI. So there is **no `[kg]` extra**: extraction needs only the `claude` CLI the studio already
-> requires (unreachable ⇒ `KnowledgeUnavailable` → 501/skip; a CLI that ran-but-failed propagates as
-> itself), and **querying an already-built graph needs nothing** (pure stdlib). This corrects #43/#45
-> — the ROADMAP's `hyper-extract` was dropped (an off-machine LLM-framework build that violated
-> local-first); a fully on-device backend (GLiNER2) can plug the same seam behind a future optional
-> extra. Opt-in per mission (`knowledge` flag, default off) with
+> CLI. So the **default path needs no extra**: extraction needs only the `claude` CLI the studio
+> already requires (unreachable ⇒ `KnowledgeUnavailable` → 501/skip; a CLI that ran-but-failed
+> propagates as itself), and **querying an already-built graph needs nothing** (pure stdlib). This
+> corrects #43/#45 — the ROADMAP's `hyper-extract` was dropped (an off-machine LLM-framework build
+> that violated local-first). An **optional fully on-device backend** (`GLiNER2Extractor`, the
+> re-introduced **`[kg]`** extra `gliner2`) ships for airgapped builds — select it with
+> `AGENCY_STUDIO_KG_BACKEND=gliner2` and `make_extractor` swaps it in with **zero server/GUI change**
+> (closed-vocabulary + torch-heavy, so it's the lower-ceiling local alternative, not the default).
+> Opt-in per mission (`knowledge` flag, default off) with
 > a `graph` SSE phase, `GET /api/graph` + `POST /api/graph/build`, and the GUI "Use knowledge graph"
 > toggle + timeline step. Its offline suite runs anywhere (the CLI boundary stubbed); the live
 > extraction path needs the `claude` CLI on PATH. The **MCP tool-calling brick** (Brick 2)

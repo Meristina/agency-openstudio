@@ -41,6 +41,7 @@ fan-out, and the injected block are all bounded so a pathological graph can't bl
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -51,12 +52,24 @@ from typing import Dict, List, Optional, Protocol, runtime_checkable
 
 from . import rag
 
-# Extraction runs on the studio's brain (the `claude` CLI), so a "missing" build capability
-# means the CLI isn't installed/authenticated — the same prerequisite the whole studio needs.
+# Extraction runs on the studio's brain (the `claude` CLI) by DEFAULT, so a "missing" build
+# capability means the CLI isn't installed/authenticated — the same prerequisite the whole studio
+# needs. An OPTIONAL fully on-device backend (GLiNER2, the `[kg]` extra) is available for airgapped
+# builds; it degrades with its own hint.
 _KG_HINT = (
     "knowledge-graph extraction runs on the 'claude' CLI (the studio's brain) — install and "
     "authenticate Claude Code (https://claude.com/claude-code) and make sure `claude` is on PATH"
 )
+_KG_GLINER_HINT = (
+    "install the on-device knowledge-graph backend:  pip install 'agency-studio[kg]'  (a torch-based "
+    "~205M GLiNER2 model; extraction then runs fully on-device — no CLI, no network)"
+)
+
+# Backend selection. Default is the `claude` CLI brain (open-vocabulary, subscription, no install);
+# set AGENCY_STUDIO_KG_BACKEND=gliner2 for the fully on-device path (the [kg] extra).
+KG_BACKEND_ENV = "AGENCY_STUDIO_KG_BACKEND"
+GLINER2_MODEL_ENV = "AGENCY_STUDIO_KG_GLINER_MODEL"
+DEFAULT_GLINER2_MODEL = "fastino/gliner2-base-v1"
 
 # Bounds so a pathological graph can't flood the prompt or stall a mission (defense in depth,
 # mirroring rag.MAX_DOC_CHARS / mcp_client's per-server caps).
@@ -65,9 +78,19 @@ MAX_REL_CHARS = 80         # a single relation label
 MAX_SEEDS = 8              # entities matched from the goal
 MAX_NEIGHBORS = 40         # edges pulled into the neighbourhood
 MAX_CLAUSE_ENTRIES = 20    # entities rendered into the context block
-MAX_EXTRACT_CHARS = 12000  # per-call text sent to the CLI (a chunk/dossier is capped, not a book)
+MAX_EXTRACT_CHARS = 12000  # per-call text sent to the extractor (a chunk/dossier is capped, not a book)
 _MIN_TOKEN_LEN = 3         # ignore very short tokens when seeding / tokenising
 _EXTRACT_TIMEOUT = 180     # seconds for one extraction CLI call (build is off the mission hot path)
+_MIN_REL_CONFIDENCE = 0.5  # drop a GLiNER2 relation whose head/tail confidence is below this
+
+# GLiNER2's relation extraction is CLOSED-vocabulary (you pass the relation types it should look
+# for), unlike the CLI's open extraction. This is the default vocabulary — deliberately generic and
+# domain-agnostic; override per-instance or the model simply won't surface relations outside it.
+DEFAULT_RELATION_TYPES = [
+    "works for", "part of", "located in", "based in", "founded", "acquired", "owns", "member of",
+    "depends on", "uses", "produces", "provides", "created", "leads", "reports to", "partnered with",
+    "competes with", "supplies", "related to",
+]
 
 # A tiny stop-list so seeding on a goal doesn't match every node via "the"/"and". Deliberately
 # small (not a linguistics project) — just the highest-frequency words that would otherwise
@@ -80,13 +103,14 @@ _STOPWORDS = frozenset(
 
 
 class KnowledgeUnavailable(ImportError):
-    """Raised when the extraction brain is unreachable — the ``claude`` CLI is not on PATH, or
-    ``agency-kit`` (which owns the subprocess boundary) is not importable. An ImportError subclass
-    so the server maps it to a 501 + install hint, exactly like MediaUnavailable / McpUnavailable
-    / WebSearchUnavailable. Only a BUILD (extraction) can raise it — retrieval over an
-    already-built graph never touches the extractor. A *runtime* extraction failure (the CLI ran
-    but errored / timed out / returned junk) propagates as itself, never as this — so the build
-    endpoint reports the REAL reason (the Wave-5 'accurate skip reasons' invariant)."""
+    """Raised when the chosen extraction backend is unavailable — the default ``claude`` CLI is
+    not on PATH (or ``agency-kit`` isn't importable), or the optional on-device backend's ``[kg]``
+    extra (GLiNER2) is not installed. An ImportError subclass so the server maps it to a 501 +
+    install hint, exactly like MediaUnavailable / McpUnavailable / WebSearchUnavailable. Only a
+    BUILD (extraction) can raise it — retrieval over an already-built graph never touches the
+    extractor. A *runtime* extraction failure (the backend ran but errored / timed out / returned
+    junk) propagates as itself, never as this — so the build endpoint reports the REAL reason (the
+    Wave-5 'accurate skip reasons' invariant)."""
 
 
 # ── data types ────────────────────────────────────────────────────────────────
@@ -324,9 +348,10 @@ class _GraphStore:
 @runtime_checkable
 class Extractor(Protocol):
     """The seam text→triples plugs into. The offline suite injects a deterministic stub; the
-    default path (``ClaudeCliExtractor``) shells out to the ``claude`` CLI. A future PR can plug a
-    fully on-device backend (e.g. GLiNER2) here without touching the store, server, or GUI —
-    exactly the ``rag.Retriever`` seam pattern."""
+    default path (``ClaudeCliExtractor``) shells out to the ``claude`` CLI, and the optional
+    on-device path (``GLiNER2Extractor``, the ``[kg]`` extra) runs a local model — either plugs in
+    without touching the store, server, or GUI (``make_extractor`` picks by env), exactly the
+    ``rag.Retriever`` seam pattern."""
 
     def extract(self, text: str, source_ref: str) -> "List[Triple]": ...
 
@@ -453,6 +478,96 @@ def _coerce_triples(raw: object) -> "List[Triple]":
     return out
 
 
+def _gliner_relations_to_raw(result: object, min_confidence: float) -> "List[dict]":
+    """Adapt GLiNER2's ``extract_relations`` output into ``_coerce_triples``-shaped dicts. The
+    library returns ``{'relation_extraction': {rel_type: [{'head': {'text',...}, 'tail': {...}}]}}``;
+    each head/tail's ``text`` becomes an endpoint and the relation-type key becomes the relation.
+    A pair whose head or tail confidence is below ``min_confidence`` is dropped. Isolated (like
+    ``_parse_triples``) so the one library-shaped surface is a single, easily-fixed function."""
+    out: "List[dict]" = []
+    rels = (result or {}).get("relation_extraction") if isinstance(result, dict) else None
+    if not isinstance(rels, dict):
+        return out
+    for rel_type, pairs in rels.items():
+        for pair in (pairs or []):
+            if not isinstance(pair, dict):
+                continue
+            head = pair.get("head") or {}
+            tail = pair.get("tail") or {}
+            confs = [c for c in (head.get("confidence"), tail.get("confidence")) if isinstance(c, (int, float))]
+            if confs and min(confs) < min_confidence:
+                continue
+            out.append({"subject": head.get("text"), "relation": rel_type, "object": tail.get("text")})
+    return out
+
+
+class GLiNER2Extractor:
+    """Optional FULLY ON-DEVICE extractor over ``gliner2`` (Apache-2.0, the ``[kg]`` extra; a
+    torch-based ~205M schema-driven IE model). For airgapped builds / users with no ``claude``
+    subscription — nothing leaves the machine, no CLI. Opt in with ``AGENCY_STUDIO_KG_BACKEND=gliner2``.
+
+    Trade-off vs the default CLI brain (honest): GLiNER2's relation extraction is
+    CLOSED-vocabulary — it surfaces only relations from a predefined list (``DEFAULT_RELATION_TYPES``,
+    overridable), where the CLI discovers arbitrary relations; and it is a heavier, torch (not MLX)
+    dependency deliberately kept in its own extra (like ``[boogu]``), so it never weighs on the lean
+    core. Absent ⇒ ``KnowledgeUnavailable`` (→ 501/skip); a runtime model error propagates as itself.
+
+    The model is lazy-loaded and cached on first ``extract`` (a build loads it once, then extracts
+    over every chunk). ``model`` is injectable so the offline suite drives it with no torch / no
+    weights — the same 'monkeypatch the model boundary' pattern as Wave 2/4."""
+
+    def __init__(
+        self,
+        *,
+        model_id: "Optional[str]" = None,
+        relation_types: "Optional[List[str]]" = None,
+        min_confidence: float = _MIN_REL_CONFIDENCE,
+        model: "Optional[object]" = None,
+    ):
+        self._model_id = model_id or os.environ.get(GLINER2_MODEL_ENV) or DEFAULT_GLINER2_MODEL
+        self._relation_types = list(relation_types) if relation_types else list(DEFAULT_RELATION_TYPES)
+        self._min_confidence = min_confidence
+        self._model = model   # injected (test) or cached after the first lazy load
+
+    def _load(self):
+        if self._model is not None:
+            return self._model
+        try:
+            from gliner2 import GLiNER2  # type: ignore
+        except ImportError as exc:
+            raise KnowledgeUnavailable(
+                f"the on-device knowledge-graph backend needs the [kg] extra — {_KG_GLINER_HINT}"
+            ) from exc
+        self._model = GLiNER2.from_pretrained(self._model_id)
+        return self._model
+
+    def extract(self, text: str, source_ref: str) -> "List[Triple]":
+        text = (text or "").strip()
+        if not text:
+            return []
+        model = self._load()
+        # A runtime model error (bad weights, OOM) propagates as itself — never mislabelled.
+        result = model.extract_relations(
+            text[:MAX_EXTRACT_CHARS], self._relation_types, include_confidence=True
+        )
+        return _coerce_triples(_gliner_relations_to_raw(result, self._min_confidence))
+
+
+def make_extractor(name: "Optional[str]" = None) -> "Extractor":
+    """Pick the extraction backend: the default ``claude`` CLI brain, or the optional on-device
+    ``gliner2``. Resolves ``name`` → ``$AGENCY_STUDIO_KG_BACKEND`` → ``"claude"``. Constructing an
+    extractor never loads a model / touches the CLI (both lazy), so this is safe even when the
+    chosen backend's dependency is absent — only a build surfaces ``KnowledgeUnavailable``."""
+    name = (name or os.environ.get(KG_BACKEND_ENV) or "claude").strip().lower()
+    if name in ("claude", "cli", "claude-cli", "brain"):
+        return ClaudeCliExtractor()
+    if name in ("gliner", "gliner2", "local", "on-device"):
+        return GLiNER2Extractor()
+    raise ValueError(
+        f"unknown {KG_BACKEND_ENV}={name!r} — expected 'claude' (default) or 'gliner2'"
+    )
+
+
 # ── the graph retriever (build from docs + history; retrieve a subgraph) ───────
 def _dossier_text(dossier: dict) -> str:
     """The extractable text of a saved mission: its goal, deliverable, and each department's
@@ -467,12 +582,13 @@ def _dossier_text(dossier: dict) -> str:
 class GraphRetriever:
     """Builds the knowledge graph from local sources and retrieves a goal-relevant subgraph.
 
-    Bound to one on-disk graph (``knowledge.db``). ``build_*`` runs the extractor (needs the
-    ``claude`` CLI brain); ``retrieve`` / ``stats`` touch only the store, so they work with the
-    brain absent — an un-built graph simply yields an empty subgraph (clause stays None)."""
+    Bound to one on-disk graph (``knowledge.db``). ``build_*`` runs the extractor (the ``claude``
+    CLI brain by default, or the on-device ``gliner2`` backend); ``retrieve`` / ``stats`` touch
+    only the store, so they work with the backend absent — an un-built graph simply yields an empty
+    subgraph (clause stays None)."""
 
     def __init__(self, extractor: "Optional[Extractor]" = None, *, db_path: "Optional[Path]" = None):
-        self._extractor = extractor if extractor is not None else ClaudeCliExtractor()
+        self._extractor = extractor if extractor is not None else make_extractor()
         self._db_path = db_path or (rag.data_dir() / "knowledge.db")
         self._store = _GraphStore(self._db_path)
 

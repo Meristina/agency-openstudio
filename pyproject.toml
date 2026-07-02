@@ -99,8 +99,21 @@ mcp = [
 # already-built graph is pure stdlib. Knowledge graph is opt-in per mission (default off) and
 # reads only local sources (no new network surface). See #43 for why hyper-extract was dropped
 # (unbuildable package name + an LLM-framework build that violated the local-first / brain=Claude
-# charter). A fully on-device backend (e.g. GLiNER2, Apache-2.0) can plug the same Extractor seam
-# behind a future optional extra without touching the store, server, or GUI.
+# charter).
+#
+# The [kg] extra below is the OPTIONAL fully on-device backend (GLiNER2, Apache-2.0) — for
+# airgapped builds or users with no `claude` subscription. Opt in with
+# AGENCY_STUDIO_KG_BACKEND=gliner2; then EXTRACTION runs a local torch-based ~205M model
+# (agency_studio.knowledge.GLiNER2Extractor), nothing leaves the machine and no CLI is needed.
+# Imported LAZILY, so the core boots without it; absent (with the backend selected) ⇒ a build 501s.
+# Deliberately its own heavy extra (torch/transformers, NOT MLX), kept separate from the lean core
+# like [boogu] — it never weighs on the default CLI path. Trade-off vs the CLI brain: GLiNER2's
+# relation extraction is CLOSED-vocabulary (a predefined relation list) and lower-quality, but
+# genuinely local. `gliner2[local]` pulls its torch/transformers stack; pin loosely and expect to
+# validate in an isolated venv (the same mlx/transformers-conflict caution as [studio]/[boogu]).
+kg = [
+    "gliner2[local]",    # Apache-2.0 — on-device schema-driven entity/relation extraction (GLiNER2)
+]
 # Wave 6 — persona doctrine as mission context (see docs/WAVE6-PLAN.md, Brick 3). The studio
 # keeps a LOCAL, user-curated store of expert personas (personas/<dept>/<name>.md) and injects
 # each routed department's persona into the department + synthesis prompts through a new additive

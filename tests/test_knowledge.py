@@ -318,9 +318,122 @@ def test_claude_cli_extractor_missing_agency_kit_raises_knowledge_unavailable(mo
         kg.ClaudeCliExtractor().extract("some text", "doc:1")
 
 
-def test_graph_retriever_defaults_to_claude_cli_extractor(tmp_path):
+def test_graph_retriever_defaults_to_claude_cli_extractor(tmp_path, monkeypatch):
+    monkeypatch.delenv(kg.KG_BACKEND_ENV, raising=False)
     gr = kg.GraphRetriever(db_path=tmp_path / "kg.db")
     assert isinstance(gr._extractor, kg.ClaudeCliExtractor)
+
+
+# ── optional on-device backend: GLiNER2 (the [kg] extra; model boundary stubbed) ─────────
+
+class _FakeGliner:
+    """Stand-in for a loaded GLiNER2 model: returns a fixed extract_relations payload, recording
+    the (text, relation_types) it saw."""
+
+    def __init__(self, payload):
+        self._payload = payload
+        self.calls = []
+
+    def extract_relations(self, text, relation_types, include_confidence=True):
+        self.calls.append((text, tuple(relation_types), include_confidence))
+        return self._payload
+
+
+def test_gliner2_extractor_maps_relations_to_triples():
+    payload = {"relation_extraction": {
+        "acquired": [{"head": {"text": "Acme Corp", "confidence": 0.95},
+                      "tail": {"text": "Beta Labs", "confidence": 0.92}}],
+        "part of": [{"head": {"text": "Beta Labs", "confidence": 0.8},
+                     "tail": {"text": "Acme Group", "confidence": 0.85}}],
+    }}
+    model = _FakeGliner(payload)
+    ext = kg.GLiNER2Extractor(model=model)
+    triples = ext.extract("Acme Corp acquired Beta Labs, part of Acme Group.", "doc:1")
+    assert sorted((t.subject, t.relation, t.object) for t in triples) == [
+        ("Acme Corp", "acquired", "Beta Labs"), ("Beta Labs", "part of", "Acme Group"),
+    ]
+    # It searches for the configured relation vocabulary (closed-vocabulary trade-off).
+    _text, rel_types, _conf = model.calls[0]
+    assert set(rel_types) == set(kg.DEFAULT_RELATION_TYPES)
+
+
+def test_gliner2_extractor_drops_low_confidence_pairs():
+    payload = {"relation_extraction": {"depends on": [
+        {"head": {"text": "Widget", "confidence": 0.4}, "tail": {"text": "Rust", "confidence": 0.9}},
+    ]}}
+    # min(head, tail) = 0.4 < the 0.5 default threshold → dropped.
+    ext = kg.GLiNER2Extractor(model=_FakeGliner(payload))
+    assert ext.extract("Widget depends on Rust.", "doc:1") == []
+
+
+def test_gliner2_extractor_honours_custom_relation_types():
+    model = _FakeGliner({"relation_extraction": {}})
+    ext = kg.GLiNER2Extractor(model=model, relation_types=["mentors"])
+    ext.extract("some text", "doc:1")
+    assert model.calls[0][1] == ("mentors",)
+
+
+def test_gliner2_extractor_blank_text_makes_no_model_call():
+    class _Boom:
+        def extract_relations(self, *a, **k):
+            raise AssertionError("must not call the model on blank text")
+    assert kg.GLiNER2Extractor(model=_Boom()).extract("   ", "doc:1") == []
+
+
+def test_gliner2_extractor_junk_output_yields_no_triples():
+    # A payload missing 'relation_extraction' (or shaped wrong) is not an error — yields nothing.
+    assert kg.GLiNER2Extractor(model=_FakeGliner({})).extract("t", "doc:1") == []
+    assert kg.GLiNER2Extractor(model=_FakeGliner("garbage")).extract("t", "doc:1") == []
+
+
+def test_gliner2_extractor_runtime_error_propagates_as_itself():
+    class _Failing:
+        def extract_relations(self, *a, **k):
+            raise RuntimeError("model OOM")
+    with pytest.raises(RuntimeError, match="OOM"):
+        kg.GLiNER2Extractor(model=_Failing()).extract("some text", "doc:1")
+
+
+def test_gliner2_extractor_absent_extra_raises_knowledge_unavailable(monkeypatch):
+    # No injected model + gliner2 not importable ⇒ KnowledgeUnavailable → 501 + hint.
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _no_gliner(name, *a, **k):
+        if name == "gliner2":
+            raise ImportError("no gliner2")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _no_gliner)
+    with pytest.raises(kg.KnowledgeUnavailable, match="kg"):
+        kg.GLiNER2Extractor().extract("some text", "doc:1")
+
+
+# ── backend selection: make_extractor ────────────────────────────────────────────
+
+def test_make_extractor_defaults_to_claude(monkeypatch):
+    monkeypatch.delenv(kg.KG_BACKEND_ENV, raising=False)
+    assert isinstance(kg.make_extractor(), kg.ClaudeCliExtractor)
+
+
+def test_make_extractor_selects_gliner2_by_name_and_env(monkeypatch):
+    monkeypatch.delenv(kg.KG_BACKEND_ENV, raising=False)
+    assert isinstance(kg.make_extractor("gliner2"), kg.GLiNER2Extractor)
+    monkeypatch.setenv(kg.KG_BACKEND_ENV, "gliner2")
+    assert isinstance(kg.make_extractor(), kg.GLiNER2Extractor)
+
+
+def test_make_extractor_rejects_unknown_backend(monkeypatch):
+    monkeypatch.delenv(kg.KG_BACKEND_ENV, raising=False)
+    with pytest.raises(ValueError, match=kg.KG_BACKEND_ENV):
+        kg.make_extractor("bogus")
+
+
+def test_graph_retriever_honours_backend_env(tmp_path, monkeypatch):
+    monkeypatch.setenv(kg.KG_BACKEND_ENV, "gliner2")
+    gr = kg.GraphRetriever(db_path=tmp_path / "kg.db")
+    assert isinstance(gr._extractor, kg.GLiNER2Extractor)
 
 
 def test_knowledge_unavailable_is_an_importerror():

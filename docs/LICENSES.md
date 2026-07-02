@@ -12,8 +12,8 @@ project) — we borrow only its *concepts*, never its code.
 | **Uncensored-Local-Studio** | Local multimodal patterns (SD/Whisper/Kokoro) | MIT | ✅ Patterns reused, **code hardened** (not its flawed server) |
 | **GPT4All** | LocalDocs / RAG pattern | MIT | ✅ Concept reused |
 | **microsoft/markitdown** | Document → Markdown ingestion (Wave 4) | MIT | ✅ Direct dependency |
-| **claude CLI** | Knowledge-graph extraction (Wave 6) — the studio's brain | Anthropic (subscription) | ✅ Reused; extraction is reasoning → runs on the CLI, no new dep (#43/#45) |
-| **GLiNER2** | Knowledge graphs — future on-device backend option | Apache-2.0 | 🔭 Optional local plug-in (follow-up) |
+| **claude CLI** | Knowledge-graph extraction (Wave 6) — default, the studio's brain | Anthropic (subscription) | ✅ Reused; extraction is reasoning → runs on the CLI, no new dep (#43/#45) |
+| **GLiNER2** (`gliner2`) | Knowledge graphs — optional on-device extraction backend (the `[kg]` extra) | Apache-2.0 | ✅ Optional local plug-in (airgapped builds; `AGENCY_STUDIO_KG_BACKEND=gliner2`) |
 | **agency-agents** | Doctrine personas (Wave 6) | MIT | ✅ Curated import |
 | **PixelRAG** | Visual RAG (Wave 6, cloud) | Apache-2.0 | ✅ Opt-in mode |
 | **seedance-2.0** | Video modality (Wave 6, cloud) | MIT | ✅ Cloud mode |

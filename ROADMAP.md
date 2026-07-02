@@ -278,11 +278,13 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
   additive `context_clause` hook** (via `context_block.format_context_block` + the server's
   `_resolve_kg_clause`). The `Extractor` seam's default impl (`ClaudeCliExtractor`) routes
   extraction through the studio's **brain** — the `claude` CLI (`agency_cli.engines.cli_engine._call`,
-  the same boundary the router/departments use) — because extraction is reasoning; so there is **no
-  `[kg]` extra** (unreachable brain ⇒ `KnowledgeUnavailable` → 501/skip) and **querying an
+  the same boundary the router/departments use) — because extraction is reasoning; so the **default
+  path needs no extra** (unreachable brain ⇒ `KnowledgeUnavailable` → 501/skip) and **querying an
   already-built graph needs nothing**. This corrects #43/#45 (the ROADMAP's `hyper-extract` was an
-  off-machine LLM-framework build that violated local-first — dropped; GLiNER2 can plug the seam
-  locally in a follow-up). Opt-in per mission (`knowledge` flag, default off) with a `graph` SSE
+  off-machine LLM-framework build that violated local-first — dropped). An **optional on-device
+  backend** (`GLiNER2Extractor`, the `[kg]` extra `gliner2`) ships for airgapped builds —
+  `AGENCY_STUDIO_KG_BACKEND=gliner2`, swapped in by `make_extractor` with zero server/GUI change.
+  Opt-in per mission (`knowledge` flag, default off) with a `graph` SSE
   phase, plus `GET /api/graph` / `POST /api/graph/build` and the GUI "Use knowledge graph" toggle +
   timeline step. Offline suite runs anywhere (the CLI boundary stubbed); the live extraction path
   needs the `claude` CLI on PATH.

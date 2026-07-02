@@ -29,9 +29,10 @@
 > reasoning, so it now runs where all the studio's reasoning runs: the **`claude` CLI**, over the
 > SAME subprocess boundary (`agency_cli.engines.cli_engine._call`) the router / departments /
 > synthesis / inspector already use. The default impl is **`ClaudeCliExtractor`** — **zero new
-> dependency** (no `[kg]` extra), zero marginal cost, no resident model on the 16 GB Mac, no new
-> off-machine data flow. A fully on-device backend (e.g. **GLiNER2**, Apache-2.0) can plug the same
-> `Extractor` seam behind a future optional extra without touching the store, server, or GUI.
+> dependency for the default path** (no extra needed), zero marginal cost, no resident model on the
+> 16 GB Mac, no new off-machine data flow. A fully on-device backend (**GLiNER2**, Apache-2.0) is
+> **also shipped** behind the optional **`[kg]`** extra for airgapped builds — it plugs the same
+> `Extractor` seam without touching the store, server, or GUI (see "Follow-up" below).
 
 ## Goal (ROADMAP, verbatim)
 
@@ -99,8 +100,8 @@ recur across missions accumulate. Nothing leaves the machine.
   default impl is `ClaudeCliExtractor` (shells out to `claude -p`, parses a JSON triple array
   with the router's tolerant regex, adapts via `_coerce_triples`). The seam is injected, so the
   offline suite passes a deterministic stub (or stubs the extractor's own `call` boundary) — the
-  same "monkeypatch the model boundary" pattern as Wave 2/4. A future on-device backend (GLiNER2)
-  plugs the same seam.
+  same "monkeypatch the model boundary" pattern as Wave 2/4. The optional on-device `GLiNER2Extractor`
+  (the `[kg]` extra) plugs the same seam; `make_extractor` picks by `$AGENCY_STUDIO_KG_BACKEND`.
 - **K4 — `GraphRetriever` implements `rag.Retriever`-shaped retrieval:** `build_from_docs(...)`
   (pull Wave 4 chunks → extract → store) and `build_from_history(store)` (pull dossiers →
   extract → store); `retrieve(query, k) -> Subgraph` = token-seed → 1-hop neighbourhood,
@@ -134,15 +135,16 @@ recur across missions accumulate. Nothing leaves the machine.
 
 - `agency_studio/knowledge.py` (NEW) — `Triple` / `Node` / `Edge` / `Subgraph` dataclasses; a
   pure-stdlib `_GraphStore` (upsert-dedup nodes/edges, `seed_match`, `neighborhood`, `stats`);
-  the `Extractor` protocol + `ClaudeCliExtractor` (lazy `cli_engine._call` → `KnowledgeUnavailable`
-  when the brain is unreachable); `build_kg_context_clause(subgraph)` (→ `format_context_block`,
+  the `Extractor` protocol + `ClaudeCliExtractor` (default; lazy `cli_engine._call` →
+  `KnowledgeUnavailable` when the brain is unreachable) + optional `GLiNER2Extractor` (`[kg]`) +
+  `make_extractor` (backend picker); `build_kg_context_clause(subgraph)` (→ `format_context_block`,
   `None` when empty); `GraphRetriever` (`build_from_docs` / `build_from_history` / `retrieve` / `stats`).
 - `agency_studio/server.py` — `_resolve_kg_clause(goal, emit, should_cancel)` mirroring
   `_resolve_mcp_clause`, composed into `_compose_context_clause`; read the `knowledge` flag
   from the mission body; emit the `graph` SSE phase; `GET /api/graph` + `POST /api/graph/build`.
-- `pyproject.toml` — **no `[kg]` extra**: extraction runs on the `claude` CLI brain the studio
-  already requires (see the #43/#45 correction). A future on-device backend (GLiNER2) would add
-  an optional extra here.
+- `pyproject.toml` — the default path needs **no extra** (extraction runs on the `claude` CLI brain
+  the studio already requires; see the #43/#45 correction). The optional **`[kg]`** extra (`gliner2`)
+  ships the on-device backend for airgapped builds.
 - `tests/test_knowledge.py` + `tests/test_server.py` — extractor stubbed (no model): store
   upsert/dedup, token seed-match, neighbourhood BFS, clause None-contract + formatting,
   `GraphRetriever` build+retrieve, absent-extra skip, compose order (RAG + web + MCP + graph),
@@ -173,7 +175,32 @@ deterministic stub, and for `ClaudeCliExtractor`'s own tests its `call` boundary
 `KnowledgeUnavailable`). The graph store / seeding / neighbourhood / clause formatting are pure.
 The compose logic, `graph` SSE phase, opt-in flag, and brain-unreachable skip are all asserted
 offline. Live validation (real `claude` extraction over real docs) is a manual step, like Wave 4's
-live embeddings.
+live embeddings. The optional GLiNER2 backend adds the same offline coverage over its own model
+boundary (relations → triples, confidence gate, custom vocab, junk → none, runtime error
+propagates, extra-absent → `KnowledgeUnavailable`, `make_extractor` selection).
+
+## Follow-up (shipped) — optional on-device backend (GLiNER2)
+
+The default extractor is the `claude` CLI brain (open-vocabulary, subscription, no install). For
+**airgapped builds** or users **without a `claude` subscription**, a fully on-device backend is
+available behind the (re-introduced, now optional) **`[kg]`** extra — the parallel of the seam the
+`Extractor` protocol was designed for:
+
+- **`GLiNER2Extractor`** (`agency_studio/knowledge.py`) wraps **`gliner2`** (Apache-2.0, a
+  torch-based ~205M schema-driven IE model; `GLiNER2.from_pretrained` → `extract_relations(text,
+  relation_types, include_confidence=True)`). Its output
+  (`{'relation_extraction': {rel_type: [{'head':{'text',…}, 'tail':{…}}]}}`) is mapped to triples
+  by the isolated `_gliner_relations_to_raw` → `_coerce_triples`, with a per-pair confidence gate.
+  Lazy-loaded + cached (a build loads the model once); absent ⇒ `KnowledgeUnavailable` → 501/skip;
+  a runtime model error propagates as itself.
+- **`make_extractor(name=None)`** picks the backend from `name` → `$AGENCY_STUDIO_KG_BACKEND` →
+  `"claude"` (the default). `GraphRetriever` uses it, so **no server/GUI change** — set
+  `AGENCY_STUDIO_KG_BACKEND=gliner2` and the same `/api/graph/build` runs on-device.
+- **Honest trade-off (documented):** GLiNER2's relation extraction is **closed-vocabulary** — it
+  surfaces only relations from `DEFAULT_RELATION_TYPES` (overridable per instance / model id via
+  `$AGENCY_STUDIO_KG_GLINER_MODEL`), where the CLI discovers arbitrary relations; and it is a
+  heavier torch (not MLX) dependency, kept in its own extra (like `[boogu]`) so it never weighs on
+  the lean default path. Lower ceiling, genuinely local. The live model run is deferred, like Wave-2.
 
 ## Non-goals (deferred — do not build here)
 
