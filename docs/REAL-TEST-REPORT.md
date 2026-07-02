@@ -5,7 +5,7 @@
 > the offline test suite deliberately stubs. Where the offline suite proves the *wiring*, this
 > pass exercises the *real* path: real MLX models, a real `claude` CLI mission loop, real HTTP.
 >
-> **Why it matters.** The offline suite (417 tests) is green everywhere, but it stubs the model /
+> **Why it matters.** The offline suite (421 tests) is green everywhere, but it stubs the model /
 > network / CLI boundary. Running the real paths surfaced **two genuine code bugs** and **one
 > hardware limit** the offline suite could not see — exactly what a live pass is for. Both bugs
 > are fixed and merged; the limit is documented.
@@ -114,6 +114,7 @@ and this row is here so the next Mac pass knows what changed underneath it.
 | **#50** (merged) | GLiNER2 relation extraction slides **overlapping windows** over long dossiers instead of head-truncating at `MAX_GLINER_CHARS`; duplicate triples are deduped **per source at the store** (weight counts sources, not windows/restatements) | On the Mac with `[kg]`: build a graph from a **long** (>2 KB) mission dossier and confirm relations from its tail appear in the graph, and a repeated relation has weight 1 per source |
 | **#51** (merged) | Shape-robust adapters for the two deferred parse surfaces: `visual._caption_text` tolerates mlx-vlm `generate`'s `str` / `GenerationResult` / tuple returns; `mcp_client._text_of` drops non-`str`/blob resource parts instead of crashing `"\n".join` | On the Mac: confirm real mlx-vlm 0.6.3 captions still read correctly, and a real MCP server's blob/binary resource parts don't break `mcp: done` |
 | **#52** (merged) | Return-type annotations on the internal mission-composition helpers (`server._resolve_*`, `assets` scan generators) | Nothing — annotation-only, no runtime effect |
+| **#54** (merged) | `POST /api/graph/build` now **replaces** instead of accumulating: `GraphRetriever.rebuild` clears the store and re-extracts, so a re-run over unchanged docs/history no longer re-counts each source (weight inflation) or strands triples from since-deleted docs/missions. The replace is **failure-safe** — extraction runs to completion first, so an unreachable brain / runtime error raises with the previous graph intact (never wipes a good graph) | On the Mac with a real graph built: run `POST /api/graph/build` **twice** and confirm node/edge counts and weights are stable (not doubled); delete a doc, rebuild, and confirm its triples are gone; force the `claude` CLI unreachable mid-run and confirm the existing graph survives |
 
 ## Honest gaps / not covered live
 
@@ -130,7 +131,10 @@ and this row is here so the next Mac pass knows what changed underneath it.
   head-truncation with overlapping sliding windows + per-source dedup) also ships for airgapped
   builds (`AGENCY_STUDIO_KG_BACKEND=gliner2`). Neither live path was run here — the CLI build over
   real docs and the GLiNER2 model run are both manual steps (asserted offline via stubbed
-  boundaries; the GLiNER2 model is torch/Mac-deferred like Wave 2). (The other four flags — `web`,
+  boundaries; the GLiNER2 model is torch/Mac-deferred like Wave 2). The graph **build lifecycle**
+  was also hardened offline (**[#54]**): a rebuild now replaces rather than accumulates (no weight
+  inflation on re-run, no orphaned triples from deleted sources) and is failure-safe — still to be
+  confirmed on a real Mac build (see the post-pass hardening table). (The other four flags — `web`,
   `mcp` resources, `mcp_tools`, `personas` — were **proven active** with their backends
   installed; see the Wave-6 table.)
 - **The cloud paths** — seedance video render (`_run_cloud`) and the optional cloud VLM — remain
@@ -159,6 +163,6 @@ Not everything is "green". Being precise about what the live pass actually prove
 - **Failed** — `boogu-base` (OOM / swap on 16 GB, **[#39]**).
 
 The live pass paid for itself by catching two real bugs (#37, #40) and one hardware limit (#39)
-the offline suite (417 tests) could not surface. But "the offline suite is green" and "every feature
+the offline suite (421 tests) could not surface. But "the offline suite is green" and "every feature
 is proven on real hardware" are **different claims** — this report is the honest boundary between
 them.
