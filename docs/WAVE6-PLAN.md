@@ -192,11 +192,23 @@ available behind the (re-introduced, now optional) **`[kg]`** extra — the para
   `_gliner_relations_to_raw` → `_coerce_triples`, with a per-pair confidence gate. The mapper
   tolerates **both** documented output shapes — the `{'head':{'text',…},'tail':{…}}` dict (confidence
   on) **and** the bare `(head, tail)` tuple (confidence off) — plus string/None endpoints (dropped,
-  never raised). Input is capped to the encoder's bounded window (`MAX_GLINER_CHARS` ≈ 512 tokens,
-  ≪ the CLI cap) so a long dossier is head-truncated, not silently half-read (a documented
-  limitation — sliding-window relation extraction is a follow-up). Lazy-loaded + cached (a build
-  loads the model once); absent ⇒ `KnowledgeUnavailable` → 501/skip; a runtime model error
-  propagates as itself.
+  never raised). Because `extract_relations` has no long-doc chunking, a long dossier is split into
+  **overlapping windows** of the encoder's size (`MAX_GLINER_CHARS`, sized for ~512 tokens of
+  typical Latin-script prose) by `_sliding_windows`, and the per-window relations are merged —
+  removing the **cross-window** head-truncation the old single-call path suffered. Window ends are
+  snapped to whitespace so a token/entity isn't split into a junk fragment, and the
+  `GLINER_OVERLAP_CHARS` overlap keeps a relation whose entities both fall within the overlap of a
+  boundary inside one window. Two honest residuals: token-dense input (CJK/code) can still exceed
+  512 tokens **within** one 2000-char window (char-based sizing has no tokenizer), and entities
+  farther apart than the overlap that straddle a boundary can be missed — inherent to fixed-overlap
+  windowing. Duplicate triples (an LLM restating a fact, or overlapping windows re-surfacing a
+  boundary relation) are deduped **per source at the store** (`_GraphStore.add_triples`, shared by
+  every backend) so weight counts sources, not restatements. The whole input is bounded by
+  `MAX_EXTRACT_CHARS` — the **same cap the CLI path uses** — so both backends truncate symmetrically
+  and the window count stays bounded (`⌈MAX_EXTRACT_CHARS / step⌉`); a long dossier costs several
+  inferences per source instead of one (the intended price of reading the whole dossier, off the
+  mission hot path). Lazy-loaded + cached (a build loads the model once); absent ⇒
+  `KnowledgeUnavailable` → 501/skip; a runtime model error propagates as itself.
 - **`make_extractor(name=None)`** picks the backend from `name` → `$AGENCY_STUDIO_KG_BACKEND` →
   `"claude"` (the default). `GraphRetriever` uses it, so **no server/GUI change** — set
   `AGENCY_STUDIO_KG_BACKEND=gliner2` and the same `/api/graph/build` runs on-device.

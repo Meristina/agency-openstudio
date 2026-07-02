@@ -83,11 +83,21 @@ _MIN_TOKEN_LEN = 3         # ignore very short tokens when seeding / tokenising
 _EXTRACT_TIMEOUT = 180     # seconds for one extraction CLI call (build is off the mission hot path)
 _MIN_REL_CONFIDENCE = 0.5  # drop a GLiNER2 relation whose head/tail confidence is below this
 # GLiNER2 is a transformer ENCODER with a bounded window (~512 tokens; the library ships a
-# separate *_long chunking API for entities, none for relations). Feeding more silently drops the
-# tail while we'd record the source as fully extracted — so cap far below the CLI's window. RAG
-# chunks are already small; only long mission dossiers are head-truncated here (a documented
-# limitation — sliding-window relation extraction is a follow-up). Patchable so tests can shrink it.
+# separate *_long chunking API for entities, none for relations). Feeding a whole long dossier in
+# one call would silently drop the tail while we'd record the source as fully extracted — so we
+# instead slide OVERLAPPING windows of this size across the text (see `_sliding_windows` +
+# `GLiNER2Extractor.extract`) and merge the per-window relations, removing the CROSS-window tail
+# loss. This char size targets ~512 tokens for typical Latin-script prose (~4 chars/token); note
+# the residual — for token-dense input (CJK, code, heavy punctuation) 2000 chars can exceed 512
+# tokens, so a single window may still truncate INTERNALLY (a limit of char-based sizing without a
+# tokenizer). RAG chunks fit in one window; only long mission dossiers span several. Patchable so
+# tests can shrink it.
 MAX_GLINER_CHARS = 2000
+# Chars each window shares with the previous one, so a relation whose head/tail straddle a window
+# boundary still co-occurs inside one window (single-call relation extraction can't span windows).
+# Kept a small fraction of the window; overlap-induced duplicate triples are deduped per call so
+# they never inflate a triple's store weight. Patchable for tests.
+GLINER_OVERLAP_CHARS = 200
 
 # GLiNER2's relation extraction is CLOSED-vocabulary (you pass the relation types it should look
 # for), unlike the CLI's open extraction. This is the default vocabulary — deliberately generic and
@@ -253,8 +263,14 @@ class _GraphStore:
 
     def add_triples(self, triples: "List[Triple]", source_ref: str, *, kind: str = "entity") -> int:
         """Upsert each valid triple (both endpoints + the edge). Skips a triple with an empty
-        subject/relation/object after normalisation. Returns the number stored."""
+        subject/relation/object after normalisation, a self-loop, or a duplicate already seen in
+        THIS call. The per-call dedup is deliberate and lives here (not in an extractor) so every
+        backend shares it: one call carries one source, and an edge/node ``weight`` must count how
+        many SOURCES asserted a fact — never how many times a single source restated it (an LLM
+        restating a triple, or overlapping GLiNER2 windows re-surfacing a boundary relation, must
+        not inflate weight). Returns the number stored."""
         stored = 0
+        seen: "set" = set()
         with self._lock:
             cur = self.conn.cursor()
             for t in triples:
@@ -263,6 +279,10 @@ class _GraphStore:
                 rel = _norm(t.relation, MAX_REL_CHARS)
                 if not (subj and obj and rel) or subj.casefold() == obj.casefold():
                     continue   # need both endpoints + a relation, and no self-loop
+                key = (subj.casefold(), rel.casefold(), obj.casefold())
+                if key in seen:
+                    continue   # this source already asserted it — count sources, not restatements
+                seen.add(key)
                 sid = self._upsert_node(cur, subj, kind)
                 oid = self._upsert_node(cur, obj, kind)
                 cur.execute(
@@ -535,6 +555,50 @@ def _gliner_relations_to_raw(result: object, min_confidence: float) -> "List[dic
     return out
 
 
+def _snap_back(text: str, lo: int, hi: int) -> int:
+    """The largest index in ``[lo, hi)`` whose char is whitespace, else ``-1``. Lets a window end
+    on a word boundary instead of mid-token, so a split entity isn't extracted as a junk fragment."""
+    for i in range(hi - 1, lo - 1, -1):
+        if text[i].isspace():
+            return i
+    return -1
+
+
+def _sliding_windows(text: str, size: int, overlap: int) -> "List[str]":
+    """Split ``text`` into overlapping windows of at most ``size`` chars, each starting
+    ``size - overlap`` after the last — so a relation whose two entities BOTH fall within
+    ``overlap`` chars of a window boundary still co-occurs inside one window (a single
+    relation-extraction call can't reach across windows; entities farther apart than the overlap
+    that straddle a boundary are an inherent limit of fixed-overlap windowing). Each window's end
+    is snapped back to the last whitespace inside the overlap region when possible, so a token/
+    entity isn't split across the cut. Pure and offline-testable. Returns ``[text]`` when it
+    already fits (or ``[]`` for empty text); ``overlap`` is clamped below ``size`` so the step is
+    always ≥ 1 and the loop terminates."""
+    text = text or ""
+    if not text:
+        return []
+    if len(text) <= size:
+        return [text]
+    step = max(1, size - max(0, min(overlap, size - 1)))
+    windows: "List[str]" = []
+    start = 0
+    n = len(text)
+    while start < n:
+        end = start + size
+        if end < n:
+            # Prefer to cut on whitespace in the overlap region [start+step, end): keeps end ≥
+            # start+step, so the next window (which begins at start+step) still overlaps this one
+            # and forward progress is preserved — no token is split at the hard boundary.
+            snap = _snap_back(text, start + step, end)
+            if snap > start:
+                end = snap
+        windows.append(text[start:end])
+        if start + size >= n:
+            break   # this window's hard extent reached the end; no partial trailing window
+        start += step
+    return windows
+
+
 class GLiNER2Extractor:
     """Optional FULLY ON-DEVICE extractor over ``gliner2`` (Apache-2.0, the ``[kg]`` extra; a
     torch-based ~205M schema-driven IE model). For airgapped builds / users with no ``claude``
@@ -547,9 +611,15 @@ class GLiNER2Extractor:
     core. Absent ⇒ ``KnowledgeUnavailable`` (→ 501/skip); a runtime model error propagates as itself.
 
     The model is lazy-loaded and cached on first ``extract`` (a build loads it once, then extracts
-    over every chunk). Input is capped to the encoder's bounded window (``MAX_GLINER_CHARS``), so a
-    long dossier is head-truncated rather than silently half-processed. ``model`` is injectable so
-    the offline suite drives it with no torch / no weights — the same 'monkeypatch the model
+    over every chunk). GLiNER2's relation API has no long-doc chunking, so a long dossier is split
+    into OVERLAPPING windows of the encoder's size (``MAX_GLINER_CHARS``) and their relations are
+    merged — removing the cross-window head-truncation the old single-call path suffered (see the
+    ``MAX_GLINER_CHARS`` note for the residual token-density caveat). The whole input is bounded by
+    ``MAX_EXTRACT_CHARS`` (the SAME cap the CLI path uses), so the two backends truncate
+    symmetrically and the window count is bounded (``⌈MAX_EXTRACT_CHARS / step⌉``): a long dossier
+    now costs several inferences per source instead of one — the intended price of reading the whole
+    dossier rather than only its head; builds are off the mission hot path. ``model`` is injectable
+    so the offline suite drives it with no torch / no weights — the same 'monkeypatch the model
     boundary' pattern as Wave 2/4."""
 
     def __init__(
@@ -582,12 +652,18 @@ class GLiNER2Extractor:
         if not text:
             return []
         model = self._load()
-        # A runtime model error (bad weights, OOM) propagates as itself — never mislabelled.
-        # Cap to the encoder's window (MAX_GLINER_CHARS ≪ the CLI's), not the CLI cap.
-        result = model.extract_relations(
-            text[:MAX_GLINER_CHARS], self._relation_types, include_confidence=True
-        )
-        return _coerce_triples(_gliner_relations_to_raw(result, self._min_confidence))
+        # Slide overlapping windows across the (globally-capped) text and merge the per-window
+        # relations, so nothing past MAX_GLINER_CHARS is silently dropped. Bound the whole input at
+        # MAX_EXTRACT_CHARS first — the same cap the CLI path uses — so both backends truncate at
+        # the same place and the window count stays bounded (⌈MAX_EXTRACT_CHARS / step⌉, step ≥ 1).
+        raw: "List[dict]" = []
+        for window in _sliding_windows(text[:MAX_EXTRACT_CHARS], MAX_GLINER_CHARS, GLINER_OVERLAP_CHARS):
+            # A runtime model error (bad weights, OOM) propagates as itself — never mislabelled.
+            result = model.extract_relations(window, self._relation_types, include_confidence=True)
+            raw.extend(_gliner_relations_to_raw(result, self._min_confidence))
+        # Overlapping windows re-surface a boundary relation as a duplicate triple; that is fine —
+        # _GraphStore.add_triples dedups per source, so a duplicate never inflates edge weight.
+        return _coerce_triples(raw)
 
 
 def make_extractor(name: "Optional[str]" = None) -> "Extractor":

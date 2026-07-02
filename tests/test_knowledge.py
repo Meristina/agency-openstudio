@@ -77,6 +77,19 @@ def test_repeat_triple_bumps_weight_not_count(tmp_path):
     assert stats["top_entities"][0]["weight"] == 4.0
 
 
+def test_within_call_duplicate_triple_counts_once(tmp_path):
+    # A single source that asserts the SAME triple twice (an LLM restating a fact, or overlapping
+    # GLiNER2 windows re-surfacing a boundary relation) must bump weight ONCE — weight counts
+    # sources, not restatements. This lives in the store so every backend shares it.
+    gr = _retriever(tmp_path, [])
+    dup = [kg.Triple("Acme", "owns", "Beta"), kg.Triple("acme", "OWNS", "beta")]  # same, case-folded
+    n = gr._store.add_triples(dup, "doc:1")
+    assert n == 1
+    stats = gr.stats()
+    assert stats["edges"] == 1
+    assert stats["top_entities"][0]["weight"] == 1.0
+
+
 def test_case_folds_to_one_entity(tmp_path):
     gr = _retriever(tmp_path, [kg.Triple("Acme", "is", "X"), kg.Triple("acme", "is", "Y")])
     gr.build_from_texts([("t", "doc:1")])
@@ -391,12 +404,91 @@ def test_gliner2_extractor_tolerates_malformed_pairs():
     assert [(t.subject, t.relation, t.object) for t in triples] == [("PlainStr", "x", "Other")]
 
 
-def test_gliner2_extractor_caps_input_to_encoder_window(monkeypatch):
-    # GLiNER2 is a bounded-window encoder — long text must be capped so it isn't silently half-read.
+def test_gliner2_extractor_windows_long_text_no_window_exceeds_encoder(monkeypatch):
+    # GLiNER2 is a bounded-window encoder — long text is SLID over in windows, none larger than
+    # the window, and together they cover the whole (globally-capped) input (no silent tail loss).
     monkeypatch.setattr(kg, "MAX_GLINER_CHARS", 50)
+    monkeypatch.setattr(kg, "GLINER_OVERLAP_CHARS", 10)
+    monkeypatch.setattr(kg, "MAX_EXTRACT_CHARS", 500)
     model = _FakeGliner({"relation_extraction": {}})
     kg.GLiNER2Extractor(model=model).extract("x" * 5000, "doc:1")
-    assert len(model.calls[0][0]) == 50
+    windows = [c[0] for c in model.calls]
+    assert len(windows) > 1                                  # it actually windowed
+    assert all(len(w) <= 50 for w in windows)                # none exceeds the encoder window
+    assert sum(len(w) for w in windows) >= 500               # covers the full capped input (with overlap)
+
+
+def test_gliner2_extractor_caps_whole_input_to_max_extract_chars(monkeypatch):
+    # The whole input is bounded by MAX_EXTRACT_CHARS (the same cap the CLI path uses) so a
+    # pathological dossier can't spawn unbounded model calls — windows never reach past it.
+    monkeypatch.setattr(kg, "MAX_GLINER_CHARS", 50)
+    monkeypatch.setattr(kg, "GLINER_OVERLAP_CHARS", 0)
+    monkeypatch.setattr(kg, "MAX_EXTRACT_CHARS", 120)
+    model = _FakeGliner({"relation_extraction": {}})
+    kg.GLiNER2Extractor(model=model).extract("x" * 5000, "doc:1")
+    # step == size (no overlap) → ceil(120/50) = 3 windows, together exactly the 120-char cap.
+    assert [len(c[0]) for c in model.calls] == [50, 50, 20]
+
+
+def test_gliner2_extractor_captures_relation_in_the_tail(monkeypatch):
+    # The regression this feature fixes: a relation living PAST the first window must still be
+    # extracted (head-truncation would have dropped it). A content-aware fake returns a relation
+    # only for the window that contains its marker.
+    monkeypatch.setattr(kg, "MAX_GLINER_CHARS", 50)
+    monkeypatch.setattr(kg, "GLINER_OVERLAP_CHARS", 5)
+    monkeypatch.setattr(kg, "MAX_EXTRACT_CHARS", 500)
+
+    class _TailFake:
+        calls = []
+        def extract_relations(self, text, relation_types, include_confidence=True):
+            self.calls.append(text)
+            if "TAILMARK" in text:
+                return {"relation_extraction": {"owns": [("Acme", "TailCo")]}}
+            return {"relation_extraction": {}}
+
+    text = ("x" * 200) + "TAILMARK" + ("y" * 200)            # marker only in a late window
+    triples = kg.GLiNER2Extractor(model=_TailFake()).extract(text, "doc:1")
+    assert [(t.subject, t.relation, t.object) for t in triples] == [("Acme", "owns", "TailCo")]
+
+
+def test_gliner2_windows_repeat_a_relation_but_store_dedups_to_weight_one(tmp_path, monkeypatch):
+    # A relation surfacing in every overlapping window is emitted once PER WINDOW by extract (no
+    # extract-level dedup — the store owns that so all backends share it); once stored under one
+    # source it is a single edge of weight 1 (weight counts sources, not windows).
+    monkeypatch.setattr(kg, "MAX_GLINER_CHARS", 50)
+    monkeypatch.setattr(kg, "GLINER_OVERLAP_CHARS", 10)
+    monkeypatch.setattr(kg, "MAX_EXTRACT_CHARS", 500)
+    model = _FakeGliner({"relation_extraction": {"owns": [("Acme", "Beta")]}})
+    triples = kg.GLiNER2Extractor(model=model).extract("x" * 400, "doc:1")
+    assert len(model.calls) > 1                               # it windowed (so the relation repeated)
+    assert len(triples) > 1                                   # extract does NOT dedup — the store does
+    assert all((t.subject, t.relation, t.object) == ("Acme", "owns", "Beta") for t in triples)
+    gr = _retriever(tmp_path, [])
+    assert gr._store.add_triples(triples, "doc:1") == 1       # per-source dedup → one edge
+    assert gr.stats()["edges"] == 1
+    assert gr.stats()["top_entities"][0]["weight"] == 1.0
+
+
+def test_sliding_windows_pure_behaviour():
+    # Empty → no windows; a short string → one window unchanged.
+    assert kg._sliding_windows("", 50, 10) == []
+    assert kg._sliding_windows("short", 50, 10) == ["short"]
+    # Overlapping coverage: consecutive windows share `overlap` chars and cover the whole string.
+    text = "abcdefghij"                                       # 10 chars
+    wins = kg._sliding_windows(text, 4, 2)                    # size 4, step 2
+    assert wins == ["abcd", "cdef", "efgh", "ghij"]
+    # Overlap ≥ size is clamped to size-1 so the step stays ≥ 1 (never an infinite loop): here
+    # step becomes 1, and the windows still cover the whole string.
+    assert kg._sliding_windows("abcdef", 3, 99) == ["abc", "bcd", "cde", "def"]
+
+
+def test_sliding_windows_snaps_cut_to_whitespace():
+    # A window end is snapped back to whitespace so a token isn't split across the boundary into a
+    # junk fragment; the windows still overlap and cover the whole string.
+    text = "aaa bbb ccc ddd eee"           # spaces at 3, 7, 11, 15
+    wins = kg._sliding_windows(text, 10, 4)
+    assert wins == ["aaa bbb", "b ccc ddd", "ddd eee"]
+    assert not any(w.endswith(" ") for w in wins)   # no window ends on the snapped space
 
 
 def test_gliner2_extractor_honours_custom_relation_types():
