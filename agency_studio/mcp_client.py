@@ -172,13 +172,19 @@ def build_cli_config(servers: "Optional[List[ServerConfig]]" = None) -> "tuple[d
 # ── SDK seam (async, stubbed in tests) ──────────────────────────────────────────
 
 def _text_of(content) -> str:
-    """Best-effort extraction of readable text from an MCP ``read_resource`` result across
-    SDK shapes: a ``.contents`` list of parts each with ``.text`` (or ``.blob``)."""
-    parts = getattr(content, "contents", None) or []
+    """Best-effort extraction of readable text from an MCP ``read_resource`` result. The SDK
+    returns a ``.contents`` list of parts; a TEXT part carries a ``str`` ``.text``, a BLOB part
+    carries base64 in ``.blob`` and no usable ``.text`` — binary is not citable context, so blob
+    parts are dropped (only ``str`` ``.text`` is kept). Isolated (like ``knowledge._coerce_triples``)
+    so the one SDK-shape-uncertain surface is a single, easily-fixed function: a non-list
+    ``contents`` or a part whose ``.text`` is missing/non-``str`` is skipped, never raised."""
+    parts = getattr(content, "contents", None)
+    if not isinstance(parts, (list, tuple)):
+        return ""
     chunks = []
     for part in parts:
         text = getattr(part, "text", None)
-        if text:
+        if isinstance(text, str) and text:
             chunks.append(text)
     return "\n".join(chunks)
 

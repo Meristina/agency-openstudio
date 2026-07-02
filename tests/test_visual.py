@@ -225,6 +225,19 @@ def test_run_local_call_surface(monkeypatch):
     assert not os.path.isfile(seen["image"][0])               # temp file unlinked afterwards
 
 
+def test_caption_text_tolerates_mlx_return_shapes():
+    import types
+    # mlx-vlm's generate has returned different shapes across versions — all must yield the caption,
+    # unrecognised shapes drop to "" (the caller raises a clean "no caption"): the parallel of
+    # knowledge._coerce_triples' shape tolerance.
+    assert visual._caption_text(types.SimpleNamespace(text="  a lake  ")) == "a lake"   # GenerationResult
+    assert visual._caption_text("  a bare string  ") == "a bare string"                 # bare str
+    assert visual._caption_text(("  from a tuple  ", {"tokens": 3})) == "from a tuple"  # (text, meta)
+    assert visual._caption_text(types.SimpleNamespace(text=None)) == ""                 # .text not a str
+    assert visual._caption_text(object()) == ""                                         # unrecognised
+    assert visual._caption_text(()) == ""                                               # empty tuple
+
+
 # ── the OPTIONAL cloud backend's safety gates (network-free) ──────────────────
 def test_cloud_backend_requires_https_endpoint():
     bad = visual.VisualModel(id="x", label="x", backend="cloud",

@@ -207,3 +207,31 @@ def test_text_of_joins_content_parts():
         contents = [_Part("alpha"), _Part("beta"), _Part(None)]
 
     assert mc._text_of(_Content()) == "alpha\nbeta"
+
+
+def test_text_of_drops_non_str_and_blob_parts():
+    # A non-str .text (bytes/int from an odd SDK build) or a blob-only part must be dropped, never
+    # crash the "\n".join — the shape-robustness parallel of knowledge._gliner_endpoint.
+    class _Part:
+        def __init__(self, text):
+            self.text = text
+
+    class _BlobPart:            # a binary part: base64 in .blob, no usable .text
+        text = None
+        blob = "aGVsbG8="
+
+    class _Content:
+        contents = [_Part("alpha"), _Part(b"bytes"), _Part(42), _BlobPart(), _Part("omega")]
+
+    assert mc._text_of(_Content()) == "alpha\nomega"
+
+
+def test_text_of_tolerates_missing_or_nonlist_contents():
+    class _NoContents:
+        pass
+
+    class _ScalarContents:
+        contents = "not a list"
+
+    assert mc._text_of(_NoContents()) == ""
+    assert mc._text_of(_ScalarContents()) == ""

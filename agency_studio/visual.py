@@ -126,6 +126,22 @@ def _load_local(entry: VisualModel):
     return load(model_path)
 
 
+def _caption_text(result) -> str:
+    """Extract the caption string from mlx-vlm ``generate``'s return, tolerating the shapes it has
+    used across versions: a ``GenerationResult`` (``.text``), a bare ``str``, or a
+    ``(text, metadata)`` tuple. Isolated (like ``knowledge._coerce_triples``) so the one
+    library-shape-uncertain surface is a single, easily-fixed function; an unrecognised shape
+    yields ``""`` (the caller drops an empty caption), never raised."""
+    if isinstance(result, str):
+        return result.strip()
+    text = getattr(result, "text", None)
+    if isinstance(text, str):
+        return text.strip()
+    if isinstance(result, (list, tuple)) and result and isinstance(result[0], str):
+        return result[0].strip()
+    return ""
+
+
 def _run_local(backend, entry: VisualModel, *, images: "List[bytes]") -> "List[str]":
     """Caption each image with a loaded MLX VLM → one caption string per image.
 
@@ -139,7 +155,8 @@ def _run_local(backend, entry: VisualModel, *, images: "List[bytes]") -> "List[s
         placeholder token is inserted — passing a bare prompt makes ``process_inputs`` fail with
         "tuple index out of range" (the input has an image but the prompt has no slot for it).
 
-    The caption is ``GenerationResult.text``; ``max_tokens`` bounds it (the store truncates to
+    The caption is read via ``_caption_text`` (tolerant of mlx-vlm's ``GenerationResult`` /
+    ``str`` / tuple return shapes); ``max_tokens`` bounds it (the store truncates to
     ``rag.MAX_DOC_CHARS`` anyway, this just caps generation cost)."""
     import os
     import tempfile
@@ -161,7 +178,7 @@ def _run_local(backend, entry: VisualModel, *, images: "List[bytes]") -> "List[s
                 os.unlink(path)  # short-lived: the raw image never persists (SECURITY.md)
             except OSError:
                 pass
-        out.append(result.text.strip())
+        out.append(_caption_text(result))
     return out
 
 
