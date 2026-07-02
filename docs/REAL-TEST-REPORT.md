@@ -85,9 +85,9 @@ exceeds the 16 GB memory budget (**[#39]**) — a hardware limit, not a code def
 | Mission flag **`mcp`** (resources) | with the `mcp` SDK + a real `@modelcontextprotocol/server-everything` in `mcp.json` → SSE `mcp: done`, **hits 5** (`architecture.md`, `features.md`, … from server `everything`) | ✅ **proven active** |
 | Mission flag **`mcp_tools`** | same MCP server → SSE `mcp_tools: done`, **servers `["everything"]`** (a `--mcp-config` was built for the claude CLI) | ✅ **proven active** |
 | Mission flag **`personas`** | a curated `personas/marketing/brand-strategist.md` in the store → SSE `persona: done`, **depts `["marketing"]`** (doctrine injected into the dept/synth prompts) | ✅ **proven active** |
-| Mission flag **`knowledge`** / doc `retrieval` | the uninstallable-extra blocker is **removed** (**[#43]/[#45]**): extraction now runs on the `claude` CLI brain (`ClaudeCliExtractor`, no extra), so a graph **can** be built with only the CLI on PATH. A live end-to-end build over real docs was **not run here** (validated offline via a stubbed CLI boundary; live run is a manual step, like Wave-4 embeddings) | ✅ **unblocked** (build path buildable; live run deferred) |
+| Mission flag **`knowledge`** / doc `retrieval` | the uninstallable-extra blocker is **removed** (**[#43]/[#45]**): extraction now runs on the `claude` CLI brain (`ClaudeCliExtractor`, no extra) by default, so a graph **can** be built with only the CLI on PATH. An **optional on-device backend** (GLiNER2, the `[kg]` extra; **[#47]/[#48]**) also ships for airgapped builds (`AGENCY_STUDIO_KG_BACKEND=gliner2`), hardened against the real `gliner2` API (dual output shape + encoder window). Neither live path was run here — the CLI build over real docs and the GLiNER2 model run are both manual steps (validated offline via stubbed boundaries; the GLiNER2 model is torch/Mac-deferred like Wave 2) | ✅ **unblocked** (two backends, build path buildable; live runs deferred) |
 
-> **How the flags were proven active** (a second pass, after the first only saw them degrade): installed `[web]` (ddgs) and the `mcp` SDK, curated a persona file, wrote an `mcp.json` pointing at a real `@modelcontextprotocol/server-everything` stdio server, and ingested an image — then ran one mission with all flags on and read the pre-route SSE phases (cancelling before the full run to save Opus). **5 of 6 flags reached the active `done` state with real data**; only `knowledge` was not live-run — its build path is now **unblocked** ([#43]/[#45]: extraction moved to the `claude` CLI brain, no extra), with the live build a manual step.
+> **How the flags were proven active** (a second pass, after the first only saw them degrade): installed `[web]` (ddgs) and the `mcp` SDK, curated a persona file, wrote an `mcp.json` pointing at a real `@modelcontextprotocol/server-everything` stdio server, and ingested an image — then ran one mission with all flags on and read the pre-route SSE phases (cancelling before the full run to save Opus). **5 of 6 flags reached the active `done` state with real data**; only `knowledge` was not live-run — its build path is now **unblocked** ([#43]/[#45]: extraction moved to the `claude` CLI brain, no extra) with an optional on-device GLiNER2 backend too ([#47]/[#48]), the live build/model run remaining a manual step.
 | Mission flag **`video`** (seedance) | `POST /api/video` → `404` (video is mission-only, not a standalone endpoint); render bridge + gates proven offline. In the live marketing mission **the departments did not emit an `asset` marker**, so no render fired — the `asset_clause` is optional ("Omit when no asset is warranted"). | ⚠️ wiring proven offline; **no marker emitted by the mission in the time budget** |
 
 ## Bugs found and fixed (this live pass)
@@ -112,9 +112,12 @@ so the suite is green whether or not the optional extras are present.
   rewritten" was not observed. Cause is legitimate (the capability clause is optional), not a defect.
 - **The `knowledge` flag's active path.** Unblocked (**[#43]/[#45]**): the uninstallable
   `hyper-extract` extra was dropped and extraction now runs on the `claude` CLI brain
-  (`ClaudeCliExtractor`, no extra), so a graph is buildable with only the CLI on PATH. A live
-  end-to-end build over real docs was **not run here** — it is a manual step (like Wave-4's live
-  embeddings), asserted offline via a stubbed CLI boundary. (The other four flags — `web`,
+  (`ClaudeCliExtractor`, no extra) by default, so a graph is buildable with only the CLI on PATH.
+  An **optional on-device backend** (GLiNER2, the `[kg]` extra; **[#47]**, hardened in **[#48]**
+  against the real `gliner2` dual output shape + encoder window) also ships for airgapped builds
+  (`AGENCY_STUDIO_KG_BACKEND=gliner2`). Neither live path was run here — the CLI build over real
+  docs and the GLiNER2 model run are both manual steps (asserted offline via stubbed boundaries;
+  the GLiNER2 model is torch/Mac-deferred like Wave 2). (The other four flags — `web`,
   `mcp` resources, `mcp_tools`, `personas` — were **proven active** with their backends
   installed; see the Wave-6 table.)
 - **The cloud paths** — seedance video render (`_run_cloud`) and the optional cloud VLM — remain
@@ -132,8 +135,9 @@ Not everything is "green". Being precise about what the live pass actually prove
   ddgs results), `mcp` resources + `mcp_tools` (a real `server-everything` MCP server), and
   `personas` (a curated store) all reached the active `done` state with real data.
 - **Unblocked, live run deferred** — the `knowledge` flag's active path: the uninstallable-extra
-  blocker is gone (**[#43]/[#45]** — extraction now runs on the `claude` CLI brain, no extra), but a
-  live end-to-end graph build over real docs was not run in this pass (offline-asserted; manual live step).
+  blocker is gone (**[#43]/[#45]** — default extraction runs on the `claude` CLI brain, no extra;
+  plus an optional on-device GLiNER2 backend, **[#47]/[#48]**), but neither the live CLI graph build
+  over real docs nor the GLiNER2 model run was exercised in this pass (offline-asserted; manual live steps).
 - **Not exercised live** — an `asset` marker actually emitted-then-rendered inside a mission (no
   department chose to emit one), the real PDF render (`[pdf]` absent → 501), and the cloud paths
   (seedance render / cloud VLM, network-deferred by design).
