@@ -30,7 +30,7 @@ import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 from urllib.parse import parse_qs, urlparse
 
 DEFAULT_HOST = "127.0.0.1"
@@ -242,7 +242,7 @@ def _build_render_assets(server, events: "queue.Queue", cancel_event: threading.
     return render_assets
 
 
-def _resolve_clause(phase, emit, should_cancel, *, produce, unavailable_exc, unavailable_reason):
+def _resolve_clause(phase, emit, should_cancel, *, produce, unavailable_exc, unavailable_reason) -> "Optional[str]":
     """Shared best-effort context resolver for the pre-route steps (RAG · web · MCP). Emits the
     phase's ``start`` frame, runs ``produce()`` → ``(hits, sources, clause)``, emits ``done``,
     and returns the clause. Any failure is surfaced as a ``skipped`` frame WITH a reason and
@@ -269,7 +269,7 @@ def _resolve_clause(phase, emit, should_cancel, *, produce, unavailable_exc, una
         return None
 
 
-def _resolve_context_clause(retriever, goal, emit, should_cancel):
+def _resolve_context_clause(retriever, goal, emit, should_cancel) -> "Optional[str]":
     """RAG (Wave 4): the user's own ingested docs → a ``context_clause`` block (or None).
     Auto-runs whenever docs exist. See ``_resolve_clause`` for the best-effort contract."""
     if retriever is None:
@@ -286,7 +286,7 @@ def _resolve_context_clause(retriever, goal, emit, should_cancel):
                            unavailable_reason="local-docs extra not installed")
 
 
-def _resolve_web_clause(goal, emit, should_cancel):
+def _resolve_web_clause(goal, emit, should_cancel) -> "Optional[str]":
     """Web search (Wave 5, opt-in): fresh web results → a ``context_clause`` block (or None).
     See ``_resolve_clause`` for the best-effort contract."""
     from agency_studio.websearch import WebSearchUnavailable
@@ -302,7 +302,7 @@ def _resolve_web_clause(goal, emit, should_cancel):
                            unavailable_reason="web-search extra not installed")
 
 
-def _resolve_mcp_clause(goal, emit, should_cancel):
+def _resolve_mcp_clause(goal, emit, should_cancel) -> "Optional[str]":
     """MCP (Wave 5, opt-in): resources from the user's configured MCP servers → a
     ``context_clause`` block (or None). See ``_resolve_clause`` for the best-effort contract."""
     from agency_studio.mcp_client import McpUnavailable
@@ -318,7 +318,7 @@ def _resolve_mcp_clause(goal, emit, should_cancel):
                            unavailable_reason="mcp extra not installed")
 
 
-def _resolve_kg_clause(kg_retriever, goal, emit, should_cancel):
+def _resolve_kg_clause(kg_retriever, goal, emit, should_cancel) -> "Optional[str]":
     """Knowledge graph (Wave 6, opt-in): the goal's seed entities + their 1-hop neighbourhood
     from the built graph → a ``context_clause`` block (or None). Retrieval needs no extra (only
     a *build* runs the extractor), so the KnowledgeUnavailable arm is a safety net, not the
@@ -338,7 +338,7 @@ def _resolve_kg_clause(kg_retriever, goal, emit, should_cancel):
                            unavailable_reason="knowledge-graph extra not installed")
 
 
-def _resolve_visual_clause(visual_retriever, goal, emit, should_cancel):
+def _resolve_visual_clause(visual_retriever, goal, emit, should_cancel) -> "Optional[str]":
     """Visual RAG (Wave 6, opt-in): the goal's nearest captioned-image excerpts → a
     ``context_clause`` block (or None). Retrieval reads only local caption vectors — it never
     runs the VLM and never touches the network (the off-machine caption happens at INGEST time,
@@ -358,7 +358,7 @@ def _resolve_visual_clause(visual_retriever, goal, emit, should_cancel):
                            unavailable_reason="visual-RAG extra not installed")
 
 
-def _resolve_mcp_tools(run_kwargs, emit, should_cancel):
+def _resolve_mcp_tools(run_kwargs, emit, should_cancel) -> "Optional[str]":
     """Wave 6 MCP tool-calling (opt-in): write a ``--mcp-config`` file from the ENABLED servers
     in ``mcp.json``, and thread its path + the allowed ``mcp__*`` tools into ``run_kwargs`` so
     the engine can invoke those tools during departments/synthesis. Emits the ``mcp_tools`` SSE
@@ -400,7 +400,7 @@ def _resolve_mcp_tools(run_kwargs, emit, should_cancel):
         return None
 
 
-def _resolve_persona_doctrine(run_kwargs, emit, should_cancel, *, root=None):
+def _resolve_persona_doctrine(run_kwargs, emit, should_cancel, *, root=None) -> None:
     """Wave 6 persona doctrine (opt-in): load the user's curated per-department personas and
     thread them into ``run_kwargs['persona_doctrine']`` so the DEPARTMENT + SYNTHESIS prompts
     carry an expert persona voice (never the router/inspector — Art. IX). Emits the ``persona``

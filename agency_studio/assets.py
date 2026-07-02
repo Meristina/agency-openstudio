@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
-from typing import Callable, Optional, Sequence
+from typing import Callable, Iterator, Optional, Sequence
 
 from .engines import local_media, models
 
@@ -164,7 +164,7 @@ def _marker_end(region: str) -> Optional[int]:
     return end
 
 
-def _scan_asset_blocks(delivered: str):
+def _scan_asset_blocks(delivered: str) -> "Iterator[tuple[str, Optional[str]]]":
     """The single fence scanner shared by the parser and ``rewrite_delivered``, so the two
     can never drift on what counts as a block. Splits on ``\\n`` (byte-faithful: rewrite
     rejoins the same way) and matches each *stripped* line — a CRLF's trailing ``\\r`` is
@@ -227,7 +227,7 @@ def _scan_asset_blocks(delivered: str):
             i = j
 
 
-def _iter_asset_blocks(delivered: str):
+def _iter_asset_blocks(delivered: str) -> "Iterator[str]":
     """Yield the raw body text of each well-formed ```asset block, in order — the parser's
     view of the shared :func:`_scan_asset_blocks` (it ignores passthrough and ``stray_open``)."""
     for kind, *rest in _scan_asset_blocks(delivered):
