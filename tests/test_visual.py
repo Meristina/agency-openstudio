@@ -252,14 +252,54 @@ def test_cloud_backend_requires_env_key(monkeypatch):
         visual._probe_cloud(visual.VISUAL_MODELS["qwen3-vl-cloud"])
 
 
-def test_cloud_run_never_leaks_the_key(monkeypatch):
-    # PLACEHOLDER coverage: _run_cloud is a deferred stub that raises before building any request,
-    # so this can only catch a hardcoded secret in that one message — it does NOT exercise a real
-    # request/logging path (there is none yet). The genuine no-leak guarantee MUST be re-audited
-    # with a redaction test when the live cloud POST lands (see docs/WAVE6-PLAN.md Brick 4).
+_PNG = b"\x89PNG\r\n\x1a\n" + b"rest"
+_JPG = b"\xff\xd8\xff" + b"rest"
+
+
+def test_cloud_run_captions_each_image(monkeypatch):
+    # The real DashScope (OpenAI-compatible) request/response, network stubbed: one caption per
+    # image, the image inlined as a data: url with the right mime, the caption pulled from choices.
     monkeypatch.setenv(visual.CLOUD_API_KEY_ENV, "super-secret-key-value")
+    seen = []
+
+    def _fake_post(url, payload, key):
+        seen.append((url, payload, key))
+        n = len(seen)
+        return {"choices": [{"message": {"content": f"caption {n}"}}]}
+
+    monkeypatch.setattr(visual, "_http_post_json", _fake_post)
     entry = visual.VISUAL_MODELS["qwen3-vl-cloud"]
-    visual._probe_cloud(entry)   # passes (https + key present), no network
-    with pytest.raises(visual.VisualUnavailable) as exc:
-        visual._run_cloud(visual._load_cloud(entry), entry, images=[b"img"])
-    assert "super-secret-key-value" not in str(exc.value)
+    caps = visual._run_cloud(visual._load_cloud(entry), entry, images=[_PNG, _JPG])
+    assert caps == ["caption 1", "caption 2"]
+    # request shape: model, the caption prompt, and a data:<mime>;base64 url matching each format
+    _, p0, key = seen[0]
+    assert p0["model"] == entry.api_model
+    assert key == "super-secret-key-value"
+    content = p0["messages"][0]["content"]
+    assert content[0]["type"] == "text"
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert seen[1][1]["messages"][0]["content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+def test_cloud_run_model_env_override(monkeypatch):
+    monkeypatch.setenv(visual.CLOUD_API_KEY_ENV, "k")
+    monkeypatch.setenv(visual.CLOUD_MODEL_ENV, "qwen3-vl-plus-latest")
+    captured = {}
+    monkeypatch.setattr(visual, "_http_post_json",
+                        lambda url, payload, key: captured.update(payload) or {"choices": [{"message": {"content": "c"}}]})
+    entry = visual.VISUAL_MODELS["qwen3-vl-cloud"]
+    visual._run_cloud(visual._load_cloud(entry), entry, images=[_PNG])
+    assert captured["model"] == "qwen3-vl-plus-latest"
+
+
+def test_cloud_caption_text_tolerates_content_as_parts():
+    # Some providers return content as a [{type,text}, ...] list rather than a bare string.
+    r = {"choices": [{"message": {"content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]}}]}
+    assert visual._cloud_caption_text(r) == "a b"
+
+
+def test_cloud_run_without_key_raises(monkeypatch):
+    monkeypatch.delenv(visual.CLOUD_API_KEY_ENV, raising=False)
+    entry = visual.VISUAL_MODELS["qwen3-vl-cloud"]
+    with pytest.raises(visual.VisualUnavailable):
+        visual._run_cloud(visual._load_cloud(entry), entry, images=[_PNG])

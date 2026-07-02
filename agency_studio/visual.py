@@ -35,8 +35,11 @@ returned by an endpoint, never logged. Local is the default so the offline suite
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 import time
+import urllib.request
 import uuid
 from dataclasses import dataclass
 from typing import List, Optional
@@ -50,6 +53,11 @@ _VISUAL_HINT = "install the visual-RAG extra:  pip install 'agency-studio[visual
 # The env var the OPTIONAL cloud backend reads its API key from — never a request field, never
 # persisted. Absent ⇒ the cloud backend is unavailable and the local one is used instead.
 CLOUD_API_KEY_ENV = "AGENCY_STUDIO_VISUAL_API_KEY"
+# Optional env override for the remote model id (DashScope Qwen-VL ids vary by region/account) —
+# points the cloud backend at the user's real model without a code change. Env-only, like the key.
+CLOUD_MODEL_ENV = "AGENCY_STUDIO_VISUAL_MODEL"
+# Per-request network timeout for the cloud caption call.
+_CLOUD_HTTP_TIMEOUT = 60
 
 
 class VisualUnavailable(MediaUnavailable):
@@ -201,17 +209,65 @@ def _load_cloud(entry: VisualModel):
     return {"endpoint": entry.endpoint, "api_model": entry.api_model, "key_env": CLOUD_API_KEY_ENV}
 
 
+def _image_mime(data: bytes) -> str:
+    """Best-effort image MIME from magic bytes — the ``data:<mime>;base64,`` prefix must match the
+    real format (DashScope validates it). Falls back to ``image/png``."""
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/png"
+
+
+def _cloud_caption_text(resp: dict) -> str:
+    """Pull the caption from a DashScope (OpenAI-compatible) chat-completion response —
+    ``choices[0].message.content`` (a string; tolerate the rare content-as-parts list)."""
+    choice = (resp.get("choices") or [{}])[0]
+    content = (choice.get("message") or {}).get("content")
+    if isinstance(content, list):  # some providers return content as [{type,text}, ...]
+        content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
+    return (content or "").strip()
+
+
+def _http_post_json(url: str, payload: dict, key: str) -> dict:
+    """POST ``payload`` as JSON with a bearer key → parsed JSON. The key rides the Authorization
+    header only (never the body/logs). Isolated so the offline suite monkeypatches it."""
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"), method="POST",
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=_CLOUD_HTTP_TIMEOUT) as resp:  # nosec - https enforced by _probe_cloud
+        return json.loads(resp.read().decode("utf-8"))
+
+
 def _run_cloud(backend, entry: VisualModel, *, images: "List[bytes]") -> "List[str]":
-    """POST each image to the cloud VLM over https → one caption per image. The API key is read
-    from the environment at call time (never from ``backend``/disk), never logged. The concrete
-    request is network-deferred (validated live)."""
+    """POST each image to the cloud VLM (DashScope Qwen-VL, OpenAI-compatible) over https → one
+    caption per image. The API key is read from the environment at call time (never from
+    ``backend``/disk), never logged. Each image is inlined as a ``data:<mime>;base64,…`` url (no
+    upload URL, so nothing is hosted). A runtime API/network failure propagates as itself; an absent
+    key raises ``VisualUnavailable``."""
     key = os.environ.get(CLOUD_API_KEY_ENV)
     if not key:  # defence in depth — _probe_cloud already gated this
         raise VisualUnavailable(f"cloud visual captioning needs an API key in ${CLOUD_API_KEY_ENV}")
-    raise VisualUnavailable(
-        "live cloud visual captioning is validated on the network path (deferred); "
-        "the local MLX backend is the offline-first default"
-    )
+    endpoint = backend["endpoint"]
+    api_model = os.environ.get(CLOUD_MODEL_ENV) or backend["api_model"]
+    captions: "List[str]" = []
+    for img in images:
+        b64 = base64.b64encode(img).decode("ascii")
+        resp = _http_post_json(endpoint, {
+            "model": api_model,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": _CAPTION_PROMPT},
+                {"type": "image_url", "image_url": {"url": f"data:{_image_mime(img)};base64,{b64}"}},
+            ]}],
+            "max_tokens": _CAPTION_MAX_TOKENS,
+        }, key)
+        captions.append(_cloud_caption_text(resp))
+    return captions
 
 
 _CAPTION_PROMPT = (

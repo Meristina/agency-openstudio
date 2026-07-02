@@ -68,16 +68,73 @@ def test_cloud_probe_passes_with_https_and_key(monkeypatch):
     seedance._probe_cloud(seedance.VIDEO_MODELS[seedance.DEFAULT_VIDEO_MODEL])
 
 
-def test_cloud_run_is_deferred_and_never_leaks_the_key(monkeypatch, tmp_path):
-    # PLACEHOLDER coverage: _run_cloud is a deferred stub that raises before building any request,
-    # so this only catches a hardcoded secret in that one message — it does NOT exercise a real
-    # request/logging path (there is none yet). The genuine no-leak guarantee MUST be re-audited
-    # with a redaction test when the live cloud POST lands (see docs/WAVE6-PLAN.md Brick 5).
+def _stub_ark(monkeypatch, *, post=None, polls, download=None):
+    """Stub the three network primitives so _run_cloud runs offline: create-task returns ``post``,
+    successive polls return ``polls`` items, download writes ``download`` bytes to out_path."""
+    calls = {"post": [], "get": [], "dl": []}
+    monkeypatch.setattr(seedance, "_http_post_json",
+                        lambda url, payload, key: (calls["post"].append((url, payload, key)),
+                                                   post or {"id": "task-123"})[1])
+    seq = iter(polls)
+    monkeypatch.setattr(seedance, "_http_get_json",
+                        lambda url, key: (calls["get"].append(url), next(seq))[1])
+    monkeypatch.setattr(seedance, "_http_download",
+                        lambda url, out: (calls["dl"].append(url), out.write_bytes(download or b"MP4")))
+    monkeypatch.setattr(seedance.time, "sleep", lambda s: None)  # no real wait between polls
+    return calls
+
+
+def test_cloud_run_creates_polls_downloads(monkeypatch, tmp_path):
+    # The real 3-step flow (create → poll → download) with the network primitives stubbed.
     monkeypatch.setenv(seedance.CLOUD_API_KEY_ENV, "super-secret-key-value")
+    calls = _stub_ark(monkeypatch, polls=[
+        {"status": "running"},
+        {"status": "succeeded", "content": {"video_url": "https://cdn.example/x.mp4"}},
+    ], download=b"MP4DATA")
     entry = seedance.VIDEO_MODELS[seedance.DEFAULT_VIDEO_MODEL]
-    with pytest.raises(seedance.SeedanceUnavailable) as exc:
-        seedance._run_cloud(seedance._load_cloud(entry), entry, prompt="a clip", out_path=tmp_path / "x.mp4")
-    assert "super-secret-key-value" not in str(exc.value)
+    out = tmp_path / "clip.mp4"
+    seedance._run_cloud(seedance._load_cloud(entry), entry, prompt="a lake at sunrise", out_path=out)
+    assert out.read_bytes() == b"MP4DATA"
+    url, payload, key = calls["post"][0]
+    assert payload["duration"] == seedance.VIDEO_DURATION_SECONDS       # fixed safe caps, not the marker's
+    assert payload["resolution"] == seedance.VIDEO_RESOLUTION
+    assert payload["content"][0]["text"] == "a lake at sunrise"          # marker text is only the prompt
+    assert key == "super-secret-key-value"                               # key on the header path
+    assert calls["get"][0].endswith("/task-123")                         # polled the created task
+    assert calls["dl"] == ["https://cdn.example/x.mp4"]
+
+
+def test_cloud_run_model_env_override(monkeypatch, tmp_path):
+    # AGENCY_STUDIO_VIDEO_MODEL overrides the registry api_model (Ark ids are account-specific).
+    monkeypatch.setenv(seedance.CLOUD_API_KEY_ENV, "k")
+    monkeypatch.setenv(seedance.CLOUD_MODEL_ENV, "ep-my-real-endpoint")
+    calls = _stub_ark(monkeypatch, polls=[
+        {"status": "succeeded", "content": {"video_url": "https://cdn/x.mp4"}}])
+    entry = seedance.VIDEO_MODELS[seedance.DEFAULT_VIDEO_MODEL]
+    seedance._run_cloud(seedance._load_cloud(entry), entry, prompt="x", out_path=tmp_path / "x.mp4")
+    assert calls["post"][0][1]["model"] == "ep-my-real-endpoint"
+
+
+def test_cloud_run_failed_status_raises_runtimeerror(monkeypatch, tmp_path):
+    monkeypatch.setenv(seedance.CLOUD_API_KEY_ENV, "k")
+    _stub_ark(monkeypatch, polls=[{"status": "failed", "error": "content rejected"}])
+    entry = seedance.VIDEO_MODELS[seedance.DEFAULT_VIDEO_MODEL]
+    with pytest.raises(RuntimeError):
+        seedance._run_cloud(seedance._load_cloud(entry), entry, prompt="x", out_path=tmp_path / "x.mp4")
+
+
+def test_cloud_run_no_task_id_raises(monkeypatch, tmp_path):
+    monkeypatch.setenv(seedance.CLOUD_API_KEY_ENV, "k")
+    _stub_ark(monkeypatch, post={"unexpected": 1}, polls=[])
+    entry = seedance.VIDEO_MODELS[seedance.DEFAULT_VIDEO_MODEL]
+    with pytest.raises(RuntimeError):
+        seedance._run_cloud(seedance._load_cloud(entry), entry, prompt="x", out_path=tmp_path / "x.mp4")
+
+
+def test_cloud_download_rejects_non_https(tmp_path):
+    # Defence in depth: a video_url that isn't https is refused before any fetch (SECURITY.md #4).
+    with pytest.raises(RuntimeError):
+        seedance._http_download("http://cdn.example/x.mp4", tmp_path / "x.mp4")
 
 
 def test_cloud_run_without_key_raises_before_any_request(monkeypatch, tmp_path):

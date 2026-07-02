@@ -38,7 +38,11 @@ degrades to a clean ``SeedanceUnavailable`` rather than a silent no-op.
 
 from __future__ import annotations
 
+import json
 import os
+import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -48,12 +52,23 @@ from .engines.local_media import MediaUnavailable
 # The env var the cloud backend reads its API key from — never a request field, never persisted.
 # Absent ⇒ the cloud backend is unavailable (a clean 501, never a silent network attempt).
 CLOUD_API_KEY_ENV = "AGENCY_STUDIO_VIDEO_API_KEY"
+# Optional override for the remote model id — Volcengine Ark model/endpoint ids are account- and
+# region-specific (e.g. a ``doubao-seedance-…`` id or an ``ep-…`` endpoint id), so the registry's
+# generic ``api_model`` can be pointed at the user's real model WITHOUT a code change. Still not a
+# request field — env-only, like the key.
+CLOUD_MODEL_ENV = "AGENCY_STUDIO_VIDEO_MODEL"
 
 # Fixed, safe render parameters. Untrusted marker output never chooses compute size / length —
 # a long, high-res clip is the expensive tier, so a marker could otherwise weaponise it as a
 # cost-DoS. These are the studio's single source of truth for a marker-driven video.
 VIDEO_DURATION_SECONDS = 5      # a short clip — the cheap tier
 VIDEO_RESOLUTION = "720p"       # not 1080p/4k — untrusted output never picks the pricey size
+
+# Network bounds for the async render (create task → poll → download). A 5 s 720p clip renders
+# fast; the poll ceiling is a safety net so a stuck/rejected task can't hang a mission forever.
+_HTTP_TIMEOUT = 60             # seconds per HTTP request
+_POLL_INTERVAL = 5            # seconds between task-status polls
+_POLL_MAX_ATTEMPTS = 120     # ~10 min ceiling (120 × 5 s) before giving up
 
 
 class SeedanceUnavailable(MediaUnavailable):
@@ -124,18 +139,72 @@ def _load_cloud(entry: VideoModel):
     return {"endpoint": entry.endpoint, "api_model": entry.api_model, "key_env": CLOUD_API_KEY_ENV}
 
 
+# ── the raw network primitives (isolated so the offline suite monkeypatches them) ──
+def _http_post_json(url: str, payload: dict, key: str) -> dict:
+    """POST ``payload`` as JSON with a bearer key, return the parsed JSON response. The key rides
+    the Authorization header only — never the body, never logged (urllib errors carry the URL/status
+    but not request headers)."""
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"), method="POST",
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:  # nosec - https enforced by _probe_cloud
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _http_get_json(url: str, key: str) -> dict:
+    """GET a JSON resource with a bearer key → parsed JSON."""
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
+    with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:  # nosec - https enforced upstream
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _http_download(url: str, out_path: Path) -> None:
+    """Download ``url`` (an https media URL from the API response) to ``out_path``."""
+    if urlparse(url).scheme != "https":
+        raise RuntimeError("seedance: refusing a non-https video_url")
+    with urllib.request.urlopen(url, timeout=_HTTP_TIMEOUT) as resp:  # nosec - https checked above
+        out_path.write_bytes(resp.read())
+
+
 def _run_cloud(backend, entry: VideoModel, *, prompt: str, out_path: Path) -> None:
-    """Render one video from ``prompt`` via the cloud API over https and write the mp4 to
-    ``out_path``. The API key is read from the environment at call time (never from ``backend`` /
-    disk), never logged. The concrete POST + task-poll + download is network-deferred (validated
-    live); until then it raises ``SeedanceUnavailable`` rather than silently produce nothing."""
+    """Render one video from ``prompt`` via the seedance cloud API (Volcengine Ark) over https and
+    write the mp4 to ``out_path``. Three network steps: POST create-task → poll the task until it
+    succeeds → download the resulting video_url. The API key is read from the environment at call
+    time (never from ``backend`` / disk), never logged. Duration/resolution are the fixed safe caps
+    — the (untrusted) marker text is ONLY the prompt, never the compute size. A runtime API/network
+    failure propagates as a ``RuntimeError`` (→ the render bridge writes a ``_[video unavailable]_``
+    placeholder), an absent key as ``SeedanceUnavailable`` (→ 501)."""
     key = os.environ.get(CLOUD_API_KEY_ENV)
     if not key:  # defence in depth — _probe_cloud already gated this
         raise SeedanceUnavailable(f"cloud video needs an API key in ${CLOUD_API_KEY_ENV}")
-    raise SeedanceUnavailable(
-        "live cloud video rendering is validated on the network path (deferred); "
-        "the marker + render pipeline is fully wired and offline-tested"
-    )
+    endpoint = backend["endpoint"]
+    api_model = os.environ.get(CLOUD_MODEL_ENV) or backend["api_model"]
+    # 1. create the async render task (fixed safe caps — the marker never chooses tier/size/length)
+    created = _http_post_json(endpoint, {
+        "model": api_model,
+        "content": [{"type": "text", "text": prompt}],
+        "resolution": VIDEO_RESOLUTION,
+        "duration": VIDEO_DURATION_SECONDS,
+    }, key)
+    task_id = created.get("id")
+    if not task_id:
+        raise RuntimeError(f"seedance: create-task response carried no task id ({sorted(created)})")
+    # 2. poll until the task reaches a terminal state
+    poll_url = f"{endpoint}/{task_id}"
+    for _ in range(_POLL_MAX_ATTEMPTS):
+        time.sleep(_POLL_INTERVAL)
+        status_body = _http_get_json(poll_url, key)
+        status = (status_body.get("status") or "").lower()
+        if status == "succeeded":
+            video_url = (status_body.get("content") or {}).get("video_url")
+            if not video_url:
+                raise RuntimeError("seedance: task succeeded but carried no video_url")
+            _http_download(video_url, out_path)   # 3. download the mp4 (https-checked)
+            return
+        if status in ("failed", "rejected", "canceled", "cancelled"):
+            raise RuntimeError(f"seedance render {status}: {status_body.get('error') or 'no detail'}")
+    raise RuntimeError(f"seedance: task {task_id} did not finish within the poll budget")
 
 
 _VIDEO_BACKENDS = {
