@@ -87,9 +87,9 @@ exceeds the 16 GB memory budget (**[#39]**) — a hardware limit, not a code def
 | Mission flag **`mcp`** (resources) | with the `mcp` SDK + a real `@modelcontextprotocol/server-everything` in `mcp.json` → SSE `mcp: done`, **hits 5** (`architecture.md`, `features.md`, … from server `everything`) | ✅ **proven active** |
 | Mission flag **`mcp_tools`** | same MCP server → SSE `mcp_tools: done`, **servers `["everything"]`** (a `--mcp-config` was built for the claude CLI) | ✅ **proven active** |
 | Mission flag **`personas`** | a curated `personas/marketing/brand-strategist.md` in the store → SSE `persona: done`, **depts `["marketing"]`** (doctrine injected into the dept/synth prompts) | ✅ **proven active** |
-| Mission flag **`knowledge`** / doc `retrieval` | the uninstallable-extra blocker is **removed** (**[#43]/[#45]**): extraction now runs on the `claude` CLI brain (`ClaudeCliExtractor`, no extra) by default, so a graph **can** be built with only the CLI on PATH. An **optional on-device backend** (GLiNER2, the `[kg]` extra; **[#47]/[#48]**) also ships for airgapped builds (`AGENCY_STUDIO_KG_BACKEND=gliner2`), hardened against the real `gliner2` API (dual output shape; **overlapping sliding windows** over the encoder limit so a long dossier is no longer head-truncated, **[#50]**; per-source triple dedup at the store). Neither live path was run here — the CLI build over real docs and the GLiNER2 model run are both manual steps (validated offline via stubbed boundaries; the GLiNER2 model is torch/Mac-deferred like Wave 2) | ✅ **unblocked** (two backends, build path buildable; live runs deferred) |
+| Mission flag **`knowledge`** / doc `retrieval` | **now fully live-proven** (Jul 2 evening sweep): `POST /api/graph/build` ran the real `ClaudeCliExtractor` over an ingested doc + mission history → a **202-node / 139-edge** graph; then a mission with `knowledge` on emitted SSE `graph: done`, **hits 9** entities seeded on the goal (`newsletter signup conversion`, `April redesign`, `marketing department`, …). The default CLI build needs no extra; the optional on-device GLiNER2 backend (**[#47]/[#48]/[#50]**, `[kg]` extra) stays torch/Mac-deferred (not exercised) | ✅✅ **fully proven** live (CLI build + retrieval) |
 
-> **How the flags were proven active** (a second pass, after the first only saw them degrade): installed `[web]` (ddgs) and the `mcp` SDK, curated a persona file, wrote an `mcp.json` pointing at a real `@modelcontextprotocol/server-everything` stdio server, and ingested an image — then ran one mission with all flags on and read the pre-route SSE phases (cancelling before the full run to save Opus). **5 of 6 flags reached the active `done` state with real data**; only `knowledge` was not live-run — its build path is now **unblocked** ([#43]/[#45]: extraction moved to the `claude` CLI brain, no extra) with an optional on-device GLiNER2 backend too ([#47]/[#48]), the live build/model run remaining a manual step.
+> **How the flags were proven active** (all six, across two sweeps): installed `[web]` (ddgs) and the `mcp` SDK, curated a persona file, wrote an `mcp.json` pointing at a real `@modelcontextprotocol/server-everything` stdio server, ingested a doc + an image, and built the knowledge graph — then ran one mission with **all six flags on** and read the pre-route SSE phases (cancelling before the departments to save Opus). **All 6 flags reached the active `done` state with real data** (`retrieval`/`websearch`/`mcp`/`graph`/`visual`/`mcp_tools`/`persona`); the `knowledge` live gap noted in the earlier pass is now **closed** (see the Jul 2 evening full sweep below). Only the GLiNER2 on-device KG backend remains torch/Mac-deferred.
 | Mission flag **`video`** (seedance) | `POST /api/video` → `404` (video is mission-only, not a standalone endpoint); render bridge + gates proven offline. In the live marketing mission **the departments did not emit an `asset` marker**, so no render fired — the `asset_clause` is optional ("Omit when no asset is warranted"). | ⚠️ wiring proven offline; **no marker emitted by the mission in the time budget** |
 
 ## Bugs found and fixed (this live pass)
@@ -155,6 +155,53 @@ The failure that first cost ~19 minutes now costs **nothing**: the completed dep
 preserved on disk and the resume picks up at synthesis without re-paying routing or the department.
 Offline suites cover it too (agency-kit +11 tests, studio +12); the drill is the live proof.
 
+## Full live validation sweep (Jul 2 evening) — every model, every path, on the M4
+
+A single end-to-end pass that exercised **every runnable surface** on the reference Mac in one
+session: all local models, all mission pipeline flags, and the checkpoint/resume loop. The only
+untested surfaces are the two **cloud-only** flows (seedance video render + the optional cloud VLM),
+deferred by design for lack of API keys, and the GLiNER2 on-device KG backend (torch/Mac-deferred).
+
+**Models — 7/7 loadable pass** (serial, honouring 16 GB mutual-exclusion):
+
+| Model | Live result |
+|---|---|
+| TTS `kokoro-v1.0` | ✅ 3.19 s wav in ~4 s |
+| STT `whisper-large-v3-turbo` | ✅ transcribed the wav back verbatim, ~4 s |
+| image `flux-schnell` | ✅ 1024² PNG, 284 s |
+| image `flux2-klein-4b` | ✅ 1024² PNG, 91 s |
+| embed `nomic-v1.5` (768-dim) | ✅ via `POST /api/docs`, 6 s |
+| embed `bge-m3` (1024-dim) | ✅ 2 vectors, dim 1024, resident `embed:bge-m3`, 5 s |
+| visual VLM `Qwen3-VL-8B` | ✅ captioned a real image + embedded (2 chunks), 29 s |
+| `boogu-base` | ⛔ known OOM ([#39], hardware — excluded) |
+
+**Pipeline flags — all active in one all-flags mission** (pre-route phases read, then cancelled
+before the departments):
+
+| Flag | Live SSE result |
+|---|---|
+| `retrieval` (RAG/nomic, auto) | ✅ `hits 1` → `onboarding.txt` |
+| `web_search` (ddgs) | ✅ `hits 5`, real URLs |
+| `mcp` resources | ✅ `hits 5` from real `server-everything` (npx: `architecture.md`, `features.md`, …) |
+| `knowledge` (graph) | ✅ built **202 nodes / 139 edges**, then `hits 9` entities on the goal |
+| `visual` (PixelRAG) | ✅ `hits 2` → the Qwen3-VL image caption |
+| `mcp_tools` | ✅ `servers: ["everything"]` (`--mcp-config` built) |
+| `personas` | ✅ `depts: ["marketing"]` (curated brand-strategist injected) |
+
+**Checkpoint/resume — re-proven fresh:** a `solve` mission crashed at synthesis (engine `SIGKILL`)
+→ `error {resumable:true}` + a `GET /api/checkpoints` listing (phase `dept`, `depts_done:["solve"]`,
+the 185 s department output preserved) → **resume** skipped `route`+`solve` at 0.0 s → synth→inspect
+(`PASS-WITH-FIXES` → `PASS`) → `done` → checkpoint deleted. The **explicit-cancel** disposition was
+also confirmed live (the all-flags mission's checkpoint was deleted on its endpoint cancel).
+
+**Gates confirmed as designed:** `POST /api/video` → `404` (video is mission-only, not a standalone
+endpoint); PDF export stays a graceful `501` with `[pdf]`/WeasyPrint absent.
+
+_Note for a follow-up:_ the `knowledge` build produced 202 nodes including entities from the user's
+**real global mission history** — the sweep server ran without HOME isolation, so this is expected
+here, but it's worth a separate check that `GraphRetriever.build_from_history`'s project-scoping
+matches the intended per-project vs global semantics.
+
 ## Honest gaps / not covered live
 
 - **An `asset` render inside a real mission.** The render bridge, marker parse/gate, `video`/image
@@ -162,22 +209,14 @@ Offline suites cover it too (agency-kit +11 tests, studio +12); the drill is the
   video is mission-only. But a real department did not *choose* to emit an image/video marker in
   the marketing mission run, so an end-to-end "department emits marker → studio renders → deliverable
   rewritten" was not observed. Cause is legitimate (the capability clause is optional), not a defect.
-- **The `knowledge` flag's active path.** Unblocked (**[#43]/[#45]**): the uninstallable
-  `hyper-extract` extra was dropped and extraction now runs on the `claude` CLI brain
-  (`ClaudeCliExtractor`, no extra) by default, so a graph is buildable with only the CLI on PATH.
-  An **optional on-device backend** (GLiNER2, the `[kg]` extra; **[#47]**, hardened in **[#48]**
-  against the real `gliner2` dual output shape, then **[#50]** replacing the encoder-window
-  head-truncation with overlapping sliding windows + per-source dedup) also ships for airgapped
-  builds (`AGENCY_STUDIO_KG_BACKEND=gliner2`). Neither live path was run here — the CLI build over
-  real docs and the GLiNER2 model run are manual steps (GLiNER2 is torch/Mac-deferred like Wave 2).
-  The default **CLI build path is now live-proven** on the reference Mac: a real
-  `ClaudeCliExtractor` build over sample text extracted correct triples into the graph, and the
-  **[#54]** rebuild lifecycle (replace, not accumulate; prune removed sources) was confirmed live —
-  identical counts/weights on re-run, and an emptied graph after the source was removed. What is
-  **still not live-run** is the mission-time retrieval end-to-end (seed → 1-hop neighbourhood →
-  `context_clause` injection into a real mission) and the GLiNER2 backend. (The other four flags —
-  `web`, `mcp` resources, `mcp_tools`, `personas` — were **proven active** with their backends
-  installed; see the Wave-6 table.)
+- **The `knowledge` flag's active path — now CLOSED** (Jul 2 evening sweep). Both halves are
+  live-proven on the reference Mac: the CLI **build** (`POST /api/graph/build` → real
+  `ClaudeCliExtractor` → a 202-node / 139-edge graph; plus the **[#54]** rebuild lifecycle —
+  idempotent replace + prune — confirmed live) **and** the mission-time **retrieval** end-to-end
+  (a mission with `knowledge` on emitted `graph: done`, hits 9 entities seeded on the goal →
+  `context_clause` injection). The only remaining KG gap is the **optional GLiNER2 on-device
+  backend** (the `[kg]` extra; **[#47]/[#48]/[#50]**), which stays torch/Mac-deferred — not
+  exercised, since the default CLI path needs no extra.
 - **The cloud paths** — seedance video render (`_run_cloud`) and the optional cloud VLM — remain
   network-deferred (no live endpoint / API key), as designed.
 
@@ -187,22 +226,18 @@ Not everything is "green". Being precise about what the live pass actually prove
 
 - **Proven working on the live path** — server + GUI, history, dossier load, the full `route →
   departments → synthesis → inspector` loop **including a real veto → revise → PASS-WITH-FIXES
-  cycle**, Stop-with-no-persistence, the security guards, TTS, STT, **6 of 7 models** (both FLUX
-  image models + both embed models + Whisper + Kokoro), doc RAG ingest, and **5 of 6 mission
-  flags** with their backends installed — `visual` (image caption→retrieval), `web_search` (real
-  ddgs results), `mcp` resources + `mcp_tools` (a real `server-everything` MCP server), and
-  `personas` (a curated store) all reached the active `done` state with real data.
-- **Partly live-proven, rest deferred** — the `knowledge` flag: the uninstallable-extra blocker is
-  gone (**[#43]/[#45]** — default extraction runs on the `claude` CLI brain, no extra; plus an
-  optional on-device GLiNER2 backend, **[#47]/[#48]**, whose long-dossier handling is now
-  overlapping sliding windows rather than head-truncation, **[#50]**). The **CLI graph build is now
-  live-proven** on the reference Mac — a real `ClaudeCliExtractor` extracted correct triples, and
-  the **[#54]** rebuild lifecycle (idempotent replace + prune) was confirmed live. Still deferred:
-  the mission-time retrieval end-to-end (seed → neighbourhood → `context_clause` in a real mission)
-  and the GLiNER2 model run.
+  cycle** (and a full three-department mission run to completion at the veto cap with `residual_risk`),
+  Stop-with-no-persistence, the security guards, TTS, STT, **7 of 8 registered models** (both FLUX
+  image models + both embed models + Whisper + Kokoro + the Qwen3-VL visual VLM), doc RAG ingest,
+  the **crash-recovery checkpoint/resume loop**, and — after the Jul 2 evening sweep — **all 6
+  mission flags** with their backends installed: `retrieval` (RAG), `web_search` (real ddgs),
+  `mcp` resources + `mcp_tools` (a real `server-everything`), `knowledge` (a 202-node graph built
+  then retrieved), `visual` (image caption→retrieval), and `personas` (a curated store) all reached
+  the active `done` state with real data.
 - **Not exercised live** — an `asset` marker actually emitted-then-rendered inside a mission (no
-  department chose to emit one), the real PDF render (`[pdf]` absent → 501), and the cloud paths
-  (seedance render / cloud VLM, network-deferred by design).
+  department chose to emit one), the real PDF render (`[pdf]` absent → 501), the GLiNER2 on-device
+  KG backend (torch/Mac-deferred), and the cloud paths (seedance render / cloud VLM, network-deferred
+  by design).
 - **Failed** — `boogu-base` (OOM / swap on 16 GB, **[#39]**).
 
 The live pass paid for itself by catching two real bugs (#37, #40) and one hardware limit (#39)
