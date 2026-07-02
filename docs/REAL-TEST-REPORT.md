@@ -81,11 +81,13 @@ exceeds the 16 GB memory budget (**[#39]**) — a hardware limit, not a code def
 | **Visual RAG ingest** (`POST /api/visual`) | caption → embed → store → **`201`** (`lake.png`, 1 chunk) | ✅ |
 | `GET /api/graph` · `/api/personas` · `/api/mcp` · `/api/visual` | read-side stats, no extra needed | ✅ (all `200`) |
 | Mission flag **`visual`** (PixelRAG) | SSE `visual: done`, **hits 1 → `lake.png`** — the goal ("mountain lakes at sunrise") retrieved the ingested image's caption as context | ✅✅ **fully proven** live |
-| Mission flag **`web_search`** | SSE `websearch: skipped` ("web-search extra not installed") | ⚠️ **skip-only** (the `[web]` backend was absent — the *active* fetch path is NOT proven, only the degrade) |
-| Mission flag **`mcp`** (resources) | SSE `mcp: done`, hits 0 (no MCP servers configured) | ⚠️ **empty-only** (no server → 0 resources; the *active* read path is NOT proven) |
-| Mission flag **`mcp_tools`** | SSE `mcp_tools: skipped` ("no enabled MCP servers configured") | ⚠️ **skip-only** (needs a real MCP server) |
-| Mission flag **`personas`** | SSE `persona: skipped` ("no personas curated in the store") | ⚠️ **skip-only** (needs a curated persona store) |
-| Mission flag **`knowledge`** / doc `retrieval` | no phase emitted (no graph built / no docs in this store) | ⚠️ **not-exercised** (correct opt-in gate, but the *active* retrieval was never run) |
+| Mission flag **`web_search`** | with `[web]` (ddgs) installed → SSE `websearch: done`, **hits 5, real result URLs** ("Top Marketing Strategies for Outdoor Brands", …) | ✅ **proven active** (real network fetch) |
+| Mission flag **`mcp`** (resources) | with the `mcp` SDK + a real `@modelcontextprotocol/server-everything` in `mcp.json` → SSE `mcp: done`, **hits 5** (`architecture.md`, `features.md`, … from server `everything`) | ✅ **proven active** |
+| Mission flag **`mcp_tools`** | same MCP server → SSE `mcp_tools: done`, **servers `["everything"]`** (a `--mcp-config` was built for the claude CLI) | ✅ **proven active** |
+| Mission flag **`personas`** | a curated `personas/marketing/brand-strategist.md` in the store → SSE `persona: done`, **depts `["marketing"]`** (doctrine injected into the dept/synth prompts) | ✅ **proven active** |
+| Mission flag **`knowledge`** / doc `retrieval` | the graph **build** path can't be enabled — the `[kg]` extra's `hyper-extract` is **not on PyPI** (**[#43]**); querying needs no extra but there's no supported way to build a graph | ⛔ **blocked** (uninstallable extra) |
+
+> **How the flags were proven active** (a second pass, after the first only saw them degrade): installed `[web]` (ddgs) and the `mcp` SDK, curated a persona file, wrote an `mcp.json` pointing at a real `@modelcontextprotocol/server-everything` stdio server, and ingested an image — then ran one mission with all flags on and read the pre-route SSE phases (cancelling before the full run to save Opus). **5 of 6 flags reached the active `done` state with real data**; only `knowledge` stayed blocked, by [#43].
 | Mission flag **`video`** (seedance) | `POST /api/video` → `404` (video is mission-only, not a standalone endpoint); render bridge + gates proven offline. In the live marketing mission **the departments did not emit an `asset` marker**, so no render fired — the `asset_clause` is optional ("Omit when no asset is warranted"). | ⚠️ wiring proven offline; **no marker emitted by the mission in the time budget** |
 
 ## Bugs found and fixed (this live pass)
@@ -108,9 +110,10 @@ so the suite is green whether or not the optional extras are present.
   video is mission-only. But a real department did not *choose* to emit an image/video marker in
   the marketing mission run, so an end-to-end "department emits marker → studio renders → deliverable
   rewritten" was not observed. Cause is legitimate (the capability clause is optional), not a defect.
-- **`web` / `mcp` / `knowledge` / `personas` flags with their backends present.** Verified only in
-  the graceful-skip state (those extras / a real MCP server / a built graph / curated personas were
-  not set up). The skip path is the tested behaviour; the active path needs those resources.
+- **The `knowledge` flag's active path.** Blocked — the `[kg]` extra's `hyper-extract` is not on
+  PyPI (**[#43]**), so a graph cannot be built to retrieve from. (The other four flags — `web`,
+  `mcp` resources, `mcp_tools`, `personas` — were subsequently **proven active** with their backends
+  installed; see the Wave-6 table.)
 - **The cloud paths** — seedance video render (`_run_cloud`) and the optional cloud VLM — remain
   network-deferred (no live endpoint / API key), as designed.
 
@@ -121,12 +124,11 @@ Not everything is "green". Being precise about what the live pass actually prove
 - **Proven working on the live path** — server + GUI, history, dossier load, the full `route →
   departments → synthesis → inspector` loop **including a real veto → revise → PASS-WITH-FIXES
   cycle**, Stop-with-no-persistence, the security guards, TTS, STT, **6 of 7 models** (both FLUX
-  image models + both embed models + Whisper + Kokoro), doc RAG ingest, and the **`visual`** flag
-  end-to-end (real caption → embed → retrieval into a mission).
-- **Only seen degrading, NOT proven functional** — the `web_search`, `mcp`, `mcp_tools`,
-  `knowledge`, and `personas` flags. Their backends (`[web]`, a real MCP server, a built graph,
-  a curated persona store) were not set up, so only the skip / empty path ran. A ✅ on these means
-  "degrades correctly", **not** "the feature works".
+  image models + both embed models + Whisper + Kokoro), doc RAG ingest, and **5 of 6 mission
+  flags** with their backends installed — `visual` (image caption→retrieval), `web_search` (real
+  ddgs results), `mcp` resources + `mcp_tools` (a real `server-everything` MCP server), and
+  `personas` (a curated store) all reached the active `done` state with real data.
+- **Blocked** — the `knowledge` flag's active path: the `[kg]` extra is uninstallable (**[#43]**).
 - **Not exercised live** — an `asset` marker actually emitted-then-rendered inside a mission (no
   department chose to emit one), the real PDF render (`[pdf]` absent → 501), and the cloud paths
   (seedance render / cloud VLM, network-deferred by design).
