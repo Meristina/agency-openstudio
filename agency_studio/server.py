@@ -1188,8 +1188,8 @@ class StudioHandler(BaseHTTPRequestHandler):
     def _kg_retriever(self):
         """Lazily build + cache the one knowledge-graph retriever for this server. Its SQLite
         graph lives under docs_root (outside assets_root — never web-served), co-located with
-        the RAG store it derives from. Constructing it needs no extra (the HyperExtractor is
-        only touched by a build); retrieval + stats work with [kg] absent."""
+        the RAG store it derives from. Constructing it needs nothing (the ClaudeCliExtractor's
+        brain is only touched by a build); retrieval + stats are pure stdlib."""
         server = self.server  # type: ignore[attr-defined]
         with server.knowledge_lock:  # type: ignore[attr-defined]
             if server.knowledge is None:  # type: ignore[attr-defined]
@@ -1245,8 +1245,9 @@ class StudioHandler(BaseHTTPRequestHandler):
 
     def _handle_build_graph(self) -> None:
         """(Re)build the knowledge graph from the user's docs + mission history (POST
-        /api/graph/build). Runs the extractor, so it needs the [kg] extra → 501 when absent
-        (mirrors /api/docs ingestion). Returns the resulting stats."""
+        /api/graph/build). Runs the extractor (the `claude` CLI brain), so it 501s when that
+        brain is unreachable — or [studio] for the docs source (mirrors /api/docs ingestion).
+        Returns the resulting stats."""
         if self._read_body() is None:
             return  # malformed/oversized body already answered
         server = self.server  # type: ignore[attr-defined]
@@ -1255,7 +1256,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             retriever = self._kg_retriever()
             n_docs = retriever.build_from_docs(self._retriever())
             n_hist = retriever.build_from_history(store, project_root=server.project_root)  # type: ignore[attr-defined]
-        except ImportError as exc:  # [kg] (hyper-extract) — or [studio] for the docs source
+        except ImportError as exc:  # KnowledgeUnavailable (claude CLI) — or [studio] for the docs source
             return self._send_error_json(501, str(exc))
         except Exception:
             import traceback
@@ -1694,8 +1695,8 @@ def make_server(
     httpd.retriever_lock = threading.Lock()  # type: ignore[attr-defined]
     # Wave 6 — knowledge graph. The graph (nodes/edges) lives in a SQLite store under the same
     # never-web-served docs_root, co-located with the RAG corpus it derives from. Built lazily
-    # on the first /api/graph or opt-in mission retrieval; a build needs the [kg] extra, but
-    # reading/retrieving does not. knowledge_lock serializes the lazy init.
+    # on the first /api/graph or opt-in mission retrieval; a build needs the `claude` CLI brain,
+    # but reading/retrieving does not. knowledge_lock serializes the lazy init.
     httpd.knowledge = None  # type: ignore[attr-defined]
     httpd.knowledge_lock = threading.Lock()  # type: ignore[attr-defined]
     # Wave 6 — visual RAG (PixelRAG). Captioned images + their vectors live in a SQLite store

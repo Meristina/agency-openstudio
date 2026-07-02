@@ -1,10 +1,10 @@
 """Tests for the Wave-6 knowledge-graph brick (`agency_studio/knowledge.py`).
 
 Fully offline, mirroring the Wave 2/3/4/5 pattern: the only boundary stubbed is the one
-optional piece — the `Extractor` (text→triples, live via hyper-extract) — injected as a
-deterministic stub. The real graph store (upsert/dedup/weight), token seeding, 1-hop
-neighbourhood, and context-clause formatting all run end-to-end without the `[kg]` extra and
-without a model.
+reasoning piece — the `Extractor` (text→triples, default via the `claude` CLI brain) — injected
+as a deterministic stub (or, for the default extractor's own tests, its subprocess boundary is
+stubbed). The real graph store (upsert/dedup/weight), token seeding, 1-hop neighbourhood, and
+context-clause formatting all run end-to-end without any model and without invoking the CLI.
 """
 
 from pathlib import Path
@@ -17,8 +17,8 @@ from agency_studio import knowledge as kg
 # ── helpers ─────────────────────────────────────────────────────────────────────
 
 class _StubExtractor:
-    """A deterministic stand-in for the live hyper-extract path: returns a fixed triple list
-    per call, recording every (text, source_ref) it saw."""
+    """A deterministic stand-in for the live extractor (the `claude` CLI path): returns a fixed
+    triple list per call, recording every (text, source_ref) it saw."""
 
     def __init__(self, triples, record=None):
         self._triples = triples
@@ -240,21 +240,87 @@ def test_build_from_docs_without_all_chunks_builds_nothing(tmp_path):
     assert gr.build_from_docs(object()) == 0
 
 
-# ── extractor seam: [kg] absent degrades cleanly ─────────────────────────────────
+# ── extractor seam: default = the `claude` CLI brain (subprocess boundary stubbed) ───────
 
-def test_hyper_extractor_absent_raises_knowledge_unavailable(monkeypatch):
+def _fake_call(response, record=None):
+    """A stand-in for cli_engine._call: returns a fixed response, recording (cmd, prompt, timeout)."""
+    def _call(cmd, prompt, timeout=None):
+        if record is not None:
+            record.append((cmd, prompt, timeout))
+        return response
+    return _call
+
+
+def test_claude_cli_extractor_parses_triples_from_messy_cli_output():
+    # A real `claude -p` response can wrap the JSON in prose + a markdown fence — the extractor
+    # must recover the triples anyway (the router's tolerant-parse discipline).
+    rec = []
+    response = 'Sure, here you go:\n```json\n[["Acme","acquired","Beta"],["Beta","builds","Widget"]]\n```\nDone.'
+    ext = kg.ClaudeCliExtractor(call=_fake_call(response, rec))
+    triples = ext.extract("Acme acquired Beta which builds Widget.", "doc:1")
+    assert [(t.subject, t.relation, t.object) for t in triples] == [
+        ("Acme", "acquired", "Beta"), ("Beta", "builds", "Widget"),
+    ]
+    # The prompt carries the extraction doctrine + the text, sent to the `claude -p` command.
+    cmd, prompt, _timeout = rec[0]
+    assert cmd == ["claude", "-p"]
+    assert "Acme acquired Beta" in prompt and "JSON array" in prompt
+
+
+def test_claude_cli_extractor_blank_text_makes_no_cli_call():
+    def _boom(*a, **k):
+        raise AssertionError("must not invoke the CLI on blank text")
+    assert kg.ClaudeCliExtractor(call=_boom).extract("   ", "doc:1") == []
+
+
+def test_claude_cli_extractor_junk_output_yields_no_triples():
+    # No JSON array in the response is NOT an error — it just yields nothing (drop-never-raise).
+    ext = kg.ClaudeCliExtractor(call=_fake_call("I could not find any relations."))
+    assert ext.extract("some text", "doc:1") == []
+
+
+def test_claude_cli_extractor_empty_array_yields_no_triples():
+    ext = kg.ClaudeCliExtractor(call=_fake_call("[]"))
+    assert ext.extract("some text", "doc:1") == []
+
+
+def test_claude_cli_extractor_runtime_error_propagates_as_itself():
+    # A CLI that RAN but failed (rate limit, timeout, non-zero exit) is a genuine error: it must
+    # propagate as itself, never be relabelled KnowledgeUnavailable (Wave-5 'accurate skip reasons').
+    def _failing(*a, **k):
+        raise RuntimeError("CLI engine 'claude' exited 1: rate limited")
+    with pytest.raises(RuntimeError, match="rate limited"):
+        kg.ClaudeCliExtractor(call=_failing).extract("some text", "doc:1")
+
+
+def test_claude_cli_extractor_missing_cli_raises_knowledge_unavailable(monkeypatch):
+    # Brain UNREACHABLE (the `claude` CLI is not on PATH) ⇒ KnowledgeUnavailable → 501 + hint.
+    monkeypatch.setattr(kg.shutil, "which", lambda name: None)
+    with pytest.raises(kg.KnowledgeUnavailable, match="claude"):
+        kg.ClaudeCliExtractor().extract("some text", "doc:1")
+
+
+def test_claude_cli_extractor_missing_agency_kit_raises_knowledge_unavailable(monkeypatch):
+    # `claude` on PATH but agency-kit (which owns the subprocess boundary) not importable ⇒
+    # KnowledgeUnavailable, not an opaque ImportError.
     import builtins
 
+    monkeypatch.setattr(kg.shutil, "which", lambda name: "/usr/local/bin/claude")
     real_import = builtins.__import__
 
-    def _no_hyper(name, *a, **k):
-        if name == "hyper_extract":
-            raise ImportError("no hyper_extract")
+    def _no_cli_engine(name, *a, **k):
+        if name.startswith("agency_cli"):
+            raise ImportError("no agency_cli")
         return real_import(name, *a, **k)
 
-    monkeypatch.setattr(builtins, "__import__", _no_hyper)
+    monkeypatch.setattr(builtins, "__import__", _no_cli_engine)
     with pytest.raises(kg.KnowledgeUnavailable):
-        kg.HyperExtractor().extract("some text", "doc:1")
+        kg.ClaudeCliExtractor().extract("some text", "doc:1")
+
+
+def test_graph_retriever_defaults_to_claude_cli_extractor(tmp_path):
+    gr = kg.GraphRetriever(db_path=tmp_path / "kg.db")
+    assert isinstance(gr._extractor, kg.ClaudeCliExtractor)
 
 
 def test_knowledge_unavailable_is_an_importerror():

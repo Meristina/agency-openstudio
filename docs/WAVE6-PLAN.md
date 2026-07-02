@@ -12,14 +12,26 @@
 
 > Status: **BUILT** — the first Wave 6 brick, end-to-end: the module
 > (`agency_studio/knowledge.py`), the server wiring (`_resolve_kg_clause`, `knowledge` flag,
-> `graph` SSE phase, `GET /api/graph` + `POST /api/graph/build`, `[kg]` extra), the GUI toggle
+> `graph` SSE phase, `GET /api/graph` + `POST /api/graph/build`), the GUI toggle
 > + timeline step, and the offline test suite (backend `tests/test_knowledge.py` +
 > `tests/test_server.py`; frontend timeline/api/component tests). The **live extraction path**
-> (entity/relation extraction over real document text) needs the Apple Silicon Mac, deferred
-> like Wave 4/5's live model/network paths. Pending review + commit/merge. Produced after a
+> (entity/relation extraction over real document text) needs the `claude` CLI on PATH; the
+> offline suite stubs that subprocess boundary. Produced after a
 > read-only investigation of the shipped `Retriever` / `context_clause` seam.
 > This plan supersedes the naive one-line `ROADMAP.md §Wave 6` sketch (`hyper-extract →
 > knowledge.py`) with the corrections the code surfaced.
+>
+> **Correction (#43 / #45 — extractor is the `claude` CLI brain, not `hyper-extract`).** The
+> ROADMAP named `hyper-extract` as the extraction library. That was dropped: the buildable PyPI
+> package (`hyperextract`) is a **heavy, LLM-powered LangChain framework** whose graph *build* is
+> an LLM call **off-machine by default** — a direct violation of the studio's charter (*brain =
+> Claude CLI, local-first, all reasoning on the subscription*). Entity/relation extraction **is**
+> reasoning, so it now runs where all the studio's reasoning runs: the **`claude` CLI**, over the
+> SAME subprocess boundary (`agency_cli.engines.cli_engine._call`) the router / departments /
+> synthesis / inspector already use. The default impl is **`ClaudeCliExtractor`** — **zero new
+> dependency** (no `[kg]` extra), zero marginal cost, no resident model on the 16 GB Mac, no new
+> off-machine data flow. A fully on-device backend (e.g. **GLiNER2**, Apache-2.0) can plug the same
+> `Extractor` seam behind a future optional extra without touching the store, server, or GUI.
 
 ## Goal (ROADMAP, verbatim)
 
@@ -54,10 +66,11 @@ recur across missions accumulate. Nothing leaves the machine.
 
 ## Research findings (2026)
 
-1. **Extraction is the only model-bearing step.** Turning free text into `(subject, relation,
-   object)` triples needs an LLM or an IE model. `hyper-extract` (Apache-2.0) is the ROADMAP's
-   named library. It — like Wave 4's embedder — is a **Metal/Mac, heavy** dependency, so it
-   belongs behind an extra and a lazy import, and its live run is a **Mac-only** step.
+1. **Extraction is the only reasoning-bearing step.** Turning free text into `(subject, relation,
+   object)` triples is a reasoning task. Per the charter (*brain = Claude CLI*), it runs on the
+   **`claude` CLI** — the SAME subprocess boundary the router/departments already use — not a
+   second LLM framework and not a resident on-device model. So it needs **no new dependency and no
+   extra**; the live run needs only the `claude` CLI on PATH (see the #43/#45 correction above).
 2. **The graph store itself needs no model and no new dependency.** A directed labelled graph
    is two SQLite tables (`nodes`, `edges`) over the same stdlib `sqlite3` the RAG store
    already uses — so building, seeding, neighbourhood expansion, and clause formatting are
@@ -70,10 +83,12 @@ recur across missions accumulate. Nothing leaves the machine.
 
 ## The decisions (final)
 
-- **K1 — library + extra:** `hyper-extract` (Apache-2.0) in a new **`[kg]`** extra,
-  lazy-imported inside `knowledge.py`; absent ⇒ `KnowledgeUnavailable` (an `ImportError`) on a
-  **build**, mapped by the server to 501/skip. **Retrieval over an already-built graph needs
-  no extra** (mirrors `rag.py`).
+- **K1 — extractor = the `claude` CLI brain, no extra:** extraction routes through
+  `agency_cli.engines.cli_engine._call` (`claude -p`), lazy-resolved inside `knowledge.py`; the
+  brain UNREACHABLE (`claude` not on PATH / agency-kit not importable) ⇒ `KnowledgeUnavailable`
+  (an `ImportError`) on a **build**, mapped by the server to 501/skip. A CLI that ran but failed
+  propagates as itself (never mislabelled). **Retrieval over an already-built graph needs
+  nothing** — pure stdlib `sqlite3` (mirrors `rag.py`).
 - **K2 — the graph store is pure stdlib:** two tables in one SQLite file under the shared,
   never-web-served `rag.data_dir()` (`knowledge.db`, `AGENCY_STUDIO_DATA_DIR`-overridable —
   **outside** `assets_root`, never reachable via `/media`). `nodes(id, label, kind, weight)`,
@@ -81,8 +96,11 @@ recur across missions accumulate. Nothing leaves the machine.
   `(src, rel, dst)`, incrementing `weight` so a relation seen across many docs/missions ranks
   higher.
 - **K3 — the `Extractor` seam:** `Extractor.extract(text, source_ref) -> List[Triple]`. The
-  live impl is `HyperExtractor` (`[kg]`, lazy). The seam is injected, so the offline suite
-  passes a deterministic stub — the same "monkeypatch the model boundary" pattern as Wave 2/4.
+  default impl is `ClaudeCliExtractor` (shells out to `claude -p`, parses a JSON triple array
+  with the router's tolerant regex, adapts via `_coerce_triples`). The seam is injected, so the
+  offline suite passes a deterministic stub (or stubs the extractor's own `call` boundary) — the
+  same "monkeypatch the model boundary" pattern as Wave 2/4. A future on-device backend (GLiNER2)
+  plugs the same seam.
 - **K4 — `GraphRetriever` implements `rag.Retriever`-shaped retrieval:** `build_from_docs(...)`
   (pull Wave 4 chunks → extract → store) and `build_from_history(store)` (pull dossiers →
   extract → store); `retrieve(query, k) -> Subgraph` = token-seed → 1-hop neighbourhood,
@@ -96,8 +114,8 @@ recur across missions accumulate. Nothing leaves the machine.
   mirroring `retrieval` / `websearch` / `mcp`.
 - **K6 — endpoints:** `GET /api/graph` → graph stats (node/edge counts, top entities by
   weight) so the GUI can reflect state and gate the toggle (empty graph ⇒ hint). `POST
-  /api/graph/build` → (re)build from current docs + history (needs `[kg]` live → 501 when
-  absent, mirroring `/api/docs` ingestion).
+  /api/graph/build` → (re)build from current docs + history (needs the `claude` CLI brain → 501
+  when unreachable, mirroring `/api/docs` ingestion).
 
 ## Security (SECURITY.md discipline)
 
@@ -116,13 +134,15 @@ recur across missions accumulate. Nothing leaves the machine.
 
 - `agency_studio/knowledge.py` (NEW) — `Triple` / `Node` / `Edge` / `Subgraph` dataclasses; a
   pure-stdlib `_GraphStore` (upsert-dedup nodes/edges, `seed_match`, `neighborhood`, `stats`);
-  the `Extractor` protocol + `HyperExtractor` (lazy `[kg]` → `KnowledgeUnavailable`);
-  `build_kg_context_clause(subgraph)` (→ `format_context_block`, `None` when empty);
-  `GraphRetriever` (`build_from_docs` / `build_from_history` / `retrieve` / `stats`).
+  the `Extractor` protocol + `ClaudeCliExtractor` (lazy `cli_engine._call` → `KnowledgeUnavailable`
+  when the brain is unreachable); `build_kg_context_clause(subgraph)` (→ `format_context_block`,
+  `None` when empty); `GraphRetriever` (`build_from_docs` / `build_from_history` / `retrieve` / `stats`).
 - `agency_studio/server.py` — `_resolve_kg_clause(goal, emit, should_cancel)` mirroring
   `_resolve_mcp_clause`, composed into `_compose_context_clause`; read the `knowledge` flag
   from the mission body; emit the `graph` SSE phase; `GET /api/graph` + `POST /api/graph/build`.
-- `pyproject.toml` — `[kg]` extra (`hyper-extract`, pinned; Mac/Metal, like `[studio]`).
+- `pyproject.toml` — **no `[kg]` extra**: extraction runs on the `claude` CLI brain the studio
+  already requires (see the #43/#45 correction). A future on-device backend (GLiNER2) would add
+  an optional extra here.
 - `tests/test_knowledge.py` + `tests/test_server.py` — extractor stubbed (no model): store
   upsert/dedup, token seed-match, neighbourhood BFS, clause None-contract + formatting,
   `GraphRetriever` build+retrieve, absent-extra skip, compose order (RAG + web + MCP + graph),
@@ -145,13 +165,15 @@ recur across missions accumulate. Nothing leaves the machine.
 4. **GUI** (toggle + timeline fold) + tests — reviewed.
 5. Docs sweep (ROADMAP / CLAUDE.md / ARCHITECTURE) + PR.
 
-## Test plan (offline — extractor / `[kg]` all stubbed, mirrors Wave 2/3/4/5)
+## Test plan (offline — the CLI subprocess boundary stubbed, mirrors Wave 2/3/4/5)
 
-The whole suite runs anywhere with no model and no extras: the `Extractor` seam is injected
-with a deterministic stub, and the graph store / seeding / neighbourhood / clause formatting
-are pure. The compose logic, `graph` SSE phase, opt-in flag, and absent-extra skip are all
-asserted offline. Live validation (real `hyper-extract` extraction over real docs on the Mac)
-is a manual step, like Wave 4's live embeddings.
+The whole suite runs anywhere with no model and no CLI: the `Extractor` seam is injected with a
+deterministic stub, and for `ClaudeCliExtractor`'s own tests its `call` boundary is stubbed
+(parse of messy/fenced output, junk → no triples, runtime error propagates, brain-unreachable →
+`KnowledgeUnavailable`). The graph store / seeding / neighbourhood / clause formatting are pure.
+The compose logic, `graph` SSE phase, opt-in flag, and brain-unreachable skip are all asserted
+offline. Live validation (real `claude` extraction over real docs) is a manual step, like Wave 4's
+live embeddings.
 
 ## Non-goals (deferred — do not build here)
 

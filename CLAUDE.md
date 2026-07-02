@@ -53,12 +53,19 @@ a clean web GUI.
 > (`nodes`/`edges`, upsert-dedup + weight; `rag.LocalRetriever.all_chunks` feeds the doc source),
 > then at mission time seeds on the goal → 1-hop **neighbourhood** → injects the subgraph through
 > the **same additive `context_clause` hook** (`build_kg_context_clause` + the server's
-> `_resolve_kg_clause`, composed after RAG/web/MCP). The `Extractor` seam's live impl wraps
-> `hyper-extract` (Apache-2.0, the new **`[kg]`** extra, lazy → `KnowledgeUnavailable`); **querying
-> an already-built graph needs no extra**. Opt-in per mission (`knowledge` flag, default off) with
+> `_resolve_kg_clause`, composed after RAG/web/MCP). The `Extractor` seam's default impl
+> (`ClaudeCliExtractor`) routes extraction through the studio's **brain**, the `claude` CLI — the
+> SAME subprocess boundary (`agency_cli.engines.cli_engine._call`) the router/departments/synthesis
+> use — because entity/relation extraction is reasoning and the charter puts all reasoning on the
+> CLI. So there is **no `[kg]` extra**: extraction needs only the `claude` CLI the studio already
+> requires (unreachable ⇒ `KnowledgeUnavailable` → 501/skip; a CLI that ran-but-failed propagates as
+> itself), and **querying an already-built graph needs nothing** (pure stdlib). This corrects #43/#45
+> — the ROADMAP's `hyper-extract` was dropped (an off-machine LLM-framework build that violated
+> local-first); a fully on-device backend (GLiNER2) can plug the same seam behind a future optional
+> extra. Opt-in per mission (`knowledge` flag, default off) with
 > a `graph` SSE phase, `GET /api/graph` + `POST /api/graph/build`, and the GUI "Use knowledge graph"
-> toggle + timeline step. Its offline suite runs anywhere (extractor stubbed); the live extraction
-> path needs the Apple Silicon Mac (deferred like Wave 2). The **MCP tool-calling brick** (Brick 2)
+> toggle + timeline step. Its offline suite runs anywhere (the CLI boundary stubbed); the live
+> extraction path needs the `claude` CLI on PATH. The **MCP tool-calling brick** (Brick 2)
 > is also BUILT — the first brick that can't ride `context_clause`: it adds a **new additive
 > agency-kit engine hook** (`mcp_config_path` / `mcp_allowed_tools` on `run_mission_cli`, spliced by
 > `_with_mcp` into the claude **department + synthesis** commands only — never the router/inspector,

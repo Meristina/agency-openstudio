@@ -276,12 +276,16 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
   into a pure-stdlib SQLite graph (`nodes`/`edges`, upsert-dedup with weight), and at mission
   time seeds on the goal → 1-hop **neighbourhood** → injects the subgraph through the **same
   additive `context_clause` hook** (via `context_block.format_context_block` + the server's
-  `_resolve_kg_clause`). The `Extractor` seam's live impl wraps `hyper-extract` (Apache-2.0, the
-  new **`[kg]`** extra, lazy → `KnowledgeUnavailable`); **querying an already-built graph needs
-  no extra**. Opt-in per mission (`knowledge` flag, default off) with a `graph` SSE phase, plus
-  `GET /api/graph` / `POST /api/graph/build` and the GUI "Use knowledge graph" toggle + timeline
-  step. Offline suite runs anywhere (extractor stubbed); the live extraction path needs the Mac,
-  deferred like Wave 2.
+  `_resolve_kg_clause`). The `Extractor` seam's default impl (`ClaudeCliExtractor`) routes
+  extraction through the studio's **brain** — the `claude` CLI (`agency_cli.engines.cli_engine._call`,
+  the same boundary the router/departments use) — because extraction is reasoning; so there is **no
+  `[kg]` extra** (unreachable brain ⇒ `KnowledgeUnavailable` → 501/skip) and **querying an
+  already-built graph needs nothing**. This corrects #43/#45 (the ROADMAP's `hyper-extract` was an
+  off-machine LLM-framework build that violated local-first — dropped; GLiNER2 can plug the seam
+  locally in a follow-up). Opt-in per mission (`knowledge` flag, default off) with a `graph` SSE
+  phase, plus `GET /api/graph` / `POST /api/graph/build` and the GUI "Use knowledge graph" toggle +
+  timeline step. Offline suite runs anywhere (the CLI boundary stubbed); the live extraction path
+  needs the `claude` CLI on PATH.
 - ✅ **MCP tool-calling — BUILT & MERGED** (offline-first slice; agency-kit PR #10 + studio PR #32,
   both → `main`; see `docs/WAVE6-PLAN.md` Brick 2). The
   Wave-5 deferral is paid: unlike every prior brick this can't ride `context_clause` — it adds

@@ -1574,7 +1574,7 @@ def test_get_mcp_malformed_config_is_400(monkeypatch, tmp_path):
 # ── Wave 6 — knowledge graph: opt-in relational context + /api/graph ─────────────
 
 class _StubExtractor:
-    """Deterministic text→triples stand-in (the live hyper-extract path, stubbed)."""
+    """Deterministic text→triples stand-in (the default `claude` CLI path, stubbed)."""
 
     def __init__(self, triples):
         self._triples = triples
@@ -1693,21 +1693,25 @@ def test_get_graph_stats_empty_then_built(monkeypatch, tmp_path):
         httpd.shutdown()
 
 
-def test_build_graph_without_kg_extra_returns_501(monkeypatch, tmp_path):
+def test_build_graph_without_brain_returns_501(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_studio import knowledge as kg
     from agency_studio.rag import Chunk
 
     class _RetrieverWithChunks:
         def all_chunks(self):
             return [Chunk("d1", 0, "T", "some corpus text to extract")]
 
-    # A real GraphRetriever (real HyperExtractor); hyper_extract is absent offline → 501.
+    # A real GraphRetriever with the default ClaudeCliExtractor; force the brain unreachable
+    # (`claude` not on PATH) so the build raises KnowledgeUnavailable → 501, exactly as it would
+    # on a machine without Claude Code installed.
+    monkeypatch.setattr(kg.shutil, "which", lambda name: None)
     monkeypatch.setattr(server.StudioHandler, "_retriever", lambda self: _RetrieverWithChunks())
     httpd, host, port = _start(tmp_path)
     try:
         resp, body = _post(host, port, "/api/graph/build", body=b"")
         assert resp.status == 501
-        assert "kg" in body.decode().lower()
+        assert "claude" in body.decode().lower()
     finally:
         httpd.shutdown()
 

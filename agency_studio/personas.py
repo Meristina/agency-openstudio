@@ -210,9 +210,9 @@ class AgencyAgentsSource:
             raise PersonasUnavailable(
                 f"importing personas from agency-agents needs the network dep — {_PERSONAS_HINT}"
             ) from exc
-        # Live fetch + repo-layout parsing is the Mac/network-deferred surface (like
-        # HyperExtractor's call into hyper-extract). It MUST enforce https + a host allowlist
-        # before any request. Until validated live it degrades cleanly rather than guessing.
+        # Live fetch + repo-layout parsing is the network-deferred surface (like the seedance /
+        # cloud-VLM off-machine flows). It MUST enforce https + a host allowlist before any
+        # request. Until validated live it degrades cleanly rather than guessing.
         raise PersonasUnavailable(
             "live agency-agents import is validated on the Apple-Silicon Mac (deferred); "
             f"curate personas locally under {personas_dir()} in the meantime"
