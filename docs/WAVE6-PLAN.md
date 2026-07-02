@@ -188,11 +188,15 @@ available behind the (re-introduced, now optional) **`[kg]`** extra — the para
 
 - **`GLiNER2Extractor`** (`agency_studio/knowledge.py`) wraps **`gliner2`** (Apache-2.0, a
   torch-based ~205M schema-driven IE model; `GLiNER2.from_pretrained` → `extract_relations(text,
-  relation_types, include_confidence=True)`). Its output
-  (`{'relation_extraction': {rel_type: [{'head':{'text',…}, 'tail':{…}}]}}`) is mapped to triples
-  by the isolated `_gliner_relations_to_raw` → `_coerce_triples`, with a per-pair confidence gate.
-  Lazy-loaded + cached (a build loads the model once); absent ⇒ `KnowledgeUnavailable` → 501/skip;
-  a runtime model error propagates as itself.
+  relation_types, include_confidence=True)`). Its output is mapped to triples by the isolated
+  `_gliner_relations_to_raw` → `_coerce_triples`, with a per-pair confidence gate. The mapper
+  tolerates **both** documented output shapes — the `{'head':{'text',…},'tail':{…}}` dict (confidence
+  on) **and** the bare `(head, tail)` tuple (confidence off) — plus string/None endpoints (dropped,
+  never raised). Input is capped to the encoder's bounded window (`MAX_GLINER_CHARS` ≈ 512 tokens,
+  ≪ the CLI cap) so a long dossier is head-truncated, not silently half-read (a documented
+  limitation — sliding-window relation extraction is a follow-up). Lazy-loaded + cached (a build
+  loads the model once); absent ⇒ `KnowledgeUnavailable` → 501/skip; a runtime model error
+  propagates as itself.
 - **`make_extractor(name=None)`** picks the backend from `name` → `$AGENCY_STUDIO_KG_BACKEND` →
   `"claude"` (the default). `GraphRetriever` uses it, so **no server/GUI change** — set
   `AGENCY_STUDIO_KG_BACKEND=gliner2` and the same `/api/graph/build` runs on-device.

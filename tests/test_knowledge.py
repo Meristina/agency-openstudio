@@ -366,6 +366,39 @@ def test_gliner2_extractor_drops_low_confidence_pairs():
     assert ext.extract("Widget depends on Rust.", "doc:1") == []
 
 
+def test_gliner2_extractor_handles_bare_tuple_pairs():
+    # GLiNER2 returns bare (head, tail) tuples when include_confidence is off — these must NOT be
+    # silently dropped (the dual-shape hardening).
+    payload = {"relation_extraction": {"acquired": [("Acme", "Beta"), ("Beta", "Gamma")]}}
+    ext = kg.GLiNER2Extractor(model=_FakeGliner(payload))
+    triples = ext.extract("Acme acquired Beta; Beta acquired Gamma.", "doc:1")
+    assert sorted((t.subject, t.relation, t.object) for t in triples) == [
+        ("Acme", "acquired", "Beta"), ("Beta", "acquired", "Gamma"),
+    ]
+
+
+def test_gliner2_extractor_tolerates_malformed_pairs():
+    # Bare-string endpoints inside a dict, wrong-arity tuples, None text, and non-pairs are all
+    # dropped — never raised.
+    payload = {"relation_extraction": {"x": [
+        {"head": "PlainStr", "tail": "Other"},          # string endpoints (no confidence dict)
+        ("only-one",),                                   # wrong arity
+        "garbage",                                       # not a pair
+        {"head": {"text": None}, "tail": {"text": "Z"}},  # None head text
+    ]}}
+    ext = kg.GLiNER2Extractor(model=_FakeGliner(payload))
+    triples = ext.extract("t", "doc:1")
+    assert [(t.subject, t.relation, t.object) for t in triples] == [("PlainStr", "x", "Other")]
+
+
+def test_gliner2_extractor_caps_input_to_encoder_window(monkeypatch):
+    # GLiNER2 is a bounded-window encoder — long text must be capped so it isn't silently half-read.
+    monkeypatch.setattr(kg, "MAX_GLINER_CHARS", 50)
+    model = _FakeGliner({"relation_extraction": {}})
+    kg.GLiNER2Extractor(model=model).extract("x" * 5000, "doc:1")
+    assert len(model.calls[0][0]) == 50
+
+
 def test_gliner2_extractor_honours_custom_relation_types():
     model = _FakeGliner({"relation_extraction": {}})
     ext = kg.GLiNER2Extractor(model=model, relation_types=["mentors"])

@@ -78,10 +78,16 @@ MAX_REL_CHARS = 80         # a single relation label
 MAX_SEEDS = 8              # entities matched from the goal
 MAX_NEIGHBORS = 40         # edges pulled into the neighbourhood
 MAX_CLAUSE_ENTRIES = 20    # entities rendered into the context block
-MAX_EXTRACT_CHARS = 12000  # per-call text sent to the extractor (a chunk/dossier is capped, not a book)
+MAX_EXTRACT_CHARS = 12000  # per-call text sent to the CLI extractor (a chunk/dossier is capped, not a book)
 _MIN_TOKEN_LEN = 3         # ignore very short tokens when seeding / tokenising
 _EXTRACT_TIMEOUT = 180     # seconds for one extraction CLI call (build is off the mission hot path)
 _MIN_REL_CONFIDENCE = 0.5  # drop a GLiNER2 relation whose head/tail confidence is below this
+# GLiNER2 is a transformer ENCODER with a bounded window (~512 tokens; the library ships a
+# separate *_long chunking API for entities, none for relations). Feeding more silently drops the
+# tail while we'd record the source as fully extracted — so cap far below the CLI's window. RAG
+# chunks are already small; only long mission dossiers are head-truncated here (a documented
+# limitation — sliding-window relation extraction is a follow-up). Patchable so tests can shrink it.
+MAX_GLINER_CHARS = 2000
 
 # GLiNER2's relation extraction is CLOSED-vocabulary (you pass the relation types it should look
 # for), unlike the CLI's open extraction. This is the default vocabulary — deliberately generic and
@@ -478,26 +484,54 @@ def _coerce_triples(raw: object) -> "List[Triple]":
     return out
 
 
+def _gliner_endpoint(node: object) -> "tuple[Optional[str], Optional[float]]":
+    """One relation endpoint → (text, confidence). GLiNER2 gives a ``{'text','confidence'}`` dict
+    when ``include_confidence=True`` and a bare string otherwise; tolerate both (and anything
+    else → (None, None), dropped downstream)."""
+    if isinstance(node, dict):
+        text = node.get("text")
+        conf = node.get("confidence")
+        return (text if isinstance(text, str) else None,
+                conf if isinstance(conf, (int, float)) else None)
+    return (node if isinstance(node, str) else None, None)
+
+
+def _gliner_pair_endpoints(pair: object) -> "Optional[tuple[Optional[str], Optional[str], Optional[float]]]":
+    """One GLiNER2 relation pair → (head_text, tail_text, min_confidence). Tolerates BOTH
+    documented shapes: the ``{'head': {...}, 'tail': {...}}`` dict (``include_confidence=True``)
+    and the bare ``(head, tail)`` tuple (confidence off). Returns ``None`` for anything else."""
+    if isinstance(pair, dict):
+        htext, hconf = _gliner_endpoint(pair.get("head"))
+        ttext, tconf = _gliner_endpoint(pair.get("tail"))
+    elif isinstance(pair, (list, tuple)) and len(pair) == 2:
+        htext, hconf = _gliner_endpoint(pair[0])
+        ttext, tconf = _gliner_endpoint(pair[1])
+    else:
+        return None
+    confs = [c for c in (hconf, tconf) if c is not None]
+    return (htext, ttext, min(confs) if confs else None)
+
+
 def _gliner_relations_to_raw(result: object, min_confidence: float) -> "List[dict]":
     """Adapt GLiNER2's ``extract_relations`` output into ``_coerce_triples``-shaped dicts. The
-    library returns ``{'relation_extraction': {rel_type: [{'head': {'text',...}, 'tail': {...}}]}}``;
-    each head/tail's ``text`` becomes an endpoint and the relation-type key becomes the relation.
-    A pair whose head or tail confidence is below ``min_confidence`` is dropped. Isolated (like
-    ``_parse_triples``) so the one library-shaped surface is a single, easily-fixed function."""
+    library returns ``{'relation_extraction': {rel_type: [pair, ...]}}`` where each ``pair`` is
+    either a ``{'head','tail'}`` dict (with confidence) or a bare ``(head, tail)`` tuple; the
+    relation-type key becomes the relation. A pair whose (min head/tail) confidence is below
+    ``min_confidence`` is dropped. Isolated (like ``_parse_triples``) so the one library-shaped
+    surface is a single, easily-fixed function; anything unrecognised is dropped, never raised."""
     out: "List[dict]" = []
-    rels = (result or {}).get("relation_extraction") if isinstance(result, dict) else None
+    rels = result.get("relation_extraction") if isinstance(result, dict) else None
     if not isinstance(rels, dict):
         return out
     for rel_type, pairs in rels.items():
         for pair in (pairs or []):
-            if not isinstance(pair, dict):
+            endpoints = _gliner_pair_endpoints(pair)
+            if endpoints is None:
                 continue
-            head = pair.get("head") or {}
-            tail = pair.get("tail") or {}
-            confs = [c for c in (head.get("confidence"), tail.get("confidence")) if isinstance(c, (int, float))]
-            if confs and min(confs) < min_confidence:
+            htext, ttext, conf = endpoints
+            if conf is not None and conf < min_confidence:
                 continue
-            out.append({"subject": head.get("text"), "relation": rel_type, "object": tail.get("text")})
+            out.append({"subject": htext, "relation": rel_type, "object": ttext})
     return out
 
 
@@ -513,8 +547,10 @@ class GLiNER2Extractor:
     core. Absent ⇒ ``KnowledgeUnavailable`` (→ 501/skip); a runtime model error propagates as itself.
 
     The model is lazy-loaded and cached on first ``extract`` (a build loads it once, then extracts
-    over every chunk). ``model`` is injectable so the offline suite drives it with no torch / no
-    weights — the same 'monkeypatch the model boundary' pattern as Wave 2/4."""
+    over every chunk). Input is capped to the encoder's bounded window (``MAX_GLINER_CHARS``), so a
+    long dossier is head-truncated rather than silently half-processed. ``model`` is injectable so
+    the offline suite drives it with no torch / no weights — the same 'monkeypatch the model
+    boundary' pattern as Wave 2/4."""
 
     def __init__(
         self,
@@ -547,8 +583,9 @@ class GLiNER2Extractor:
             return []
         model = self._load()
         # A runtime model error (bad weights, OOM) propagates as itself — never mislabelled.
+        # Cap to the encoder's window (MAX_GLINER_CHARS ≪ the CLI's), not the CLI cap.
         result = model.extract_relations(
-            text[:MAX_EXTRACT_CHARS], self._relation_types, include_confidence=True
+            text[:MAX_GLINER_CHARS], self._relation_types, include_confidence=True
         )
         return _coerce_triples(_gliner_relations_to_raw(result, self._min_confidence))
 
