@@ -5,7 +5,7 @@
 > the offline test suite deliberately stubs. Where the offline suite proves the *wiring*, this
 > pass exercises the *real* path: real MLX models, a real `claude` CLI mission loop, real HTTP.
 >
-> **Why it matters.** The offline suite (387 tests) is green everywhere, but it stubs the model /
+> **Why it matters.** The offline suite (417 tests) is green everywhere, but it stubs the model /
 > network / CLI boundary. Running the real paths surfaced **two genuine code bugs** and **one
 > hardware limit** the offline suite could not see — exactly what a live pass is for. Both bugs
 > are fixed and merged; the limit is documented.
@@ -85,7 +85,7 @@ exceeds the 16 GB memory budget (**[#39]**) — a hardware limit, not a code def
 | Mission flag **`mcp`** (resources) | with the `mcp` SDK + a real `@modelcontextprotocol/server-everything` in `mcp.json` → SSE `mcp: done`, **hits 5** (`architecture.md`, `features.md`, … from server `everything`) | ✅ **proven active** |
 | Mission flag **`mcp_tools`** | same MCP server → SSE `mcp_tools: done`, **servers `["everything"]`** (a `--mcp-config` was built for the claude CLI) | ✅ **proven active** |
 | Mission flag **`personas`** | a curated `personas/marketing/brand-strategist.md` in the store → SSE `persona: done`, **depts `["marketing"]`** (doctrine injected into the dept/synth prompts) | ✅ **proven active** |
-| Mission flag **`knowledge`** / doc `retrieval` | the uninstallable-extra blocker is **removed** (**[#43]/[#45]**): extraction now runs on the `claude` CLI brain (`ClaudeCliExtractor`, no extra) by default, so a graph **can** be built with only the CLI on PATH. An **optional on-device backend** (GLiNER2, the `[kg]` extra; **[#47]/[#48]**) also ships for airgapped builds (`AGENCY_STUDIO_KG_BACKEND=gliner2`), hardened against the real `gliner2` API (dual output shape + encoder window). Neither live path was run here — the CLI build over real docs and the GLiNER2 model run are both manual steps (validated offline via stubbed boundaries; the GLiNER2 model is torch/Mac-deferred like Wave 2) | ✅ **unblocked** (two backends, build path buildable; live runs deferred) |
+| Mission flag **`knowledge`** / doc `retrieval` | the uninstallable-extra blocker is **removed** (**[#43]/[#45]**): extraction now runs on the `claude` CLI brain (`ClaudeCliExtractor`, no extra) by default, so a graph **can** be built with only the CLI on PATH. An **optional on-device backend** (GLiNER2, the `[kg]` extra; **[#47]/[#48]**) also ships for airgapped builds (`AGENCY_STUDIO_KG_BACKEND=gliner2`), hardened against the real `gliner2` API (dual output shape; **overlapping sliding windows** over the encoder limit so a long dossier is no longer head-truncated, **[#50]**; per-source triple dedup at the store). Neither live path was run here — the CLI build over real docs and the GLiNER2 model run are both manual steps (validated offline via stubbed boundaries; the GLiNER2 model is torch/Mac-deferred like Wave 2) | ✅ **unblocked** (two backends, build path buildable; live runs deferred) |
 
 > **How the flags were proven active** (a second pass, after the first only saw them degrade): installed `[web]` (ddgs) and the `mcp` SDK, curated a persona file, wrote an `mcp.json` pointing at a real `@modelcontextprotocol/server-everything` stdio server, and ingested an image — then ran one mission with all flags on and read the pre-route SSE phases (cancelling before the full run to save Opus). **5 of 6 flags reached the active `done` state with real data**; only `knowledge` was not live-run — its build path is now **unblocked** ([#43]/[#45]: extraction moved to the `claude` CLI brain, no extra) with an optional on-device GLiNER2 backend too ([#47]/[#48]), the live build/model run remaining a manual step.
 | Mission flag **`video`** (seedance) | `POST /api/video` → `404` (video is mission-only, not a standalone endpoint); render bridge + gates proven offline. In the live marketing mission **the departments did not emit an `asset` marker**, so no render fired — the `asset_clause` is optional ("Omit when no asset is warranted"). | ⚠️ wiring proven offline; **no marker emitted by the mission in the time budget** |
@@ -103,6 +103,18 @@ Also hardened, as a side effect of installing the extras on the reference Mac: s
 actually installed. They now force the import/loader absent deterministically (the `#36` pattern),
 so the suite is green whether or not the optional extras are present.
 
+## Post-pass hardening (offline code-quality — still needs the same live validation)
+
+These landed **after** the live pass, from a code audit of the deferred (Mac-only) paths — not
+from a live run. They are offline-tested only; each still awaits the live validation noted above,
+and this row is here so the next Mac pass knows what changed underneath it.
+
+| Ref | Change | What the next live pass should confirm |
+|---|---|---|
+| **#50** (merged) | GLiNER2 relation extraction slides **overlapping windows** over long dossiers instead of head-truncating at `MAX_GLINER_CHARS`; duplicate triples are deduped **per source at the store** (weight counts sources, not windows/restatements) | On the Mac with `[kg]`: build a graph from a **long** (>2 KB) mission dossier and confirm relations from its tail appear in the graph, and a repeated relation has weight 1 per source |
+| **#51** (merged) | Shape-robust adapters for the two deferred parse surfaces: `visual._caption_text` tolerates mlx-vlm `generate`'s `str` / `GenerationResult` / tuple returns; `mcp_client._text_of` drops non-`str`/blob resource parts instead of crashing `"\n".join` | On the Mac: confirm real mlx-vlm 0.6.3 captions still read correctly, and a real MCP server's blob/binary resource parts don't break `mcp: done` |
+| **#52** (merged) | Return-type annotations on the internal mission-composition helpers (`server._resolve_*`, `assets` scan generators) | Nothing — annotation-only, no runtime effect |
+
 ## Honest gaps / not covered live
 
 - **An `asset` render inside a real mission.** The render bridge, marker parse/gate, `video`/image
@@ -114,10 +126,11 @@ so the suite is green whether or not the optional extras are present.
   `hyper-extract` extra was dropped and extraction now runs on the `claude` CLI brain
   (`ClaudeCliExtractor`, no extra) by default, so a graph is buildable with only the CLI on PATH.
   An **optional on-device backend** (GLiNER2, the `[kg]` extra; **[#47]**, hardened in **[#48]**
-  against the real `gliner2` dual output shape + encoder window) also ships for airgapped builds
-  (`AGENCY_STUDIO_KG_BACKEND=gliner2`). Neither live path was run here — the CLI build over real
-  docs and the GLiNER2 model run are both manual steps (asserted offline via stubbed boundaries;
-  the GLiNER2 model is torch/Mac-deferred like Wave 2). (The other four flags — `web`,
+  against the real `gliner2` dual output shape, then **[#50]** replacing the encoder-window
+  head-truncation with overlapping sliding windows + per-source dedup) also ships for airgapped
+  builds (`AGENCY_STUDIO_KG_BACKEND=gliner2`). Neither live path was run here — the CLI build over
+  real docs and the GLiNER2 model run are both manual steps (asserted offline via stubbed
+  boundaries; the GLiNER2 model is torch/Mac-deferred like Wave 2). (The other four flags — `web`,
   `mcp` resources, `mcp_tools`, `personas` — were **proven active** with their backends
   installed; see the Wave-6 table.)
 - **The cloud paths** — seedance video render (`_run_cloud`) and the optional cloud VLM — remain
@@ -136,14 +149,16 @@ Not everything is "green". Being precise about what the live pass actually prove
   `personas` (a curated store) all reached the active `done` state with real data.
 - **Unblocked, live run deferred** — the `knowledge` flag's active path: the uninstallable-extra
   blocker is gone (**[#43]/[#45]** — default extraction runs on the `claude` CLI brain, no extra;
-  plus an optional on-device GLiNER2 backend, **[#47]/[#48]**), but neither the live CLI graph build
-  over real docs nor the GLiNER2 model run was exercised in this pass (offline-asserted; manual live steps).
+  plus an optional on-device GLiNER2 backend, **[#47]/[#48]**, whose long-dossier handling is now
+  overlapping sliding windows rather than head-truncation, **[#50]**), but neither the live CLI
+  graph build over real docs nor the GLiNER2 model run was exercised in this pass (offline-asserted;
+  manual live steps).
 - **Not exercised live** — an `asset` marker actually emitted-then-rendered inside a mission (no
   department chose to emit one), the real PDF render (`[pdf]` absent → 501), and the cloud paths
   (seedance render / cloud VLM, network-deferred by design).
 - **Failed** — `boogu-base` (OOM / swap on 16 GB, **[#39]**).
 
 The live pass paid for itself by catching two real bugs (#37, #40) and one hardware limit (#39)
-the 387-test offline suite could not surface. But "the offline suite is green" and "every feature
+the offline suite (417 tests) could not surface. But "the offline suite is green" and "every feature
 is proven on real hardware" are **different claims** — this report is the honest boundary between
 them.
