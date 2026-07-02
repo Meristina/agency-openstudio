@@ -114,7 +114,7 @@ and this row is here so the next Mac pass knows what changed underneath it.
 | **#50** (merged) | GLiNER2 relation extraction slides **overlapping windows** over long dossiers instead of head-truncating at `MAX_GLINER_CHARS`; duplicate triples are deduped **per source at the store** (weight counts sources, not windows/restatements) | On the Mac with `[kg]`: build a graph from a **long** (>2 KB) mission dossier and confirm relations from its tail appear in the graph, and a repeated relation has weight 1 per source |
 | **#51** (merged) | Shape-robust adapters for the two deferred parse surfaces: `visual._caption_text` tolerates mlx-vlm `generate`'s `str` / `GenerationResult` / tuple returns; `mcp_client._text_of` drops non-`str`/blob resource parts instead of crashing `"\n".join` | On the Mac: confirm real mlx-vlm 0.6.3 captions still read correctly, and a real MCP server's blob/binary resource parts don't break `mcp: done` |
 | **#52** (merged) | Return-type annotations on the internal mission-composition helpers (`server._resolve_*`, `assets` scan generators) | Nothing — annotation-only, no runtime effect |
-| **#54** (merged) | `POST /api/graph/build` now **replaces** instead of accumulating: `GraphRetriever.rebuild` clears the store and re-extracts, so a re-run over unchanged docs/history no longer re-counts each source (weight inflation) or strands triples from since-deleted docs/missions. The replace is **failure-safe** — extraction runs to completion first, so an unreachable brain / runtime error raises with the previous graph intact (never wipes a good graph) | On the Mac with a real graph built: run `POST /api/graph/build` **twice** and confirm node/edge counts and weights are stable (not doubled); delete a doc, rebuild, and confirm its triples are gone; force the `claude` CLI unreachable mid-run and confirm the existing graph survives |
+| **#54** (merged) | `POST /api/graph/build` now **replaces** instead of accumulating: `GraphRetriever.rebuild` clears the store and re-extracts, so a re-run over unchanged docs/history no longer re-counts each source (weight inflation) or strands triples from since-deleted docs/missions. The replace is **failure-safe** — extraction runs to completion first, so an unreachable brain / runtime error raises with the previous graph intact (never wipes a good graph) | ✅ **live-validated on the reference Mac** (real `ClaudeCliExtractor`, real `claude` CLI): a real build extracted 3 triples (4 nodes / 3 edges); a **second** `rebuild` over the same source returned **identical counts _and_ weights** (not doubled — the fix); rebuilding after the source was removed **emptied** the graph (0/0, triples pruned). Third item — forcing the CLI unreachable mid-run — remains unit-only (`test_rebuild_failure_leaves_previous_graph_intact`); the extract-all-then-clear ordering is the same code path |
 
 ## Honest gaps / not covered live
 
@@ -130,12 +130,14 @@ and this row is here so the next Mac pass knows what changed underneath it.
   against the real `gliner2` dual output shape, then **[#50]** replacing the encoder-window
   head-truncation with overlapping sliding windows + per-source dedup) also ships for airgapped
   builds (`AGENCY_STUDIO_KG_BACKEND=gliner2`). Neither live path was run here — the CLI build over
-  real docs and the GLiNER2 model run are both manual steps (asserted offline via stubbed
-  boundaries; the GLiNER2 model is torch/Mac-deferred like Wave 2). The graph **build lifecycle**
-  was also hardened offline (**[#54]**): a rebuild now replaces rather than accumulates (no weight
-  inflation on re-run, no orphaned triples from deleted sources) and is failure-safe — still to be
-  confirmed on a real Mac build (see the post-pass hardening table). (The other four flags — `web`,
-  `mcp` resources, `mcp_tools`, `personas` — were **proven active** with their backends
+  real docs and the GLiNER2 model run are manual steps (GLiNER2 is torch/Mac-deferred like Wave 2).
+  The default **CLI build path is now live-proven** on the reference Mac: a real
+  `ClaudeCliExtractor` build over sample text extracted correct triples into the graph, and the
+  **[#54]** rebuild lifecycle (replace, not accumulate; prune removed sources) was confirmed live —
+  identical counts/weights on re-run, and an emptied graph after the source was removed. What is
+  **still not live-run** is the mission-time retrieval end-to-end (seed → 1-hop neighbourhood →
+  `context_clause` injection into a real mission) and the GLiNER2 backend. (The other four flags —
+  `web`, `mcp` resources, `mcp_tools`, `personas` — were **proven active** with their backends
   installed; see the Wave-6 table.)
 - **The cloud paths** — seedance video render (`_run_cloud`) and the optional cloud VLM — remain
   network-deferred (no live endpoint / API key), as designed.
@@ -151,12 +153,14 @@ Not everything is "green". Being precise about what the live pass actually prove
   flags** with their backends installed — `visual` (image caption→retrieval), `web_search` (real
   ddgs results), `mcp` resources + `mcp_tools` (a real `server-everything` MCP server), and
   `personas` (a curated store) all reached the active `done` state with real data.
-- **Unblocked, live run deferred** — the `knowledge` flag's active path: the uninstallable-extra
-  blocker is gone (**[#43]/[#45]** — default extraction runs on the `claude` CLI brain, no extra;
-  plus an optional on-device GLiNER2 backend, **[#47]/[#48]**, whose long-dossier handling is now
-  overlapping sliding windows rather than head-truncation, **[#50]**), but neither the live CLI
-  graph build over real docs nor the GLiNER2 model run was exercised in this pass (offline-asserted;
-  manual live steps).
+- **Partly live-proven, rest deferred** — the `knowledge` flag: the uninstallable-extra blocker is
+  gone (**[#43]/[#45]** — default extraction runs on the `claude` CLI brain, no extra; plus an
+  optional on-device GLiNER2 backend, **[#47]/[#48]**, whose long-dossier handling is now
+  overlapping sliding windows rather than head-truncation, **[#50]**). The **CLI graph build is now
+  live-proven** on the reference Mac — a real `ClaudeCliExtractor` extracted correct triples, and
+  the **[#54]** rebuild lifecycle (idempotent replace + prune) was confirmed live. Still deferred:
+  the mission-time retrieval end-to-end (seed → neighbourhood → `context_clause` in a real mission)
+  and the GLiNER2 model run.
 - **Not exercised live** — an `asset` marker actually emitted-then-rendered inside a mission (no
   department chose to emit one), the real PDF render (`[pdf]` absent → 501), and the cloud paths
   (seedance render / cloud VLM, network-deferred by design).
