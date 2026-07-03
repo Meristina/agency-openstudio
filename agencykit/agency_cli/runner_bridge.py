@@ -32,6 +32,28 @@ def _last_verdict(dossier: dict) -> str:
     return last.get("verdict", "DELIVERED") if isinstance(last, dict) else "DELIVERED"
 
 
+def _resolve_escalation(value):
+    from .escalation import EscalationConfig
+    if value is None:
+        return EscalationConfig()
+    if value is False:
+        return None
+    if isinstance(value, EscalationConfig):
+        return value if value.enabled and value.budget > 0 else None
+    if not isinstance(value, dict):
+        raise ValueError("escalation must be None, False, EscalationConfig, or dict")
+    allowed = {"enabled", "budget"}
+    if set(value) - allowed:
+        raise ValueError("escalation contains unknown keys")
+    enabled = value.get("enabled", True)
+    budget = value.get("budget", 6)
+    if not isinstance(enabled, bool) or not isinstance(budget, int) or isinstance(budget, bool):
+        raise ValueError("escalation.enabled must be bool and escalation.budget must be int")
+    if not enabled or budget <= 0:
+        return None
+    return EscalationConfig(enabled=enabled, budget=budget)
+
+
 def _next_id(missions: Path) -> str:
     nums = []
     if missions.exists():
@@ -129,6 +151,7 @@ def _run_and_persist(
     persona_doctrine: Optional[dict] = None,
     on_checkpoint: Optional[Callable[[dict], None]] = None,
     resume_state: Optional[dict] = None,
+    escalation=None,
 ) -> MissionResult:
     """Drive the engine for `goal`, persist to the ~/.agency store (so
     `agency missions/resume/export` see it) AND serialize the project-local
@@ -185,6 +208,7 @@ def _run_and_persist(
         persona_doctrine=persona_doctrine,
         on_checkpoint=on_checkpoint,
         resume_state=resume_state,
+        escalation=_resolve_escalation(escalation),
     )
     dossier["mission_id"] = store.new_mission_id(goal)
     # Stamp the canonical project root so store.list_missions can scope history to
@@ -221,6 +245,7 @@ def run(
     persona_doctrine: Optional[dict] = None,
     on_checkpoint: Optional[Callable[[dict], None]] = None,
     resume_state: Optional[dict] = None,
+    escalation=None,
 ) -> MissionResult:
     """Headless run: drive a local agent CLI engine, then serialize the dossier.
 
@@ -257,6 +282,7 @@ def run(
         mcp_config_path=mcp_config_path, mcp_allowed_tools=mcp_allowed_tools,
         persona_doctrine=persona_doctrine,
         on_checkpoint=on_checkpoint, resume_state=resume_state,
+        escalation=escalation,
     )
 
 
@@ -273,6 +299,7 @@ def resume(
     mcp_allowed_tools: Optional[list] = None,
     persona_doctrine: Optional[dict] = None,
     on_checkpoint: Optional[Callable[[dict], None]] = None,
+    escalation=None,
 ) -> MissionResult:
     """Re-run a COMPLETED mission's goal through the engine, from scratch.
 
@@ -300,4 +327,5 @@ def resume(
         mcp_config_path=mcp_config_path, mcp_allowed_tools=mcp_allowed_tools,
         persona_doctrine=persona_doctrine,
         on_checkpoint=on_checkpoint,
+        escalation=escalation,
     )

@@ -30,10 +30,11 @@ agency check
 # registered but refused (EngineNotValidated) until validated end-to-end.
 agency init [path] [--agent claude|codex|cursor|copilot|gemini|opencode]
 agency run "goal" [--dry-run] [--engine claude-code]   # codex/gemini refused until validated
+agency run "goal" [--no-escalation] [--escalation-budget N]
 agency missions
-agency resume <mission_id> [--engine ...]    # re-runs the saved goal via the engine
+agency resume <mission_id> [--engine ...] [--no-escalation] [--escalation-budget N]
 agency sync [--strict]
-agency batch add "goal" / run [--engine ...] / status / clear
+agency batch add "goal" / run [--engine ...] [--no-escalation] [--escalation-budget N] / status / clear
 agency export <mission_id>      # requires pip install -e ".[pdf]"
 agency tui                      # requires pip install -e ".[tui]"
 ```
@@ -48,6 +49,8 @@ run_mission_cli(goal, engine)
                falls back to router.keyword_classify on unparseable output
   EXECUTE    → for each routed dept (in order): subprocess _call(engine, prompt)
                prompt = goal + prior dept outputs + agents/_shared-<dept>.md doctrine
+               with active escalation: selection → commander → officer(s) → soldier(s)
+               inside a per-department call budget; trace is stored in dossier["escalation"]
   SYNTHESIZE → _call(engine, commander-agency.md + all dept outputs)
   INSPECT    → _call(engine, inspector-agency.md + deliverable) → verdict text
   → returns a dossier dict (goal, route, dept_outputs, delivered, verdicts)
@@ -120,6 +123,7 @@ All source files under `agents/` are mirrored to `payload/agents/`. The drift gu
 | File | Role |
 |---|---|
 | `agency_cli/engines/cli_engine.py` | `run_mission_cli()` + `ENGINE_SPECS` — the whole route→execute→synthesize→inspect loop via subprocess |
+| `agency_cli/escalation.py` | Budget-controlled specialist escalation: roster parsing, selection, commander/officer/soldier calls, trace assembly |
 | `agency_cli/runner_bridge.py` | `run()` / `resume()` — drive the engine, save to store + serialize `missions/<id>/` |
 | `agency_cli/cli.py` | All CLI subcommands + the `--engine` flag |
 | `agency_cli/batch_runner.py` | `agency batch` queue — runs each goal through the engine |

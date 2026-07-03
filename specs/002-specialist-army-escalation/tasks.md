@@ -27,10 +27,10 @@ server), `tests/` (studio suite, run from repo root).
 
 **Purpose**: Skeletons so every later task has a home; no behavior yet.
 
-- [ ] T001 Create `agencykit/agency_cli/escalation.py` module skeleton: module docstring
+- [X] T001 Create `agencykit/agency_cli/escalation.py` module skeleton: module docstring
       (chain, budget, additive contract), frozen `EscalationConfig` dataclass
       (`enabled: bool = True`, `budget: int = 6`), `__all__`
-- [ ] T002 [P] Create `agencykit/tests/test_escalation.py` skeleton: scripted-call
+- [X] T002 [P] Create `agencykit/tests/test_escalation.py` skeleton: scripted-call
       recorder fixture (a fake `call(cmd, prompt, ...)` that records `(cmd, prompt)` and
       pops queued outputs), payload-path fixture pointing at
       `agencykit/agency_cli/payload/agents/`
@@ -43,26 +43,26 @@ server), `tests/` (studio suite, run from repo root).
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T003 Byte-identical-off regression test in `agencykit/tests/test_engine.py`:
+- [X] T003 Byte-identical-off regression test in `agencykit/tests/test_engine.py`:
       monkeypatch `_call`, run `run_mission_cli` on a fixed goal, capture the full
       `(cmd, prompt)` sequence as the golden baseline; assert the same capture with
       `escalation=None` (after T008) is identical — the SC-003 gate
-- [ ] T004 Frontmatter `AgentRef` parser in `agencykit/agency_cli/escalation.py`
+- [X] T004 Frontmatter `AgentRef` parser in `agencykit/agency_cli/escalation.py`
       (stdlib text parsing: `name:`, first sentence of `description:` truncated ≤ 200
       chars) + unit tests in `agencykit/tests/test_escalation.py` (well-formed, malformed
       ⇒ skipped, multi-line `>-` descriptions)
-- [ ] T005 [P] Curated `DEPT_OFFICERS` map in `agencykit/agency_cli/escalation.py`
+- [X] T005 [P] Curated `DEPT_OFFICERS` map in `agencykit/agency_cli/escalation.py`
       (marketing 6, product 5, solve 5, finance 6 — per research.md D2; commander name
       exceptions: product ⇒ `commander-product`, solve ⇒ `commander-problem-solving`)
-- [ ] T006 [P] Drift-guard test in `agencykit/tests/test_escalation.py`: every
+- [X] T006 [P] Drift-guard test in `agencykit/tests/test_escalation.py`: every
       `DEPT_OFFICERS` entry and every `commander-{dept}` resolves to an existing payload
       file (same spirit as `test_payload_agent_matches_source`)
-- [ ] T007 `build_roster()` in `agencykit/agency_cli/escalation.py`: commanders, officers
+- [X] T007 `build_roster()` in `agencykit/agency_cli/escalation.py`: commanders, officers
       (from `DEPT_OFFICERS`), virtual officers (parse the commander doctrine's numbered
       phase list for officer-less depts — comms O1–O6 per research.md D3), compact soldier
       pool (126 files) + tests in `agencykit/tests/test_escalation.py` (marketing has file
       officers, comms yields virtual phases, unreadable file skipped)
-- [ ] T008 Wire the `escalation: Optional[EscalationConfig] = None` parameter into
+- [X] T008 Wire the `escalation: Optional[EscalationConfig] = None` parameter into
       `run_mission_cli` in `agencykit/agency_cli/engines/cli_engine.py`: dept-loop branch
       (`escalation.run_department(...)` when active for a dept, existing single `_call`
       otherwise), `None` / `enabled=False` / `budget <= 0` ⇒ exact current path; T003
@@ -84,14 +84,14 @@ contains the labeled specialist sections.
 
 ### Tests for User Story 1 (write first — must fail) ⚠️
 
-- [ ] T009 [P] [US1] Happy-path integration test in `agencykit/tests/test_escalation.py`:
+- [X] T009 [P] [US1] Happy-path integration test in `agencykit/tests/test_escalation.py`:
       scripted selection (`officer-2-strategy` + `soldier-stp`) then specialist outputs;
       assert trace roles/names/order, `task` + `output` per invocation, dossier
       `escalation` key present only for the escalated dept
-- [ ] T010 [P] [US1] Assembly test in `agencykit/tests/test_escalation.py`: department
+- [X] T010 [P] [US1] Assembly test in `agencykit/tests/test_escalation.py`: department
       output = commander brief + labeled officer/soldier sections in execution order
       (deterministic, no extra assembly call — count the `_call` invocations)
-- [ ] T011 [P] [US1] Explicit no-escalation test in `agencykit/tests/test_escalation.py`:
+- [X] T011 [P] [US1] Explicit no-escalation test in `agencykit/tests/test_escalation.py`:
       router selects nothing ⇒ dept runs doctrine-only and the trace records
       `finalized_by: "doctrine-fallback"` with `fallback_reason:
       "router-selected-none"`, keeping the selection invocation (US1 scenario 3 —
@@ -99,20 +99,20 @@ contains the labeled specialist sections.
 
 ### Implementation for User Story 1
 
-- [ ] T012 [US1] Selection call in `agencykit/agency_cli/escalation.py`: prompt builder
+- [X] T012 [US1] Selection call in `agencykit/agency_cli/escalation.py`: prompt builder
       (commander doctrine + compact roster + goal + prior-outputs summary + budget),
       tolerant JSON extraction (the `_route_via_cli` pattern), roster-name validation
       (unknown names dropped); runs on the base `cmd` (never MCP-spliced)
-- [ ] T013 [US1] Specialist prompt builders in `agencykit/agency_cli/escalation.py`:
+- [X] T013 [US1] Specialist prompt builders in `agencykit/agency_cli/escalation.py`:
       commander / officer / soldier prompts embedding each doctrine (frontmatter stripped),
       the WebSearch/no-invention clause, and `asset_clause` / `context_clause` /
       `persona_doctrine[dept]` exactly as `_dept_prompt` threads them
-- [ ] T014 [US1] `run_department()` chain execution in
+- [X] T014 [US1] `run_department()` chain execution in
       `agencykit/agency_cli/escalation.py`: selection → commander → officers → soldiers
       via the injected `call`, `InvocationRecord` accumulation, deterministic assembly,
       cancel-checked between calls (`MissionCancelled` propagates); returns
       `(dept_output, DeptEscalationTrace)`
-- [ ] T015 [US1] Dossier wiring in `agencykit/agency_cli/engines/cli_engine.py`: collect
+- [X] T015 [US1] Dossier wiring in `agencykit/agency_cli/engines/cli_engine.py`: collect
       per-dept traces, attach `dossier["escalation"]` ONLY when ≥1 dept escalated
       (absent ⇒ byte-identical dossier)
 
@@ -132,40 +132,40 @@ escalation halts at the cap with explicit skips, dept output stays coherent, tra
 
 ### Tests for User Story 2 (write first — must fail) ⚠️
 
-- [ ] T016 [P] [US2] Budget-exhaustion test in `agencykit/tests/test_escalation.py`:
+- [X] T016 [P] [US2] Budget-exhaustion test in `agencykit/tests/test_escalation.py`:
       budget=3, selection of 2 officers + 2 soldiers ⇒ later specialists recorded as
       `{"skipped": "budget-exhausted"}`, `consumed <= budget`, dept output coherent
       (SC-002, US2 scenario 1)
-- [ ] T017 [P] [US2] Off-equivalence test in `agencykit/tests/test_escalation.py`:
+- [X] T017 [P] [US2] Off-equivalence test in `agencykit/tests/test_escalation.py`:
       `EscalationConfig(enabled=False)` and `budget=0` both reproduce the T003 golden
       `(cmd, prompt)` capture and a dossier with NO `escalation` key (FR-006)
-- [ ] T018 [P] [US2] Token-accounting test in `agencykit/tests/test_escalation.py`:
+- [X] T018 [P] [US2] Token-accounting test in `agencykit/tests/test_escalation.py`:
       every invocation carries `est_tokens` (chars/4 over prompt+output), dept
       `est_tokens == sum(invocations)`, `consumed == len(non-skipped invocations)`
-- [ ] T019 [P] [US2] runner_bridge resolution tests in `agencykit/tests/test_cli.py`:
+- [X] T019 [P] [US2] runner_bridge resolution tests in `agencykit/tests/test_cli.py`:
       default ⇒ `EscalationConfig()` passed down; `escalation=False` / dict opt-out ⇒
       `None` passed down; junk types ⇒ `ValueError`
 
 ### Implementation for User Story 2
 
-- [ ] T020 [US2] Budget enforcement in `agencykit/agency_cli/escalation.py`: decrement
+- [X] T020 [US2] Budget enforcement in `agencykit/agency_cli/escalation.py`: decrement
       before each call, skip-remaining with explicit reasons at exhaustion, mid-phase
       exhaustion closes out cleanly (the skipped reasons ARE the partial-escalation
       record); tiny-budget hybrid case sets `finalized_by: "doctrine-fallback"` when
       nothing assemblable ran (assert in the T016 test)
-- [ ] T021 [US2] `est_tokens` accounting in `agencykit/agency_cli/escalation.py`:
+- [X] T021 [US2] `est_tokens` accounting in `agencykit/agency_cli/escalation.py`:
       per-invocation chars/4 heuristic + per-dept totals in the trace
-- [ ] T022 [US2] Product default-on resolution in `agencykit/agency_cli/runner_bridge.py`:
+- [X] T022 [US2] Product default-on resolution in `agencykit/agency_cli/runner_bridge.py`:
       `escalation=None` ⇒ `EscalationConfig()`; `False`/disabled/0 ⇒ pass `None`;
       dict coercion with type checks (`ValueError` on junk); thread through `resume()` too
-- [ ] T023 [US2] CLI flags in `agencykit/agency_cli/cli.py`: `--no-escalation` /
+- [X] T023 [US2] CLI flags in `agencykit/agency_cli/cli.py`: `--no-escalation` /
       `--escalation-budget N` on `run`, `batch run`, `resume` (`0 ≡ --no-escalation`) +
       dispatch tests in `agencykit/tests/test_cli.py`
-- [ ] T024 [US2] Studio passthrough in `agency_studio/server.py`: optional
+- [X] T024 [US2] Studio passthrough in `agency_studio/server.py`: optional
       `escalation: {enabled, budget}` mission-request field, strict type validation
       (400 on junk), forwarded only if `runner_bridge.run` accepts it (existing
       `inspect.signature` pattern at the run call site)
-- [ ] T025 [US2] Studio passthrough tests in `tests/test_server.py`: field validated,
+- [X] T025 [US2] Studio passthrough tests in `tests/test_server.py`: field validated,
       forwarded when supported, silently dropped for an older agencykit signature,
       no new endpoint/bind/CORS surface
 
@@ -185,34 +185,34 @@ per department.
 
 ### Tests for User Story 3 (write first — must fail) ⚠️
 
-- [ ] T026 [P] [US3] Selection-differs test in `agencykit/tests/test_escalation.py`: two
+- [X] T026 [P] [US3] Selection-differs test in `agencykit/tests/test_escalation.py`: two
       goals ⇒ different selections, each selected name carrying a rationale (SC-005,
       FR-012; missing rationale ⇒ `"(no rationale returned)"` recorded)
-- [ ] T027 [P] [US3] Fallback test in `agencykit/tests/test_escalation.py`: unparseable /
+- [X] T027 [P] [US3] Fallback test in `agencykit/tests/test_escalation.py`: unparseable /
       empty selection output ⇒ doctrine-only execution with `selection` recorded as the
       `{"fallback": "selection-unparseable"}` marker, `finalized_by:
       "doctrine-fallback"`, `fallback_reason: "selection-unparseable"` (edge case)
-- [ ] T028 [P] [US3] Missing-specialist test in `agencykit/tests/test_escalation.py`:
+- [X] T028 [P] [US3] Missing-specialist test in `agencykit/tests/test_escalation.py`:
       selected soldier's file absent ⇒ `{"skipped": "missing-file"}`, mission completes,
       no fabricated substitute (FR-007, SC-006)
-- [ ] T029 [P] [US3] Comms virtual-officer test in `agencykit/tests/test_escalation.py`:
+- [X] T029 [P] [US3] Comms virtual-officer test in `agencykit/tests/test_escalation.py`:
       comms selection yields phase-officers (`comms/O6-events`-style names) invoked with
       the commander doctrine + phase directive, traced `virtual: true` (SC-004)
-- [ ] T030 [P] [US3] B2B-360 integration test in `agencykit/tests/test_escalation.py`:
+- [X] T030 [P] [US3] B2B-360 integration test in `agencykit/tests/test_escalation.py`:
       route `["marketing", "product", "comms"]`, one `DeptEscalationTrace` per dept,
       budgets independent per dept
 
 ### Implementation for User Story 3
 
-- [ ] T031 [US3] Rationale capture in `agencykit/agency_cli/escalation.py`: per-name
+- [X] T031 [US3] Rationale capture in `agencykit/agency_cli/escalation.py`: per-name
       rationale from the selection JSON, default string when absent
-- [ ] T032 [US3] Fallback path in `agencykit/agency_cli/escalation.py`: unparseable/empty
+- [X] T032 [US3] Fallback path in `agencykit/agency_cli/escalation.py`: unparseable/empty
       selection ⇒ condensed-doctrine call + explicit trace record (no crash, no retry-spend)
-- [ ] T033 [US3] Graceful specialist-failure handling in
+- [X] T033 [US3] Graceful specialist-failure handling in
       `agencykit/agency_cli/escalation.py`: missing file ⇒ skip+record; `_call` failure on
       a specialist ⇒ `{"skipped": "call-failed"}` + continue (only `MissionCancelled`
       propagates)
-- [ ] T034 [US3] Virtual-officer invocation in `agencykit/agency_cli/escalation.py`:
+- [X] T034 [US3] Virtual-officer invocation in `agencykit/agency_cli/escalation.py`:
       phase-scoping directive prompt over the commander doctrine for officer-less depts,
       `virtual: true` in the record
 
@@ -222,29 +222,29 @@ per department.
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T035 [P] Escalation `_emit` events in `agencykit/agency_cli/escalation.py`
+- [X] T035 [P] Escalation `_emit` events in `agencykit/agency_cli/escalation.py`
       (`{"phase": "escalation", "dept", "step", "name", "status"}`) + event-sequence
       assertions added to the T009 happy-path test
-- [ ] T036 Checkpoint/resume additions in `agencykit/agency_cli/engines/cli_engine.py`:
+- [X] T036 Checkpoint/resume additions in `agencykit/agency_cli/engines/cli_engine.py`:
       optional `escalation` key on `"dept"` snapshots (completed depts only),
       `_validate_resume_state` defaults it to `{}`; resume tests in
       `agencykit/tests/test_engine.py` (old snapshot resumes; crash mid-escalation
       re-runs the dept from scratch)
-- [ ] T037 [P] Veto-loop-invariance test in `agencykit/tests/test_engine.py`: escalation
+- [X] T037 [P] Veto-loop-invariance test in `agencykit/tests/test_engine.py`: escalation
       on, inspector VETO → PASS sequence ⇒ iteration behavior and inspector prompt
       identical to the off case (SC-008, FR-009)
-- [ ] T038 [P] Cancel-mid-escalation test in `agencykit/tests/test_escalation.py`:
+- [X] T038 [P] Cancel-mid-escalation test in `agencykit/tests/test_escalation.py`:
       `should_cancel` flips true between specialist calls ⇒ `MissionCancelled`, no dossier
       (edge case, Art. IX)
-- [ ] T039 [P] Update `agencykit/CLAUDE.md` (mission-loop diagram + escalation section,
+- [X] T039 [P] Update `agencykit/CLAUDE.md` (mission-loop diagram + escalation section,
       key-files table row for `escalation.py`) and `docs/` if the studio surface is
       documented there
-- [ ] T040 Full offline gate: `cd agencykit && pytest tests/ -q` and `pytest tests/ -q`
+- [X] T040 Full offline gate: `cd agencykit && pytest tests/ -q` and `pytest tests/ -q`
       (repo root) both green (SC-007)
 - [ ] T041 Live validation on `claude-code` (per research.md D10): one marketing mission
       (SC-001), one comms/event mission (SC-004), one B2B-360 mission — dossier traces
       captured and recorded in the PR description
-- [ ] T042 Walk `specs/002-specialist-army-escalation/quickstart.md` end-to-end and fix
+- [X] T042 Walk `specs/002-specialist-army-escalation/quickstart.md` end-to-end and fix
       any drift between it and the shipped CLI/studio surfaces
 
 ---

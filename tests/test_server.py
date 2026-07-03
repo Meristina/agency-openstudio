@@ -1341,6 +1341,66 @@ def test_post_mission_passes_asset_hook_to_runner(monkeypatch, tmp_path):
     assert callable(captured["render_assets"])
 
 
+def test_post_mission_validates_and_forwards_escalation(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_cli import runner_bridge
+    captured = {}
+
+    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
+                  asset_clause=None, render_assets=None, escalation=None):
+        captured["escalation"] = escalation
+        return runner_bridge.MissionResult(path=tmp_path, dossier={"verdicts": [], "mission_id": "x"})
+
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "g", "escalation": {"enabled": True, "budget": 3}}),
+                     headers={"Content-Type": "application/json"})
+        _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    assert captured["escalation"] == {"enabled": True, "budget": 3}
+
+
+def test_post_mission_rejects_bad_escalation(tmp_path):
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _post(host, port, "/api/mission",
+                           body=json.dumps({"goal": "g", "escalation": {"budget": "3"}}))
+    finally:
+        httpd.shutdown()
+
+    assert resp.status == 400
+    assert b"escalation" in body
+
+
+def test_post_mission_drops_escalation_for_old_runner(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_cli import runner_bridge
+    called = []
+
+    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
+                  asset_clause=None, render_assets=None):
+        called.append(True)
+        return runner_bridge.MissionResult(path=tmp_path, dossier={"verdicts": [], "mission_id": "x"})
+
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "g", "escalation": {"enabled": False, "budget": 6}}),
+                     headers={"Content-Type": "application/json"})
+        _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    assert called == [True]
+
+
 def test_done_frame_carries_asset_summary(monkeypatch, tmp_path):
     # The terminal `done` frame surfaces the manifest + rendered/total counts for the GUI.
     monkeypatch.setenv("HOME", str(tmp_path))

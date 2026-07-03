@@ -567,6 +567,7 @@ def _checkpoint(
     engine: str,
     route: list,
     dept_outputs: dict,
+    escalation: Optional[dict] = None,
     delivered: str = "",
     verdicts: tuple = (),
     iteration: int = 0,
@@ -598,6 +599,7 @@ def _checkpoint(
             "engine": engine,
             "route": list(route),
             "dept_outputs": dict(dept_outputs),
+            "escalation": dict(escalation or {}),
             "delivered": delivered,
             "verdicts": [dict(v) for v in verdicts],
             "iteration": iteration,
@@ -630,6 +632,9 @@ def _validate_resume_state(state: dict) -> dict:
     dept_outputs = state.get("dept_outputs") or {}
     if not isinstance(dept_outputs, dict) or not set(dept_outputs).issubset(set(route)):
         raise ValueError("resume_state.dept_outputs keys must be a subset of route")
+    escalation = state.get("escalation") or {}
+    if not isinstance(escalation, dict):
+        raise ValueError("resume_state.escalation must be a dict")
     verdicts = state.get("verdicts") or []
     if not isinstance(verdicts, list):
         raise ValueError("resume_state.verdicts must be a list")
@@ -642,6 +647,8 @@ def _validate_resume_state(state: dict) -> dict:
         raise ValueError("resume_state.delivered must be non-empty once a cycle has run")
     if verdicts and verdicts[-1].get("verdict") not in _RETRY_VERDICTS:
         raise ValueError("resume_state is already complete (last verdict is not a retry verdict)")
+    state = dict(state)
+    state["escalation"] = escalation
     return state
 
 
@@ -657,6 +664,7 @@ def run_mission_cli(
     persona_doctrine: Optional[dict] = None,
     on_checkpoint: Optional[Callable[[dict], None]] = None,
     resume_state: Optional[dict] = None,
+    escalation: Optional[object] = None,
 ) -> dict:
     """Run a full mission via a local agent CLI tool: route → execute → synthesize → inspect.
 
@@ -740,6 +748,15 @@ def run_mission_cli(
     # Departments + synthesis may call the user's MCP tools; the router + inspector never do
     # (they run on the base `cmd`), so the quality gate's inputs are untouched by this hook.
     exec_cmd = _with_mcp(cmd, mcp_config_path, mcp_allowed_tools)
+    escalation_active = bool(
+        escalation is not None
+        and getattr(escalation, "enabled", False)
+        and getattr(escalation, "budget", 0) > 0
+    )
+    roster = None
+    if escalation_active:
+        from agency_cli.escalation import build_roster
+        roster = build_roster(Path(__file__).resolve().parents[1] / "payload" / "agents")
     # Fail fast with a clear message if either CLI is absent. Both are checked because an
     # engine may use a different binary for routing than for research work; the run binary
     # is checked first so the message is byte-identical for the built-in engines (which
@@ -777,6 +794,7 @@ def run_mission_cli(
     # Seed completed departments from the snapshot; a resumed run skips them (no re-spend) and only
     # runs the ones that never finished.
     dept_outputs: dict = dict(resume_state.get("dept_outputs") or {}) if resume_state else {}
+    escalation_traces: dict = dict(resume_state.get("escalation") or {}) if resume_state else {}
     for dept in route:
         _check_cancel(should_cancel)   # CP2: skip a department that has not started yet
         if dept in dept_outputs:       # already completed in a prior (crashed) run — don't re-run
@@ -784,17 +802,37 @@ def run_mission_cli(
             continue
         print(f"[{engine}] {dept}...", end=" ", flush=True)
         _emit(on_event, {"phase": "dept", "dept": dept, "status": "start"})
-        dept_outputs[dept] = _call(
-            exec_cmd,
-            _dept_prompt(dept, goal, dept_outputs, asset_clause=asset_clause,
-                         context_clause=context_clause,
-                         persona_doctrine=persona_doctrine),
-            timeout=spec.run_timeout,
-            should_cancel=should_cancel,
-        )
+        if escalation_active and roster is not None and dept in roster.commanders:
+            from agency_cli.escalation import run_department
+            dept_outputs[dept], escalation_traces[dept] = run_department(
+                dept,
+                goal,
+                dept_outputs,
+                config=escalation,
+                roster=roster,
+                call=_call,
+                base_cmd=cmd,
+                exec_cmd=exec_cmd,
+                run_timeout=spec.run_timeout,
+                should_cancel=should_cancel,
+                on_event=on_event,
+                asset_clause=asset_clause,
+                context_clause=context_clause,
+                persona_doctrine=persona_doctrine,
+                cancelled=MissionCancelled,
+            )
+        else:
+            dept_outputs[dept] = _call(
+                exec_cmd,
+                _dept_prompt(dept, goal, dept_outputs, asset_clause=asset_clause,
+                             context_clause=context_clause,
+                             persona_doctrine=persona_doctrine),
+                timeout=spec.run_timeout,
+                should_cancel=should_cancel,
+            )
         print("done", flush=True)
         _emit(on_event, {"phase": "dept", "dept": dept, "status": "done"})
-        _checkpoint(on_checkpoint, "dept", goal, engine, route, dept_outputs)
+        _checkpoint(on_checkpoint, "dept", goal, engine, route, dept_outputs, escalation=escalation_traces)
 
     # Seed the veto loop from the snapshot (continue the iteration budget — never a fresh one) or
     # from scratch. Replaying the completed cycles to on_event keeps the GUI timeline coherent
@@ -842,6 +880,7 @@ def run_mission_cli(
         # Checkpoint the completed (inspected) cycle before deciding whether to loop — so a crash in
         # the NEXT synthesis rolls back to here, and resume re-runs that synthesis + its inspection.
         _checkpoint(on_checkpoint, "cycle", goal, engine, route, dept_outputs,
+                    escalation=escalation_traces,
                     delivered=delivered, verdicts=verdicts, iteration=iteration,
                     fixes=verdict_text if token in _RETRY_VERDICTS else None)
         if token not in _RETRY_VERDICTS:   # PASS, or no actionable verdict — stop
@@ -861,6 +900,8 @@ def run_mission_cli(
         "iteration": iteration,
         "delivered": delivered,
     }
+    if escalation_traces:
+        dossier["escalation"] = escalation_traces
     if verdicts[-1]["verdict"] in _RETRY_VERDICTS:   # cap reached without a clean PASS
         dossier["residual_risk"] = (
             f"Inspector did not PASS after {iteration} iteration(s); delivered the best "
