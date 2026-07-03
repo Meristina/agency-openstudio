@@ -148,7 +148,9 @@ escalation halts at the cap with explicit skips, dept output stays coherent, tra
 
 - [ ] T020 [US2] Budget enforcement in `agencykit/agency_cli/escalation.py`: decrement
       before each call, skip-remaining with explicit reasons at exhaustion, mid-phase
-      exhaustion closes out cleanly with a partial-escalation note (edge case)
+      exhaustion closes out cleanly (the skipped reasons ARE the partial-escalation
+      record); tiny-budget hybrid case sets `finalized_by: "doctrine-fallback"` when
+      nothing assemblable ran (assert in the T016 test)
 - [ ] T021 [US2] `est_tokens` accounting in `agencykit/agency_cli/escalation.py`:
       per-invocation chars/4 heuristic + per-dept totals in the trace
 - [ ] T022 [US2] Product default-on resolution in `agencykit/agency_cli/runner_bridge.py`:

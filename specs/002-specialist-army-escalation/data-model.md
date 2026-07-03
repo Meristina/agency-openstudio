@@ -44,6 +44,11 @@ test); a selection naming an unknown specialist is dropped at parse time (never 
 Returned by the selection call as a JSON object; parsed with the tolerant
 `_route_via_cli`-style extraction; validated against the roster.
 
+**Semantics**: the selection call IS the commander's decision — its prompt is the
+department commander doctrine + the compact roster, so "the department's router" (spec
+FR-002) and "the commander directs which phases engage" (spec Key Entities) are the same
+act. It is traced as `role: "selection"` with name `commander-{dept}-selection`.
+
 ```json
 {
   "officers": ["officer-2-strategy", "comms/O6-events"],
@@ -83,9 +88,18 @@ One entry per escalation subprocess call, appended in execution order.
   "est_tokens": 41230,
   "selection": { "...": "the parsed Selection object or its fallback marker" },
   "invocations": [ "InvocationRecord, execution order" ],
+  "finalized_by": "escalation | doctrine-fallback",
   "no_escalation": "reason string — only when the dept ran doctrine-only"
 }
 ```
+
+`finalized_by` disambiguates the hybrid case: `"escalation"` (default) when the
+department output was assembled from specialist work; `"doctrine-fallback"` when
+escalation started but could not produce assemblable output (e.g. budget 1 — the
+selection call consumed the whole cap before the commander ran) and the department was
+finalized by a condensed-doctrine call. The fallback call itself is OUTSIDE the
+escalation budget (it is the pre-feature department call, not a specialist invocation)
+and is not an `InvocationRecord`; the partial invocations that DID run stay in the trace.
 
 Invariants (tested): `consumed == len([i for i in invocations if not i.skipped])`;
 `consumed <= budget` (SC-002); `est_tokens == sum(i.est_tokens)`; a department with
@@ -121,7 +135,9 @@ existing "dept not in dept_outputs ⇒ re-run" invariant is untouched.
 ```
 doctrine-ready ─▶ selecting ─▶ commanding ─▶ officer(s) ─▶ soldier(s) ─▶ assembled
       │               │ unparseable ⇒ doctrine-only (fallback recorded)
-      │               └ budget hit at ANY arrow ⇒ skip-remaining, assemble what exists
+      │               ├ budget hit at ANY arrow ⇒ skip-remaining, assemble what exists
+      │               └ nothing assemblable ran ⇒ doctrine-fallback finalization
+      │                 (finalized_by: "doctrine-fallback", partial trace kept)
       └ escalation off/zero ⇒ doctrine-only (no trace at all)
 Cancel at any boundary ⇒ MissionCancelled (no dossier — existing contract)
 ```

@@ -16,16 +16,16 @@ optional top-level key. All existing keys are unchanged in name, type, and seman
   // ── NEW — present ONLY when escalation ran for ≥1 department ──
   "escalation": {
     "marketing": {
-      "budget": 6,
-      "consumed": 5,
-      "est_tokens": 41230,                       // advisory, chars/4 heuristic
+      "budget": 4,
+      "consumed": 4,                             // == count of non-skipped invocations
+      "est_tokens": 35900,                       // advisory, chars/4 heuristic
       "selection": {
         "officers": ["officer-2-strategy"],
         "soldiers": ["soldier-stp", "soldier-positioning"],
         "rationale": {"officer-2-strategy": "…", "soldier-stp": "…"}
       },
       "invocations": [
-        {"role": "selection", "name": "marketing-router", "task": "…",
+        {"role": "selection", "name": "commander-marketing-selection", "task": "…",
          "output": "…", "est_tokens": 900},
         {"role": "commander", "name": "commander-marketing", "task": "…",
          "output": "…", "est_tokens": 8000},
@@ -35,6 +35,8 @@ optional top-level key. All existing keys are unchanged in name, type, and seman
          "output": "…", "est_tokens": 12000},
         {"role": "soldier", "name": "soldier-positioning",
          "skipped": "budget-exhausted", "est_tokens": 0}
+        // 4 non-skipped invocations == consumed; the 5th selected specialist
+        // exceeded the cap of 4 and is explicitly skipped
       ]
     },
     "comms": {
