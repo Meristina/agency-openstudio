@@ -47,8 +47,49 @@ describe("ImagePanel model selector", () => {
     fireEvent.change(screen.getByLabelText("Image model"), { target: { value: "flux2-klein-4b" } });
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));
 
-    await waitFor(() => expect(generateImage).toHaveBeenCalledWith("a cat", { model: "flux2-klein-4b" }));
+    // Model is threaded through; resolution defaults to the server's own 1024² (so a
+    // default generation stays behaviourally identical), and steps stay "auto" (omitted).
+    await waitFor(() =>
+      expect(generateImage).toHaveBeenCalledWith("a cat", {
+        model: "flux2-klein-4b",
+        width: 1024,
+        height: 1024,
+      }),
+    );
     await waitFor(() => expect(onGenerated).toHaveBeenCalled());
+  });
+
+  it("defaults resolution to 1024² and steps to Auto", () => {
+    render(<ImagePanel imageModels={MODELS} onGenerated={vi.fn()} />);
+    expect((screen.getByLabelText("Resolution") as HTMLSelectElement).value).toBe("1024");
+    expect((screen.getByLabelText("Steps") as HTMLSelectElement).value).toBe("auto");
+  });
+
+  it("passes the chosen resolution and step count to generateImage", async () => {
+    generateImage.mockResolvedValue({
+      url: "/media/images/b.png",
+      prompt: "a dog",
+      seed: 2,
+      seconds: 1.1,
+      model: "flux-schnell",
+    });
+    render(<ImagePanel imageModels={MODELS} onGenerated={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText(/describe the image/i), {
+      target: { value: "a dog" },
+    });
+    fireEvent.change(screen.getByLabelText("Resolution"), { target: { value: "512" } });
+    fireEvent.change(screen.getByLabelText("Steps"), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+
+    await waitFor(() =>
+      expect(generateImage).toHaveBeenCalledWith("a dog", {
+        model: "flux-schnell",
+        width: 512,
+        height: 512,
+        steps: 2,
+      }),
+    );
   });
 
   it("disables the select while a generation is in flight", async () => {
