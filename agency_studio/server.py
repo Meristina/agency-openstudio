@@ -1184,7 +1184,10 @@ class StudioHandler(BaseHTTPRequestHandler):
         if not goal and not resume_from:
             self._send_error_json(400, "missing 'goal'")
             return None
-        escalation = self._parse_escalation(payload.get("escalation"))
+        # On resume the body's escalation is ignored (the pinned envelope's value wins in
+        # _handle_run_mission), so don't 400 a resume request over a malformed body field —
+        # that would defeat crash recovery for a caller sending e.g. {"resume_from":..., "escalation":true}.
+        escalation = None if resume_from else self._parse_escalation(payload.get("escalation"))
         if escalation is False:
             return None
         # Engine may be None here (caller left it unset) — the default is applied in
@@ -1210,6 +1213,11 @@ class StudioHandler(BaseHTTPRequestHandler):
         budget = value.get("budget", 6)
         if not isinstance(enabled, bool) or not isinstance(budget, int) or isinstance(budget, bool):
             self._send_error_json(400, "escalation.enabled must be bool and escalation.budget must be int")
+            return False
+        if budget < 0:
+            # budget 0 legitimately means "off"; a negative budget is a client error — reject it
+            # loudly rather than let it resolve to a silent escalation-off (the user asked for it on).
+            self._send_error_json(400, "escalation.budget must be >= 0")
             return False
         return {"enabled": enabled, "budget": budget}
 

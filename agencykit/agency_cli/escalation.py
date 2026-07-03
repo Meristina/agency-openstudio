@@ -129,7 +129,10 @@ def _frontmatter(text: str) -> dict[str, str]:
         key, value = line.split(":", 1)
         key = key.strip()
         value = value.strip().strip('"')
-        if value in (">-", "|-"):
+        # YAML block scalars: `>`, `|` optionally with a chomping/keep indicator
+        # (`-`/`+`) — a plain `>` or `|` is the most common idiomatic form and must
+        # be consumed the same as `>-`/`|-`, else the value collapses to one char.
+        if value and value[0] in ">|" and set(value[1:]) <= {"-", "+"}:
             block = []
             i += 1
             while i < len(lines) and (lines[i].startswith(" ") or not lines[i].strip()):
@@ -210,7 +213,16 @@ def _emit(on_event: Optional[Callable[[dict], None]], event: dict) -> None:
         pass
 
 
-def _check_cancel(should_cancel: Optional[Callable[[], bool]], cancelled: type[Exception]) -> None:
+class _NoCancelSentinel(Exception):
+    """Default ``cancelled`` type for ``run_department``. A real ``call()`` failure never
+    raises this, so the graceful-degradation ``except Exception`` branches stay live when a
+    caller injects no cancel type — using ``Exception`` as the default would make
+    ``except cancelled: raise`` swallow-then-reraise every error and abort the mission
+    (FR-007). The shipped caller passes ``MissionCancelled``; ``_check_cancel`` raises
+    whatever type it is given, so real cancellation still propagates."""
+
+
+def _check_cancel(should_cancel: Optional[Callable[[], bool]], cancelled: type[BaseException]) -> None:
     if should_cancel is not None and should_cancel():
         raise cancelled()
 
@@ -220,9 +232,12 @@ def _est(prompt: str, output: str = "") -> int:
 
 
 def _prior_outputs(dept_outputs: dict) -> str:
-    if not dept_outputs:
-        return "(no prior department output)"
-    return "\n\n".join(f"### {dept.upper()}\n{str(output)[:4000]}" for dept, output in dept_outputs.items())
+    # Reuse the mission loop's formatter so a specialist sees prior deliverables cut at
+    # the same _MAX_DEPT_CHARS AND with the same "[truncated — N chars omitted]" marker a
+    # baseline department gets — otherwise a specialist can mistake a silently-cut upstream
+    # deliverable for a complete one. Lazy import avoids the escalation<->cli_engine cycle.
+    from agency_cli.engines.cli_engine import _fmt_dept_outputs
+    return _fmt_dept_outputs(dept_outputs)
 
 
 def _compact_roster(dept: str, roster: SpecialistRoster) -> str:
@@ -238,14 +253,39 @@ def _compact_roster(dept: str, roster: SpecialistRoster) -> str:
 
 
 def _extract_json_object(text: str) -> Optional[dict]:
-    match = re.search(r"\{.*\}", text or "", re.S)
-    if not match:
-        return None
-    try:
-        obj = json.loads(match.group())
-    except ValueError:
-        return None
-    return obj if isinstance(obj, dict) else None
+    # Scan for the first balanced {...} object rather than a greedy `\{.*\}` (which spans
+    # to the LAST brace and breaks on any stray brace in the model's surrounding prose).
+    # String literals are respected so a brace inside a quoted value doesn't unbalance.
+    s = text or ""
+    for start in range(len(s)):
+        if s[start] != "{":
+            continue
+        depth = 0
+        in_str = False
+        escaped = False
+        for i in range(start, len(s)):
+            ch = s[i]
+            if in_str:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        obj = json.loads(s[start:i + 1])
+                    except ValueError:
+                        break  # not valid JSON — try the next `{`
+                    return obj if isinstance(obj, dict) else None
+    return None
 
 
 def _validate_selection(dept: str, raw: Optional[dict], roster: SpecialistRoster) -> tuple[dict, bool]:
@@ -274,7 +314,11 @@ def _selection_prompt(dept: str, goal: str, dept_outputs: dict, roster: Speciali
     return (
         f"{commander}\n\nMISSION GOAL:\n{goal}\n\n"
         f"PRIOR DEPARTMENT OUTPUTS:\n{_prior_outputs(dept_outputs)}\n\n"
-        f"BUDGET: {budget} total escalation calls including this selection.\n\n"
+        # The budget covers this selection call (1) AND the mandatory commander brief (1),
+        # so only budget-2 specialist slots remain — state the specialist cap directly so
+        # the model does not over-select and have its last picks skipped as budget-exhausted.
+        f"BUDGET: {budget} total escalation calls (this selection + the commander brief are "
+        f"2 of them), so select AT MOST {max(0, budget - 2)} officers and soldiers combined.\n\n"
         f"COMPACT SPECIALIST ROSTER:\n{_compact_roster(dept, roster)}\n\n"
         "Select only the officers and soldiers needed. Output ONLY JSON like "
         '{"officers":["officer-2-strategy"],"soldiers":["soldier-stp"],'
@@ -321,15 +365,49 @@ def _specialist_prompt(
     )
 
 
-def _fallback_prompt(dept: str, goal: str, dept_outputs: dict, doctrine: str, reason: str) -> str:
+def _fallback_prompt(
+    dept: str,
+    goal: str,
+    dept_outputs: dict,
+    doctrine: str,
+    reason: str,
+    *,
+    asset_clause: Optional[str] = None,
+    context_clause: Optional[str] = None,
+    persona_doctrine: Optional[dict] = None,
+) -> str:
+    # This is the pre-feature department call, so it must thread the same studio hooks
+    # _dept_prompt does (persona woven into the doctrine, context/asset clauses appended) —
+    # otherwise a fallen-back department loses asset renders, project context, and persona.
+    persona = (persona_doctrine or {}).get(dept)
+    full_doctrine = "\n\n".join(p for p in (doctrine, persona) if p)
     return (
         f"You are the {dept} department commander for an AI agency.\n\n"
         f"MISSION GOAL:\n{goal}\n\nPRIOR DEPARTMENT OUTPUTS:\n{_prior_outputs(dept_outputs)}\n\n"
         f"ESCALATION FALLBACK REASON: {reason}\n\n"
-        f"DEPARTMENT DOCTRINE:\n{doctrine}\n\n"
-        "Produce a complete, detailed deliverable for this department.\n"
+        + (f"DEPARTMENT DOCTRINE:\n{full_doctrine}\n\n" if full_doctrine else "")
+        + "Produce a complete, detailed deliverable for this department.\n"
         + WEBSEARCH_CLAUSE
+        + (f"\n\n{context_clause}" if context_clause else "")
+        + (f"\n\n{asset_clause}" if asset_clause else "")
     )
+
+
+_TRACE_OUTPUT_PREVIEW = 1200  # per-invocation cap kept in the persisted trace
+
+
+def _cap_trace_outputs(trace: dict) -> dict:
+    # The full specialist text is already carried in the assembled dept output
+    # (dept_outputs[dept]); keeping every invocation's full output in the trace too would
+    # persist each deliverable twice — in the dossier AND in every checkpoint the veto loop
+    # rewrites. Cap the trace copy to a preview once assembly has consumed the full text.
+    for inv in trace.get("invocations", []):
+        out = inv.get("output")
+        if isinstance(out, str) and len(out) > _TRACE_OUTPUT_PREVIEW:
+            inv["output"] = out[:_TRACE_OUTPUT_PREVIEW] + (
+                f"\n... [+{len(out) - _TRACE_OUTPUT_PREVIEW} chars in the assembled dept output]"
+            )
+    return trace
 
 
 def _record(role: str, name: str, prompt: str, output: str, **extra) -> dict:
@@ -377,7 +455,7 @@ def run_department(
     asset_clause: Optional[str] = None,
     context_clause: Optional[str] = None,
     persona_doctrine: Optional[dict] = None,
-    cancelled: type[Exception] = Exception,
+    cancelled: type[BaseException] = _NoCancelSentinel,
 ) -> tuple[str, dict]:
     commander = roster.commanders[dept]
     commander_doc = _load_body(commander) or ""
@@ -412,23 +490,31 @@ def run_department(
         # other failure degrades to `prior` (the commander brief, or "") instead of
         # aborting the whole mission (FR-007). Not counted against the escalation
         # budget — it is the pre-feature department call, not a specialist invocation.
+        # Its tokens ARE added to the advisory est_tokens even though it is outside the
+        # invocation budget — it is often the single largest call, so omitting it would
+        # under-report cost several-fold on every fallback-finalized department.
         trace["finalized_by"] = "doctrine-fallback"
         trace["fallback_reason"] = reason
         _check_cancel(should_cancel, cancelled)
+        prompt = _fallback_prompt(
+            dept, goal, dept_outputs, commander_doc, reason,
+            asset_clause=asset_clause, context_clause=context_clause, persona_doctrine=persona_doctrine,
+        )
         try:
-            return call(exec_cmd, _fallback_prompt(dept, goal, dept_outputs, commander_doc, reason),
-                        timeout=run_timeout, should_cancel=should_cancel)
+            output = call(exec_cmd, prompt, timeout=run_timeout, should_cancel=should_cancel)
         except cancelled:
             raise
         except Exception:
             trace["fallback_reason"] = f"{reason}+fallback-call-failed"
             return prior
+        trace["est_tokens"] += _est(prompt, output)
+        return output
 
     selection_text = spend("selection", f"{commander.name}-selection", _selection_prompt(dept, goal, dept_outputs, roster, budget), base_cmd)
     selection, selected_any = _validate_selection(dept, _extract_json_object(selection_text or ""), roster)
     trace["selection"] = selection
     if not selected_any:
-        return finalize_via_fallback(selection.get("fallback") or "router-selected-none"), trace
+        return finalize_via_fallback(selection.get("fallback") or "router-selected-none"), _cap_trace_outputs(trace)
 
     commander_prompt = _specialist_prompt(
         dept,
@@ -508,4 +594,4 @@ def run_department(
         output = finalize_via_fallback("all-specialists-failed", prior=output)
     else:
         trace["finalized_by"] = "escalation"
-    return output, trace
+    return output, _cap_trace_outputs(trace)

@@ -75,7 +75,7 @@ One entry per escalation subprocess call, appended in execution order.
 | `name` | `str` | Agent name or virtual phase name |
 | `virtual` | `bool` | Only present (True) for virtual officers |
 | `task` | `str` | The scoped task given (truncated ≤ 2000 chars in the trace; full text lives in the prompt) |
-| `output` | `str` | The returned deliverable (full — departments are sovereign, Art. IV) |
+| `output` | `str` | A bounded PREVIEW of the returned deliverable (~1200 chars + a "[+N chars in the assembled dept output]" marker). The FULL text lives once in the assembled `dept_outputs[dept]`; the trace keeps only a preview so the deliverable is not persisted twice (dossier + every checkpoint the veto loop rewrites). Department sovereignty (Art. IV) is preserved by `dept_outputs`, which carries the full text unchanged |
 | `est_tokens` | `int` | chars/4 heuristic over (prompt + output), advisory |
 | `skipped` | `str?` | `"budget-exhausted"` / `"missing-file"` / `"call-failed"` — mutually exclusive with `output` |
 

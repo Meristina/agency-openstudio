@@ -297,6 +297,17 @@ def test_veto_loop_inspector_prompt_invariant_with_escalation(monkeypatch):
     assert off_prompts == on_prompts
 
 
+def test_fmt_dept_outputs_synthesis_sees_full_output():
+    # review [1]: synthesis must NOT truncate a department's assembled multi-specialist
+    # output (limit=None), or the escalation depth never reaches the delivered dossier;
+    # the prior-dept context path still truncates (default limit) with its marker
+    big = "X" * 12000
+    truncated = cli_engine._fmt_dept_outputs({"product": big})            # default limit
+    full = cli_engine._fmt_dept_outputs({"product": big}, limit=None)     # synthesis path
+    assert "truncated" in truncated and len(truncated) < 8000
+    assert big in full and "truncated" not in full
+
+
 def test_active_escalation_traces_multiple_departments_independently(monkeypatch):
     monkeypatch.setattr(cli_engine.shutil, "which", lambda b: "/usr/local/bin/" + b)
 
@@ -304,7 +315,7 @@ def test_active_escalation_traces_multiple_departments_independently(monkeypatch
         low = prompt.lower()
         if "json array" in low:
             return '["marketing", "product", "comms"]'
-        if "compact specialist roster" in low and "commander_comms" in low:
+        if "compact specialist roster" in low and "commander-comms" in low:
             return '{"officers":["comms/o6-events"],"soldiers":[],"rationale":{"comms/o6-events":"event"}}'
         if "compact specialist roster" in low and "commander-product" in low:
             return '{"officers":["officer-1-discovery"],"soldiers":[],"rationale":{}}'

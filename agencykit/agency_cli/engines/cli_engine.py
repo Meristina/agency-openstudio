@@ -439,14 +439,16 @@ def _extract_sources(text: str) -> list:
     return list(seen)
 
 
-def _fmt_dept_outputs(dept_outputs: dict) -> str:
+def _fmt_dept_outputs(dept_outputs: dict, limit: Optional[int] = _MAX_DEPT_CHARS) -> str:
     if not dept_outputs:
         return "(no prior department output)"
     parts = []
     for dept, output in dept_outputs.items():
-        truncated = output[:_MAX_DEPT_CHARS]
-        suffix = f"\n... [truncated — {len(output) - _MAX_DEPT_CHARS} chars omitted]" if len(output) > _MAX_DEPT_CHARS else ""
-        parts.append(f"### {dept.upper()}\n{truncated}{suffix}")
+        if limit is not None and len(output) > limit:
+            body = output[:limit] + f"\n... [truncated — {len(output) - limit} chars omitted]"
+        else:
+            body = output
+        parts.append(f"### {dept.upper()}\n{body}")
     return "\n\n".join(parts)
 
 
@@ -494,7 +496,11 @@ def _synth_prompt(
         (f"{commander_doc}\n\n" if commander_doc else "")
         + f"MISSION GOAL:\n{goal}\n\n"
         f"ROUTE: {route}\n\n"
-        f"DEPARTMENT OUTPUTS:\n{_fmt_dept_outputs(dept_outputs)}\n\n"
+        # Synthesis is the ONE place that must see each department's FULL deliverable —
+        # with escalation on, a department is a multi-specialist assembly (commander +
+        # officers + soldiers), and truncating it here (as the prior-dept context does)
+        # would silently drop the specialist depth escalation exists to add. limit=None.
+        f"DEPARTMENT OUTPUTS:\n{_fmt_dept_outputs(dept_outputs, limit=None)}\n\n"
         + fixes_block
         + "Synthesise all department outputs into a final cross-department mission dossier. "
         "List decisions taken, open items to verify, and all sources cited with URLs and dates."
@@ -592,19 +598,24 @@ def _checkpoint(
     if on_checkpoint is None:
         return
     try:
-        on_checkpoint({
+        snapshot = {
             "version": 1,
             "phase": phase,
             "goal": goal,
             "engine": engine,
             "route": list(route),
             "dept_outputs": dict(dept_outputs),
-            "escalation": dict(escalation or {}),
             "delivered": delivered,
             "verdicts": [dict(v) for v in verdicts],
             "iteration": iteration,
             "fixes": fixes,
-        })
+        }
+        # Guarded exactly like the dossier's `escalation` key: only present when at least
+        # one department escalated, so an escalation-off / pre-feature checkpoint envelope
+        # stays byte-identical to before (Principle X).
+        if escalation:
+            snapshot["escalation"] = dict(escalation)
+        on_checkpoint(snapshot)
     except Exception:  # observational only — never let the studio's persistence break the mission
         pass
 
@@ -633,8 +644,8 @@ def _validate_resume_state(state: dict) -> dict:
     if not isinstance(dept_outputs, dict) or not set(dept_outputs).issubset(set(route)):
         raise ValueError("resume_state.dept_outputs keys must be a subset of route")
     escalation = state.get("escalation") or {}
-    if not isinstance(escalation, dict):
-        raise ValueError("resume_state.escalation must be a dict")
+    if not isinstance(escalation, dict) or not set(escalation).issubset(set(route)):
+        raise ValueError("resume_state.escalation must be a dict keyed by departments in route")
     verdicts = state.get("verdicts") or []
     if not isinstance(verdicts, list):
         raise ValueError("resume_state.verdicts must be a list")
@@ -748,6 +759,16 @@ def run_mission_cli(
     # Departments + synthesis may call the user's MCP tools; the router + inspector never do
     # (they run on the base `cmd`), so the quality gate's inputs are untouched by this hook.
     exec_cmd = _with_mcp(cmd, mcp_config_path, mcp_allowed_tools)
+    # The contract is EscalationConfig | None. A plain dict is the shape the studio deals
+    # in (the request field), and only runner_bridge._resolve_escalation converts it — so
+    # coerce a dict here too rather than let getattr() silently read defaults and disable
+    # escalation without a word (a foot-gun for any future caller that skips the resolve).
+    if isinstance(escalation, dict):
+        from agency_cli.escalation import EscalationConfig
+        escalation = EscalationConfig(
+            enabled=bool(escalation.get("enabled", True)),
+            budget=int(escalation.get("budget", 6)),
+        )
     escalation_active = bool(
         escalation is not None
         and getattr(escalation, "enabled", False)

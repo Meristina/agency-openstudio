@@ -137,6 +137,74 @@ def test_budget_exhaustion_records_skips_and_keeps_output():
     assert "COMMANDER OUT" in output and "OFFICER OUT" in output
 
 
+def test_specialist_failure_degrades_under_default_cancelled():
+    # regression [review 2]: the default `cancelled` must NOT swallow-and-reraise real
+    # call failures (that turned graceful degradation into dead code) — no cancelled= arg
+    roster = escalation.build_roster(PAYLOAD)
+    call, _ = _recorder([
+        json.dumps({"officers": ["officer-2-strategy"], "soldiers": [], "rationale": {}}),
+        "COMMANDER OUT",
+        RuntimeError("CLI engine 'claude' exited 1"),  # officer fails
+        "DOCTRINE FALLBACK OUT",                        # all-specialists-failed fallback
+    ])
+
+    output, trace = escalation.run_department(
+        "marketing", "launch", {}, config=escalation.EscalationConfig(),
+        roster=roster, call=call, base_cmd=["base"], exec_cmd=["exec"], run_timeout=9,
+    )  # NOTE: no cancelled= — exercises the default sentinel, must not abort
+
+    assert output == "DOCTRINE FALLBACK OUT"
+    assert any(i.get("skipped") == "call-failed" for i in trace["invocations"])
+
+
+def test_extract_json_object_ignores_surrounding_braces():
+    # review [4]: a stray brace in the model's prose must not corrupt the captured object
+    good = '{"officers": ["officer-2-strategy"], "soldiers": []}'
+    assert escalation._extract_json_object(f"Deploy {{marketing}}. Selection: {good} note {{x}}") == json.loads(good)
+    # a brace inside a quoted value stays balanced
+    parsed = escalation._extract_json_object('{"rationale": {"a": "pick {b}"}, "officers": [], "soldiers": []}')
+    assert parsed["rationale"] == {"a": "pick {b}"}
+    assert escalation._extract_json_object("no json here") is None
+
+
+def test_frontmatter_handles_plain_and_chomped_block_scalars():
+    # review [11]: plain `>` / `|` (no chomp dash) are the common idiomatic forms and must
+    # be consumed like `>-` / `|-`, else the value collapses to a single ">" / "|" char
+    for indicator in (">", "|", ">-", "|-", ">+", "|+"):
+        fm = escalation._frontmatter(
+            f"---\nname: x\ndescription: {indicator}\n  A description\n  on two lines.\n---\nbody"
+        )
+        assert fm["name"] == "x"
+        assert "A description" in fm["description"] and len(fm["description"]) > 5
+
+
+def test_doctrine_fallback_prompt_carries_studio_clauses_and_counts_tokens():
+    # review [3]+[9]: a fallen-back department must still get asset/context/persona (like the
+    # pre-feature _dept_prompt), and the fallback call's tokens must reach est_tokens
+    from agency_cli.engines.cli_engine import MissionCancelled
+    roster = escalation.build_roster(PAYLOAD)
+    seen = {}
+
+    def call(cmd, prompt, timeout=900, should_cancel=None):
+        if "json" in prompt.lower() and "roster" in prompt.lower():
+            return json.dumps({"officers": [], "soldiers": [], "rationale": {}})  # selects nothing
+        seen["fallback_prompt"] = prompt
+        return "FALLBACK OUT"
+
+    output, trace = escalation.run_department(
+        "marketing", "launch", {}, config=escalation.EscalationConfig(),
+        roster=roster, call=call, base_cmd=["base"], exec_cmd=["exec"], run_timeout=9,
+        asset_clause="ASSET-CLAUSE-Z", context_clause="CONTEXT-CLAUSE-Z",
+        persona_doctrine={"marketing": "PERSONA-Z"}, cancelled=MissionCancelled,
+    )
+
+    assert output == "FALLBACK OUT"
+    assert "ASSET-CLAUSE-Z" in seen["fallback_prompt"]
+    assert "CONTEXT-CLAUSE-Z" in seen["fallback_prompt"]
+    assert "PERSONA-Z" in seen["fallback_prompt"]
+    assert trace["est_tokens"] > 0  # the fallback call's tokens are counted
+
+
 def test_fallback_call_failure_degrades_instead_of_aborting():
     # T043: the doctrine-fallback call must degrade like every specialist call — a
     # failing CLI there (e.g. a session limit) must not abort the whole mission (FR-007)
