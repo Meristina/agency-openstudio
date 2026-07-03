@@ -8,6 +8,7 @@ URL/checksum guards run end-to-end without MLX, without weights, and without net
 
 import hashlib
 import re
+import threading
 
 import pytest
 
@@ -233,6 +234,40 @@ def test_generate_image_writes_asset_and_result(tmp_path, monkeypatch):
     assert result.model == "flux-schnell"
     assert mgr.resident == "flux-schnell"
     assert mgr.resident_kind == "flux-schnell"  # back-compat alias
+
+
+def test_device_work_runs_on_one_dedicated_worker_thread(tmp_path, monkeypatch):
+    """Regression: MLX Metal streams are thread-affine. Driving a warm model from a fresh
+    ThreadingHTTPServer request thread crashed the whole process (the FLUX.2 path aborted
+    with 'There is no Stream(gpu, N) in current thread'). Every load+inference must run on
+    ONE dedicated worker thread — never the caller's thread — and that thread is reused
+    across calls made from different caller threads."""
+    _stub_backends(monkeypatch)
+    ran_on: "list[threading.Thread]" = []
+    monkeypatch.setattr(
+        local_media, "_run_image_backend",
+        lambda *a, **k: ran_on.append(threading.current_thread()),
+    )
+    mgr = local_media.ModelManager(tmp_path)
+
+    caller_threads: "list[threading.Thread]" = []
+
+    def call() -> None:
+        caller_threads.append(threading.current_thread())
+        mgr.generate_image("x")
+
+    # Two DISTINCT caller threads, mimicking two ThreadingHTTPServer request threads.
+    for _ in range(2):
+        t = threading.Thread(target=call)
+        t.start()
+        t.join()
+
+    assert len(ran_on) == 2
+    worker = ran_on[0]
+    assert ran_on[1] is worker                    # same worker reused across callers
+    assert worker.name.startswith("mlx-worker")   # the one dedicated device thread
+    assert worker is not threading.main_thread()
+    assert worker not in caller_threads           # never the caller's own thread (the old crash)
 
 
 def test_generate_image_defaults_to_flux_schnell(tmp_path, monkeypatch):

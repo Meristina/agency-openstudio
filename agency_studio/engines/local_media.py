@@ -32,6 +32,7 @@ import random
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -322,18 +323,47 @@ class ModelManager:
     """Single-resident, warm holder for the local multimodal models.
 
     At most one model is loaded at a time; loading a different one evicts the
-    current one first (and frees its Metal buffers). A lock serialises the actual
-    inference so the threaded server can't run two generations on the device at once.
-    Repeat calls of the SAME kind reuse the warm model — that's the fast path.
+    current one first (and frees its Metal buffers). Repeat calls of the SAME kind
+    reuse the warm model — that's the fast path.
+
+    Every model load + inference runs on ONE dedicated worker thread (``_worker``).
+    That is not just serialisation: MLX's Metal streams are **thread-affine**, and a
+    warm model driven from a fresh ``ThreadingHTTPServer`` request thread crashes the
+    whole process (the FLUX.2 path aborts with ``There is no Stream(gpu, N) in current
+    thread`` → an uncaught ``libc++abi`` terminate). Pinning all device work to a single
+    long-lived thread keeps the streams valid AND subsumes the old inference lock (the
+    single worker can only run one job at a time). See ``_run_on_worker``.
     """
 
     def __init__(self, assets_dir: "str | Path"):
         self._assets = Path(assets_dir)
-        self._lock = threading.Lock()
+        # max_workers=1 → one persistent thread: serialises device work AND keeps every
+        # MLX/Metal call on the same thread (stream affinity). Not daemonised, but the
+        # manager lives for the server's lifetime and the worker idles between jobs.
+        self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlx-worker")
+        self._on_worker = threading.local()  # guards against a nested self-submit deadlock
         self._resident: Optional[str] = None
         self._model = None
 
-    # -- model residency (caller holds self._lock) -----------------------------
+    def _run_on_worker(self, fn: "Callable[[], object]") -> object:
+        """Run ``fn`` (a model load/inference closure) on the single device worker thread
+        and block until it returns, re-raising any exception in the caller. All residency
+        mutations (``_ensure``/``_evict``) and device work go through here, so ``_resident``
+        / ``_model`` are only ever touched by the one worker thread — no lock needed. A
+        closure that (re-)enters this from the worker itself runs inline, so a nested call
+        can never deadlock on the single-slot pool."""
+        if getattr(self._on_worker, "flag", False):
+            return fn()
+        return self._worker.submit(self._invoke, fn).result()
+
+    def _invoke(self, fn: "Callable[[], object]") -> object:
+        self._on_worker.flag = True
+        try:
+            return fn()
+        finally:
+            self._on_worker.flag = False
+
+    # -- model residency (runs on the device worker via _run_on_worker) --------
     def _ensure(self, key: str, probe: Callable[[], None], loader: Callable[[], object]) -> object:
         """Make the model identified by ``key`` warm and return it. ``key`` is a model
         id ('flux-schnell', 'flux2-klein-4b', …) or a modality ('stt'/'tts'). Switching
@@ -407,7 +437,7 @@ class ModelManager:
         seed = random.randint(0, 2**31 - 1) if seed is None else seed
         out = self._asset_path("images", "png", out_dir)
         started = time.monotonic()
-        with self._lock:
+        def _do() -> None:
             backend = self._ensure(
                 entry.id, lambda: _probe_image(entry), lambda: _load_image_backend(entry),
             )
@@ -415,6 +445,7 @@ class ModelManager:
                 entry, backend, prompt=prompt, steps=steps, seed=seed,
                 width=width, height=height, out_path=out,
             )
+        self._run_on_worker(_do)
         return ImageResult(
             path=out, prompt=prompt, seed=seed,
             seconds=round(time.monotonic() - started, 2), model=entry.id,
@@ -426,9 +457,10 @@ class ModelManager:
         if not audio_path.is_file():
             raise FileNotFoundError(f"audio file not found: {audio_path}")
         started = time.monotonic()
-        with self._lock:
-            model = self._ensure("stt", _probe_stt, _load_stt_backend)
-            text = _run_stt_backend(model, audio_path=audio_path)
+        text = self._run_on_worker(
+            lambda: _run_stt_backend(
+                self._ensure("stt", _probe_stt, _load_stt_backend), audio_path=audio_path)
+        )
         return TranscriptResult(text=text, seconds=round(time.monotonic() - started, 2))
 
     def synthesize(
@@ -448,9 +480,11 @@ class ModelManager:
             raise ValueError(f"unknown voice {voice!r} (allowed: {sorted(models.ALLOWED_VOICES)})")
         out = self._asset_path("audio", "wav", out_dir)
         started = time.monotonic()
-        with self._lock:
-            model = self._ensure("tts", _probe_tts, _load_tts_backend)
-            _run_tts_backend(model, text=text, voice=voice, out_path=out)
+        self._run_on_worker(
+            lambda: _run_tts_backend(
+                self._ensure("tts", _probe_tts, _load_tts_backend),
+                text=text, voice=voice, out_path=out)
+        )
         return SpeechResult(path=out, voice=voice, seconds=round(time.monotonic() - started, 2))
 
     def embed(
@@ -473,13 +507,15 @@ class ModelManager:
         # the [studio] extra fully optional (the import only runs when an embed is requested).
         from . import embeddings
         entry = models.embed_model(model)  # ValueError on unknown id (re-validated here)
-        with self._lock:
+
+        def _do() -> "list[list[float]]":
             backend = self._ensure(
                 f"embed:{entry.id}",
                 embeddings._probe_embed,
                 lambda: embeddings._load_embed(entry),
             )
             return embeddings._run_embed(backend, entry, texts=texts, kind=kind)
+        return self._run_on_worker(_do)
 
     def caption(
         self, images: "list[bytes]", *, model: "Optional[str]" = None, cloud: bool = False,
@@ -499,14 +535,16 @@ class ModelManager:
         chosen = model or ("qwen3-vl-cloud" if cloud else visual.DEFAULT_VISUAL_MODEL)
         entry = visual.visual_model(chosen)   # ValueError on unknown id (re-validated here)
         probe, load, run = visual._backend(entry)
+
         # The local probe takes no args; the cloud probe needs the entry (endpoint + env key).
-        with self._lock:
+        def _do() -> "list[str]":
             backend = self._ensure(
                 f"visual:{entry.id}",
                 (lambda: probe(entry)) if entry.backend == "cloud" else probe,
                 lambda: load(entry),
             )
             return run(backend, entry, images=images)
+        return self._run_on_worker(_do)
 
     def generate_video(
         self, prompt: str, *, model: "Optional[str]" = None,
@@ -524,10 +562,11 @@ class ModelManager:
         cloud-caption path. The backend is lazy-imported, so a missing key raises
         ``SeedanceUnavailable`` (→ 501) from the probe, before any eviction.
 
-        The lock is held ONLY for the residency step (``_ensure``): a cloud client has no Metal
-        residency to protect, so the up-to-~10-min network render runs lock-free — otherwise it
-        would block every other media op (image/tts/stt/embed) for the whole poll. ``should_cancel``
-        is threaded into that render so a "Stop mission" can abort the poll promptly."""
+        Only the residency step (``_ensure``) runs on the device worker: a cloud client has no
+        Metal residency to protect, so the up-to-~10-min network render runs OFF the worker —
+        otherwise it would block every other media op (image/tts/stt/embed) for the whole poll.
+        ``should_cancel`` is threaded into that render so a "Stop mission" can abort the poll
+        promptly."""
         if not prompt.strip():
             raise ValueError("prompt must not be empty")
         from .. import seedance  # lazy: avoids a load-time cycle, keeps the module self-contained
@@ -535,13 +574,14 @@ class ModelManager:
         probe, load, run = seedance._backend(entry)
         out = self._asset_path("videos", "mp4", out_dir)
         started = time.monotonic()
-        # Residency (probe/evict/warm) needs the lock; the cloud render does NOT.
-        with self._lock:
-            backend = self._ensure(
+        # Residency (probe/evict/warm) runs on the device worker; the cloud render does NOT.
+        backend = self._run_on_worker(
+            lambda: self._ensure(
                 f"video:{entry.id}",
                 lambda: probe(entry),   # the cloud probe needs the entry (endpoint + env key)
                 lambda: load(entry),
             )
+        )
         run(backend, entry, prompt=prompt, out_path=out, should_cancel=should_cancel)
         return VideoResult(
             path=out, prompt=prompt,
