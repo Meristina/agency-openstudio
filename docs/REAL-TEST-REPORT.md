@@ -110,7 +110,7 @@ exceeds the 16 GB memory budget (**[#39]**) — a hardware limit, not a code def
 |---|---|---|
 | **#37** (merged) | `visual._run_local` passed raw bytes + a non-templated prompt to `mlx_vlm.generate` → `tuple index out of range` (the "validated live, deferred" caption path never worked with mlx-vlm 0.6.3) | image → temp-file path, `apply_chat_template(num_images=1)`, `image=[path]`, `.text`; regression test locks the surface |
 | **#40** (merged, closes #38) | Embed path dead: `[studio]` missing `einops`; and transformers 5.x (needed by `[visual]`'s mlx-vlm) removed `batch_encode_plus` that mlx-embedding-models 0.0.11 still calls | added `einops`; `_shim_legacy_tokenizer` aliases `batch_encode_plus → __call__` (no `transformers<5` pin, which would break mlx-vlm) — `POST /api/docs` now `201` |
-| **#39** (open) | `boogu-base` swap-thrashes on the 16 GB reference Mac (two heavyweight models co-resident) | documented the constraint in `models.py` (comment + `note` ">16 GB RAM"); guardrail / >16 GB re-validation is follow-up |
+| **#39** (open on 16 GB) | `boogu-base` swap-thrashes on the 16 GB reference Mac (two heavyweight models co-resident). **Two distinct blockers**, now understood separately: (1) **memory** — Boogu-Image (~10B) + its Qwen3-VL-8B `mlx_vlm` conditioner co-resident ≈ 20 GB, fatal on 16 GB (it never reached a first diffusion step); (2) **MLX-VLM thread affinity** — boogu drives the same `mlx_vlm` multi-stream path that hard-crashed `flux2-klein-4b` through the threaded server (**[#67]**), so it had a *second*, latent crash blocker that the memory wall masked. | (1) documented in `models.py` (comment + `note` ">16 GB RAM"); still open — a hardware limit, re-validate only on a **>16 GB** Mac. (2) **fixed by [#67]** (all device work on one worker thread), so a >16 GB re-validation now clears the thread blocker too and only has to answer the memory question. |
 
 Also hardened, as a side effect of installing the extras on the reference Mac: several
 "extra-absent → 501" tests assumed the extra was **absent** (offline CI) and failed when it was
@@ -187,7 +187,7 @@ tested — also below) as the last deferred items.
 | embed `nomic-v1.5` (768-dim) | ✅ via `POST /api/docs`, 6 s |
 | embed `bge-m3` (1024-dim) | ✅ 2 vectors, dim 1024, resident `embed:bge-m3`, 5 s |
 | visual VLM `Qwen3-VL-8B` | ✅ captioned a real image + embedded (2 chunks), 29 s |
-| `boogu-base` | ⛔ known OOM ([#39], hardware — excluded) |
+| `boogu-base` | ⛔ known OOM ([#39], hardware — excluded; its separate MLX-VLM thread crash is fixed by [#67]) |
 
 **Pipeline flags — all active in one all-flags mission** (pre-route phases read, then cancelled
 before the departments):
@@ -270,6 +270,18 @@ which is why FLUX was validated deterministically via `/api/image` instead of ga
 mission. Half the gap is now closed (a real marker was emitted); the render-then-rewrite half still
 awaits a mission that both emits a marker **and** earns a clean `PASS`.
 
+**A server-crashing bug caught + fixed ([#67]) — `flux2-klein-4b` Metal thread affinity.** Rendering
+klein-4b via the threaded server didn't just fail, it **killed the whole process**: MLX's Metal
+streams are thread-affine, so driving a warm model from a fresh `ThreadingHTTPServer` request thread
+aborted with `RuntimeError: There is no Stream(gpu, N) in current thread` → an uncaught `libc++abi`
+terminate (not a catchable 500). `flux-schnell` happened to survive the pattern; the FLUX.2 path did
+not. Confirmed by repro: klein renders fine **single-threaded** (~15 s from cache) but crashes through
+the threaded server. **Fix:** `ModelManager` now runs every model load + inference on **one dedicated
+worker thread** (`ThreadPoolExecutor(max_workers=1)`, stdlib) — streams stay valid, and it subsumes
+the old inference lock; the cloud video render stays off the worker. Live-validated: klein-4b
+512²/2-steps now returns `200` in **~12–15 s** through the threaded server, warm-reused across request
+threads, zero crashes. This also removes boogu's *second* (latent) blocker — see **[#39]** above.
+
 ## Honest gaps / not covered live
 
 - **An `asset` render inside a real mission — half closed (Jul 3).** The render bridge, marker
@@ -317,7 +329,9 @@ Not everything is "green". Being precise about what the live pass actually prove
   render-then-rewrite half still awaits a clean-PASS mission that emits a marker. Also the
   **seedance cloud video render** (client implemented + offline-tested; a live render needs a
   Volcengine Ark key).
-- **Failed** — `boogu-base` (OOM / swap on 16 GB, **[#39]**).
+- **Failed** — `boogu-base` (OOM / swap on 16 GB, **[#39]**). Its second, latent blocker — the
+  MLX-VLM thread-affinity crash it shares with `flux2-klein-4b` — is since **fixed by [#67]**; the
+  memory wall remains and is only re-testable on a >16 GB Mac.
 
 The live pass paid for itself by catching two real bugs (#37, #40) and one hardware limit (#39)
 the offline suite (421 tests) could not surface. But "the offline suite is green" and "every feature
