@@ -254,8 +254,12 @@ def _validate_selection(dept: str, raw: Optional[dict], roster: SpecialistRoster
     valid_officers = {r.name for r in roster.officers.get(dept, [])}
     valid_officers.update(r.name for r in roster.virtual_officers.get(dept, []))
     valid_soldiers = {r.name for r in roster.soldiers}
-    officers = [n for n in raw.get("officers", []) if isinstance(n, str) and n in valid_officers]
-    soldiers = [n for n in raw.get("soldiers", []) if isinstance(n, str) and n in valid_soldiers]
+    # LLMs sometimes emit null instead of [] — .get(key, default) does not
+    # cover a present-but-null key, so coerce anything non-list to []
+    raw_officers = raw.get("officers") if isinstance(raw.get("officers"), list) else []
+    raw_soldiers = raw.get("soldiers") if isinstance(raw.get("soldiers"), list) else []
+    officers = [n for n in raw_officers if isinstance(n, str) and n in valid_officers]
+    soldiers = [n for n in raw_soldiers if isinstance(n, str) and n in valid_soldiers]
     rationale = raw.get("rationale") if isinstance(raw.get("rationale"), dict) else {}
     selection = {
         "officers": officers,
@@ -294,10 +298,12 @@ def _specialist_prompt(
     directive: str = "",
 ) -> str:
     persona = (persona_doctrine or {}).get(dept)
+    # commander is already surfaced via COMMANDER BRIEF and selection is
+    # orchestration meta — including either here would duplicate prompt text
     prior = "\n\n".join(
         f"### {i['role'].upper()} {i['name']}\n{i.get('output', '')}"
         for i in (prior_specialist_outputs or [])
-        if i.get("output")
+        if i.get("output") and i.get("role") not in ("commander", "selection")
     )
     return (
         f"You are {name}, acting as the {role} for the {dept} department.\n\n"
@@ -347,7 +353,9 @@ def _skip(role: str, name: str, reason: str, **extra) -> dict:
 def _assemble(commander: str, invocations: list[dict]) -> str:
     parts = [f"## Commander Brief\n\n{commander}"] if commander else []
     for inv in invocations:
-        if inv.get("role") == "selection" or inv.get("skipped") or not inv.get("output"):
+        # commander is already seeded above as the brief — re-appending its
+        # record would duplicate it verbatim in every escalated dept output
+        if inv.get("role") in ("selection", "commander") or inv.get("skipped") or not inv.get("output"):
             continue
         parts.append(f"## {inv['role'].title()}: {inv['name']}\n\n{inv['output']}")
     return "\n\n".join(parts)

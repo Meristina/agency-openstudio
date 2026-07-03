@@ -34,6 +34,40 @@ def test_dossier_md_renders_route_field_not_baseline():
     assert "assumptions" not in md, "product-kit 'assumptions' section leaked into agency dossier MD"
 
 
+def test_dossier_md_renders_escalation_section_only_when_present():
+    from agency_cli.runner_bridge import _dossier_md
+
+    base = {
+        "goal": "launch", "route": ["marketing"], "context": None, "iteration": 1,
+        "direction_check": None, "dept_outputs": {"marketing": "m-out"},
+        "decisions": [], "sources": [], "open_to_verify": [], "verdicts": [],
+    }
+    # absent key ⇒ no section (byte-identical off, Principle X)
+    assert "## Escalation" not in _dossier_md("001-test", base)
+
+    dossier = dict(base)
+    dossier["escalation"] = {
+        "marketing": {
+            "budget": 4, "consumed": 4, "est_tokens": 35900,
+            "finalized_by": "escalation",
+            "selection": {
+                "officers": ["officer-2-strategy"], "soldiers": ["soldier-stp"],
+                "rationale": {"soldier-stp": "STP fits"},
+            },
+            "invocations": [
+                {"role": "officer", "name": "officer-2-strategy", "est_tokens": 15000},
+                {"role": "soldier", "name": "soldier-positioning",
+                 "skipped": "budget-exhausted", "est_tokens": 0},
+            ],
+        },
+    }
+    md = _dossier_md("001-test", dossier)
+    assert "## Escalation" in md and "### marketing" in md
+    assert "budget: 4, consumed: 4" in md
+    assert "soldier-stp: STP fits" in md
+    assert "SKIPPED (budget-exhausted)" in md
+
+
 def test_dossier_md_lists_departments_run():
     from agency_cli.runner_bridge import _dossier_md
 

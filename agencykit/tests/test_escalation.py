@@ -74,6 +74,12 @@ def test_run_department_happy_path_trace_and_assembly():
     assert trace["consumed"] == 4
     assert trace["est_tokens"] == sum(i["est_tokens"] for i in trace["invocations"])
     assert "COMMANDER OUT" in output and "Officer: officer-2-strategy" in output and "SOLDIER OUT" in output
+    # the commander brief must appear exactly once — a second copy means the
+    # commander invocation record leaked into the assembly or the prompts
+    assert output.count("COMMANDER OUT") == 1
+    officer_prompt, soldier_prompt = calls[2][1], calls[3][1]
+    assert officer_prompt.count("COMMANDER OUT") == 1
+    assert soldier_prompt.count("COMMANDER OUT") == 1
     assert len(calls) == 4
     assert [(e["step"], e["name"], e["status"]) for e in events] == [
         ("selection", "commander-marketing-selection", "start"),
@@ -126,6 +132,26 @@ def test_budget_exhaustion_records_skips_and_keeps_output():
         "budget-exhausted",
     ]
     assert "COMMANDER OUT" in output and "OFFICER OUT" in output
+
+
+def test_null_officers_in_selection_does_not_crash():
+    # LLMs sometimes emit null instead of [] for an array field; a present-but-null
+    # key defeats dict.get(key, []) and must not abort the mission (FR-007)
+    roster = escalation.build_roster(PAYLOAD)
+    call, _ = _recorder([
+        json.dumps({"officers": None, "soldiers": ["soldier-stp"], "rationale": None}),
+        "COMMANDER OUT",
+        "SOLDIER OUT",
+    ])
+
+    output, trace = escalation.run_department(
+        "marketing", "launch", {}, config=escalation.EscalationConfig(),
+        roster=roster, call=call, base_cmd=["base"], exec_cmd=["exec"], run_timeout=9,
+    )
+
+    assert trace["selection"]["officers"] == []
+    assert trace["selection"]["soldiers"] == ["soldier-stp"]
+    assert "SOLDIER OUT" in output
 
 
 def test_unparseable_selection_falls_back_explicitly():

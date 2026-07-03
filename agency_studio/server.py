@@ -1157,7 +1157,8 @@ class StudioHandler(BaseHTTPRequestHandler):
 
     def _parse_mission_request(self) -> "tuple[str, str | None, bool, bool, bool, bool, bool, bool, bool, str, dict | None] | None":
         """Read + validate the JSON body. Returns ``(goal, engine, web_search, use_mcp,
-        use_knowledge, use_mcp_tools, use_personas, use_visual, use_video, resume_from)``, or
+        use_knowledge, use_mcp_tools, use_personas, use_visual, use_video, resume_from,
+        escalation)``, or
         ``None`` after sending the matching error: a 400 for bad JSON / a non-object body / a
         missing goal (unless ``resume_from`` is present — a resume reconstructs the goal from the
         pinned checkpoint), or the error ``_read_body`` already sent (400/408/411/413) for a

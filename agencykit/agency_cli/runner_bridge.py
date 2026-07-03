@@ -86,6 +86,41 @@ def _dossier_md(mission_id: str, d: dict) -> str:
         lines.append(f"- {json.dumps(v, ensure_ascii=False)}")
     if d.get("residual_risk"):
         lines.append(f"\n## Residual risk\n{d['residual_risk']}")
+    # Escalation trace addendum. Keyed on `escalation` so a run without it (the key
+    # is absent — escalation off or pre-feature) is byte-identical, mirroring `assets`.
+    escalation = d.get("escalation")
+    if escalation and isinstance(escalation, dict):
+        lines.append("\n## Escalation")
+        for dept, trace in escalation.items():
+            if not isinstance(trace, dict):
+                lines.append(f"- {dept}: {json.dumps(trace, ensure_ascii=False)}")
+                continue
+            lines.append(f"\n### {dept}")
+            lines.append(
+                f"- budget: {trace.get('budget')}, consumed: {trace.get('consumed')}, "
+                f"est_tokens: {trace.get('est_tokens')} (advisory)"
+            )
+            if trace.get("finalized_by"):
+                reason = f" ({trace['fallback_reason']})" if trace.get("fallback_reason") else ""
+                lines.append(f"- finalized by: {trace['finalized_by']}{reason}")
+            sel = trace.get("selection") or {}
+            if sel.get("fallback"):
+                lines.append(f"- selection fallback: {sel['fallback']}")
+            elif sel.get("officers") or sel.get("soldiers"):
+                lines.append(
+                    f"- selection: officers={sel.get('officers')}, soldiers={sel.get('soldiers')}"
+                )
+                for name, why in (sel.get("rationale") or {}).items():
+                    lines.append(f"  - {name}: {why}")
+            for inv in trace.get("invocations") or []:
+                if not isinstance(inv, dict):
+                    continue
+                if inv.get("skipped"):
+                    lines.append(f"- {inv.get('role')} {inv.get('name')}: SKIPPED ({inv['skipped']})")
+                else:
+                    lines.append(
+                        f"- {inv.get('role')} {inv.get('name')} (est_tokens: {inv.get('est_tokens', 0)})"
+                    )
     # Studio multimodal addendum. Keyed on `assets` so a non-studio run (the key is
     # absent) is byte-identical to the pre-Wave-3 output. Each entry is a render
     # manifest dict ({type, status, url|reason, model, seconds}); a non-dict entry
