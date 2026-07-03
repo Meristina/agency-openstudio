@@ -1,14 +1,22 @@
-# Third-party component licenses — Agency Studio
+# Third-party component licenses — Agency OpenStudio
 
-**Discipline**: Agency Studio is **MIT**. We only reuse/port **MIT or Apache-2.0** code.
-Any **AGPL** component is **ruled out** (viral license that would contaminate the whole
-project) — we borrow only its *concepts*, never its code.
+**Discipline (since the OpenMontage fusion, 2026-07-03)**: the combined work is
+**AGPL-3.0-only** — `openmontage/` (calesthio/OpenMontage) is AGPL-3.0 and its fusion
+into this repo was an explicit user decision. The pre-fusion agency-studio code
+(everything outside `openmontage/`, up to commit `f3e8700`) remains available under
+MIT — see `LICENSE.MIT`. New reusable components should still *prefer* MIT/Apache
+sources, but AGPL code is now admissible.
+
+> Historical discipline (pre-fusion, kept for context of the ❌ rows below):
+> agency-studio was MIT; only MIT/Apache-2.0 code was reused; AGPL components were
+> ruled out (concepts borrowed, never code). That rule is **superseded**.
 
 ## Evaluated components
 
 | Component | Intended role | License | Decision |
 |---|---|---|---|
 | **agency-kit** | Orchestration core (reused) | MIT | ✅ Project core |
+| **OpenMontage** (`calesthio/OpenMontage`) | Agentic video production (vendored subtree `openmontage/`, pinned @ `0c202b5`) | **AGPL-3.0** | ✅ **Fused** (2026-07-03, user decision — combined work relicensed to AGPL-3.0) |
 | **Uncensored-Local-Studio** | Local multimodal patterns (SD/Whisper/Kokoro) | MIT | ✅ Patterns reused, **code hardened** (not its flawed server) |
 | **GPT4All** | LocalDocs / RAG pattern | MIT | ✅ Concept reused |
 | **microsoft/markitdown** | Document → Markdown ingestion (Wave 4) | MIT | ✅ Direct dependency |

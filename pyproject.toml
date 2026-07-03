@@ -3,13 +3,16 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agency-studio"
+name = "agency-openstudio"
 version = "0.0.0"
-description = "Local-first agentic studio: agency-kit orchestration + local multimodal layer (image / voice / RAG) with a web GUI."
+description = "Local-first agentic studio: agency-kit orchestration + local multimodal layer (image / voice / video / RAG) with a web GUI, fused with OpenMontage (agentic video production)."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
-keywords = ["agentic", "local-llm", "multimodal", "stable-diffusion", "rag", "agency-kit"]
+# AGPL-3.0 since the OpenMontage fusion: openmontage/ is AGPL-3.0 and the combined
+# work must be AGPL. The pre-fusion agency-studio code remains available under MIT —
+# see LICENSE.MIT and docs/LICENSES.md.
+license = { text = "AGPL-3.0-only" }
+keywords = ["agentic", "local-llm", "multimodal", "stable-diffusion", "rag", "agency-kit", "video", "openmontage"]
 
 # Core has ZERO runtime dependencies (stdlib http.server, mirrors agency-kit's ethos).
 #
@@ -21,7 +24,9 @@ dependencies = []
 
 [project.scripts]
 # Wave 0 — launch the local Mission Console web GUI (stdlib HTTP/SSE server).
+# The Python package keeps its historical name (agency_studio); both CLI names work.
 agency-studio = "agency_studio.cli:main"
+agency-openstudio = "agency_studio.cli:main"
 
 [project.optional-dependencies]
 # Wave 2 — local multimodal inference on Apple Silicon (Metal). All MLX-native,
@@ -147,6 +152,11 @@ pdf = [
 dev = [
     "pytest",
 ]
+
+[tool.pytest.ini_options]
+# Only the studio's own suite: openmontage/ (the vendored OpenMontage tree) carries its
+# own tests with its own (heavier) dependency stack — run those from openmontage/ directly.
+testpaths = ["tests"]
 
 [tool.setuptools]
 # Wave 0 shipped the thin local server package; Wave 2 adds the engines subpackage

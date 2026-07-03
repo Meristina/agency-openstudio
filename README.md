@@ -1,4 +1,32 @@
-# Agency Studio
+# Agency OpenStudio
+
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](./LICENSE)
+
+**Agency OpenStudio = agency-studio × [OpenMontage](https://github.com/calesthio/OpenMontage).**
+The local-first agentic studio (agency-kit orchestration + local multimodal layer +
+Mission Console GUI) fused with the open-source agentic **video production** system
+(12 pipelines, 52 tools, Remotion/HyperFrames rendering), vendored at
+[`openmontage/`](./openmontage/).
+
+## The OpenMontage fusion
+
+- **What `openmontage/` brings**: full agentic video production — research → script →
+  asset generation → editing → Remotion/HyperFrames composition. Zero-key path included
+  (Piper TTS, Archive.org/NASA/Wikimedia footage, Remotion rendering).
+- **Run it standalone**: `cd openmontage && make setup`, then open it in your AI coding
+  assistant (see `openmontage/README.md`). Prereqs: Python 3.10+, Node 18+, ffmpeg.
+- **Licensing**: OpenMontage is **AGPL-3.0**, so the combined work is
+  **AGPL-3.0-only** (see [`LICENSE`](./LICENSE)). The pre-fusion agency-studio code
+  remains available under MIT — see [`LICENSE.MIT`](./LICENSE.MIT) and
+  [`docs/LICENSES.md`](./docs/LICENSES.md).
+- **Vendoring**: `git subtree --squash`, pinned at upstream `0c202b5`; update via
+  `git subtree pull`. Its internal `CLAUDE.md`/`.claude/` skills are **scoped** to the
+  subtree by Claude Code (they apply when working on files under `openmontage/`).
+- **Integration**: the studio calls OpenMontage only across a **subprocess boundary**
+  (never imported in-process). A local video backend riding the Wave-3 asset pipeline
+  is the first integration brick — see `docs/OPENMONTAGE-FUSION.md`.
+
+---
 
 > **Status: Waves 0-3 shipped.** Core (0-1): the stdlib HTTP/SSE server + `on_event`
 > hook and the React Mission Console (`app/studio/`). **Wave 2** — local multimodal
@@ -29,8 +57,9 @@ with a clean GUI and a sound security posture.
 - 🖥️ **Screen = a React/Vite GUI** served locally, with a live mission timeline (SSE).
 - 🔒 **Security first**: bind `127.0.0.1`, no `*` CORS, anti path-traversal guard
   (the inverse of the flaws found in existing runners).
-- ⚖️ **MIT-compatible licensing**: reuse MIT/Apache patterns, **rule out AGPL**
-  (Jan, chunkr) so nothing contaminates the project.
+- ⚖️ **Licensing**: the combined work is **AGPL-3.0** since the OpenMontage fusion
+  (pre-fusion studio code stays MIT-available — `LICENSE.MIT`); new components still
+  *prefer* MIT/Apache sources.
 
 ## What it will do (once implemented)
 

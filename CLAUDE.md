@@ -4,11 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-**Agency Studio** is a **local-first agentic studio**. It stacks
+**Agency OpenStudio** is a **local-first agentic studio** — the fusion of
+**agency-studio** and **[OpenMontage](https://github.com/calesthio/OpenMontage)**. It stacks
 [agency-kit](https://github.com/Meristina/agency-kit) — the orchestration *brain*
 (route → execute 9 departments → synthesize → inspect with veto) — on top of a **local
 multimodal layer** (image generation, speech-to-text, text-to-speech, document RAG) and
 a clean web GUI.
+
+**The `openmontage/` subtree.** `openmontage/` is the vendored
+[calesthio/OpenMontage](https://github.com/calesthio/OpenMontage) tree (AGPL-3.0,
+agentic video production: 12 pipelines, 52 tools, Remotion + HyperFrames rendering),
+imported via `git subtree --squash` and **pinned** (upstream commit `0c202b5`; update
+only via `git subtree pull`). Rules of engagement:
+- Its internal `CLAUDE.md`, `.claude/`, `AGENTS.md`, `.cursor/`… govern **that subtree
+  only**; its ~45 Claude Code skills load as *scoped* skills (they apply when working
+  on files under `openmontage/`). This root file governs everything else.
+- The studio talks to it **only across a subprocess boundary** (e.g. `npx remotion
+  render` in `openmontage/remotion-composer/`). **Never import it in-process** —
+  `openmontage/tools/base_tool.py` autoloads its `.env` into `os.environ` at import.
+- Avoid local edits inside `openmontage/` (they create subtree-merge divergence);
+  integration code lives in `agency_studio/`.
 
 > **Current status: Waves 0-4 shipped.** Core (Wave 0-1): the stdlib HTTP/SSE server
 > (`agency_studio/server.py`), the `agency-studio` CLI (`agency_studio/cli.py`), the React
@@ -139,9 +154,13 @@ a clean web GUI.
 - **Security is non-negotiable, from Wave 0.** Bind `127.0.0.1` (never `0.0.0.0`), no
   `Access-Control-Allow-Origin: *`, `path_inside()` guard on every static file handler,
   validate download URLs and verify binary checksums. See `docs/SECURITY.md`.
-- **License discipline: MIT-compatible only.** Reuse MIT/Apache patterns
-  (Uncensored-Local-Studio, GPT4All, markitdown). **Never fork/copy AGPL code**
-  (Jan, chunkr) — borrow concepts only. See `docs/LICENSES.md`.
+- **License discipline: the combined work is AGPL-3.0.** Since the OpenMontage fusion
+  (2026-07-03, an explicit user decision) this repo is **AGPL-3.0-only**: `openmontage/`
+  is AGPL-3.0 and the combined work must be AGPL. The pre-fusion agency-studio code
+  (everything outside `openmontage/`, up to commit `f3e8700`) remains available under
+  MIT — see `LICENSE.MIT`. New reusable components should still *prefer* MIT/Apache
+  sources, but AGPL code is now admissible. The historical "MIT-compatible only /
+  never AGPL" rule (which ruled out Jan, chunkr) is superseded. See `docs/LICENSES.md`.
 
 ## Relationship to agency-kit
 
