@@ -94,10 +94,26 @@ _check_invariants()
 # Per-mission caps (honored in document order; markers past the cap are dropped).
 MAX_IMAGES = 4
 MAX_TTS = 2
-# Video is a CLOUD render (seedance) — slow and metered — so at most one per mission. An
-# untrusted marker can't raise this, and video is additionally gated by the per-mission
+# Video is a slow, expensive render on either backend (cloud seedance, or the local
+# OpenMontage composition since the fusion) — so at most one per mission. An untrusted
+# marker can't raise this, and video is additionally gated by the per-mission
 # ``allow_video`` opt-in (see ``parse_markers``): both must hold before a single clip renders.
 MAX_VIDEO = 1
+
+# The optional structured-``cuts`` surface of a video marker (the OpenMontage local backend).
+# Strictly whitelisted: only these scene types, only these CONTENT fields per type — never a
+# timing (compute is the renderer's), never a media reference (``source``/``backgroundVideo``/
+# ``backgroundImage``/``images``/``audio`` are dropped wholesale, so an injected marker can
+# never pull a local file into a rendered/exported video). Values must be strings within
+# MAX_TEXT_BYTES; over-cap cut lists are truncated at MARKER_MAX_CUTS.
+MARKER_MAX_CUTS = 12
+_ALLOWED_CUT_FIELDS = {
+    "text_card": ("text",),
+    "hero_title": ("text", "subtitle"),
+    "stat_card": ("stat", "subtitle"),
+    "callout": ("text", "title", "callout_type"),
+}
+_ALLOWED_CALLOUT_TYPES = ("info", "warning", "tip", "quote")
 
 # Byte bounds. A whole fenced block over this is skipped *before* ``json.loads`` (a
 # cheap DoS guard against a giant blob). A prompt/text over its bound skips that one
@@ -247,7 +263,11 @@ class AssetRequest:
     source document (0-based), set by :func:`parse_markers`. It is carried into the render
     manifest so :func:`rewrite_delivered` can pair each manifest entry back to its exact
     source block by position — never by content, which collides when two markers share a
-    prompt/text (e.g. a rejected block followed by a valid one)."""
+    prompt/text (e.g. a rejected block followed by a valid one).
+
+    ``cuts`` (video only, the OpenMontage fusion) is the optional whitelisted composition
+    structure produced by :func:`_clean_cuts` — a tuple of already-sanitized scene dicts.
+    Empty for the plain prompt-only contract (and always for the cloud backend)."""
     type: str
     prompt: str = ""
     model: str = ""
@@ -256,6 +276,7 @@ class AssetRequest:
     text: str = ""
     voice: str = ""
     block_index: int = -1
+    cuts: "tuple[dict, ...]" = ()
 
 
 def parse_markers(
@@ -368,24 +389,60 @@ def _build_tts(marker: dict) -> Optional[AssetRequest]:
     return AssetRequest(type="tts", text=text, voice=voice)
 
 
+def _clean_cuts(marker: dict) -> "tuple[dict, ...]":
+    """The whitelisted composition structure of a video marker (the OpenMontage local
+    backend), or ``()`` — never an error. Each cut keeps ONLY its scene type's allowlisted
+    content fields (``_ALLOWED_CUT_FIELDS``), each bounded like every other untrusted text
+    field; a cut with an unknown/missing type, a bad required first field, or a non-dict
+    shape is dropped (soft error — the prompt-only fallback still renders). Timings and
+    media references never survive: compute size and the filesystem are not the marker's
+    to choose (see the constants block). Purely advisory for the cloud backend (ignored)."""
+    raw = marker.get("cuts")
+    if not isinstance(raw, list):
+        return ()
+    cleaned: "list[dict]" = []
+    for cut in raw[:MARKER_MAX_CUTS]:
+        if not isinstance(cut, dict):
+            continue
+        kind = cut.get("type")
+        allowed = _ALLOWED_CUT_FIELDS.get(kind) if isinstance(kind, str) else None
+        if allowed is None:
+            continue
+        fields = {}
+        for key in allowed:
+            value = _clean_text(cut, key)
+            if value is not None:
+                fields[key] = value
+        if allowed[0] not in fields:  # the scene's required field (text/stat) must survive
+            continue
+        if "callout_type" in fields and fields["callout_type"] not in _ALLOWED_CALLOUT_TYPES:
+            del fields["callout_type"]  # soft error — the component has a default
+        cleaned.append({"type": kind, **fields})
+    return tuple(cleaned)
+
+
 def _build_video(marker: dict) -> Optional[AssetRequest]:
-    """Validate a video marker's single whitelisted field (``prompt``). The cloud model, the
-    clip duration, and the resolution are NOT the marker's to choose — the model is fixed to the
-    seedance registry default and the render params are its fixed safe caps — so an untrusted
-    marker can't select an expensive tier / long clip as a cost-DoS. Every other key
-    (``model``/``duration``/``resolution``/``path``/``filename``) is ignored. Returns None (drop)
-    on a bad/oversized prompt. The per-mission ``allow_video`` gate has already been applied in
-    ``parse_markers`` — reaching here means the mission opted into cloud video."""
+    """Validate a video marker's whitelisted fields (``prompt``, and optionally ``cuts`` —
+    the OpenMontage composition structure, see ``_clean_cuts``). The model, the clip
+    duration, and the resolution are NOT the marker's to choose — the model comes from the
+    seedance registry (``default_video_model``, env-selected) and the render params are the
+    backend's fixed safe caps — so an untrusted marker can't select an expensive tier /
+    long clip as a cost-DoS. Every other key (``model``/``duration``/``resolution``/
+    ``path``/``filename``) is ignored. Returns None (drop) on a bad/oversized prompt; bad
+    cuts degrade to the prompt-only render, never to a drop. The per-mission ``allow_video``
+    gate has already been applied in ``parse_markers`` — reaching here means the mission
+    opted into video."""
     prompt = _clean_text(marker, "prompt")
     if prompt is None:
         return None
-    return AssetRequest(type="video", prompt=prompt)
+    return AssetRequest(type="video", prompt=prompt, cuts=_clean_cuts(marker))
 
 
 # ── render (step 5 — the consumer half: needs a warm ModelManager) ────────────
 
 # Render order: local GPU models first (image, then TTS — grouped to avoid warm-slot thrash),
-# the cloud video call last. An unknown type sorts last too (defensive; never reached).
+# the video render last (a cloud call or a local subprocess — either way no GPU residency, and
+# the slowest step). An unknown type sorts last too (defensive; never reached).
 _RENDER_ORDER = {"image": 0, "tts": 1, "video": 2}
 
 
@@ -433,7 +490,8 @@ def render(
     manifest: "list[Optional[dict]]" = [None] * len(requests)
     # Render images first, then TTS, then video last — but keep each result at its original
     # index. Images/TTS are the local, mutually-exclusive GPU models (grouped to avoid warm-slot
-    # thrash); video is a cloud call (no residency) so it goes last, after the fast local renders.
+    # thrash); video has no GPU residency on either backend (a cloud call, or the OpenMontage
+    # subprocess) and is the slowest step, so it goes last, after the fast local renders.
     order = sorted(range(len(requests)), key=lambda i: _RENDER_ORDER.get(requests[i].type, 9))
     cancelled = False
     for i in order:
@@ -457,8 +515,11 @@ def render(
                     "block": req.block_index,
                 }
             elif req.type == "video":
+                # ``cuts`` only when the marker structured them — the plain prompt-only call
+                # stays byte-identical (and injected test doubles need no new parameter).
+                extra = {"cuts": list(req.cuts)} if req.cuts else {}
                 result = manager.generate_video(
-                    req.prompt, out_dir=out_dir, should_cancel=should_cancel)
+                    req.prompt, out_dir=out_dir, should_cancel=should_cancel, **extra)
                 entry = {
                     "type": "video", "status": "ok", "url": to_url(result.path),
                     "model": result.model, "seconds": result.seconds, "prompt": req.prompt,

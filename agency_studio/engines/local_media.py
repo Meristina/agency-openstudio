@@ -550,39 +550,49 @@ class ModelManager:
         self, prompt: str, *, model: "Optional[str]" = None,
         out_dir: "str | Path | None" = None,
         should_cancel: "Optional[Callable[[], bool]]" = None,
+        cuts: "Optional[list]" = None,
     ) -> VideoResult:
-        """Render one video from ``prompt`` via the CLOUD seedance backend (Wave 6 — the seedance
-        brick) and write the mp4 under ``videos/``. The studio's FIRST *cloud* asset render:
-        text-to-video does not fit a 16 GB Mac, so this is an off-machine call — reachable only
-        after the caller has already passed the per-mission ``video`` opt-in (enforced upstream in
-        ``assets.parse_markers``) AND the env API key is present (enforced in ``seedance._probe_cloud``).
+        """Render one video from ``prompt`` and write the mp4 under ``videos/``. Two backends
+        behind one seam (``seedance._backend``): the CLOUD seedance default (Wave 6 — off-machine,
+        reachable only after the per-mission ``video`` opt-in enforced upstream in
+        ``assets.parse_markers`` AND the env API key enforced in ``seedance._probe_cloud``), and —
+        since the OpenMontage fusion — the LOCAL ``openmontage-remotion`` composition renderer
+        (a subprocess, no network; select it with ``AGENCY_STUDIO_VIDEO_BACKEND``, resolved by
+        ``seedance.default_video_model``). ``cuts`` (optional, already whitelisted in
+        ``assets._clean_cuts``) structure the local composition; the cloud backend is prompt-only
+        so they are not forwarded to it.
 
         Keyed by ``video:<id>`` so it flows through the same residency seam as every other model —
-        a cloud client has no residency cost, but this keeps evict/warm logic uniform with the
-        cloud-caption path. The backend is lazy-imported, so a missing key raises
-        ``SeedanceUnavailable`` (→ 501) from the probe, before any eviction.
+        neither backend has a residency cost, but this keeps evict/warm logic uniform with the
+        cloud-caption path. The backend is lazy-imported, so a missing key / missing Node install
+        raises ``SeedanceUnavailable`` / ``OpenMontageUnavailable`` (→ 501) from the probe, before
+        any eviction.
 
-        Only the residency step (``_ensure``) runs on the device worker: a cloud client has no
-        Metal residency to protect, so the up-to-~10-min network render runs OFF the worker —
-        otherwise it would block every other media op (image/tts/stt/embed) for the whole poll.
-        ``should_cancel`` is threaded into that render so a "Stop mission" can abort the poll
-        promptly."""
+        Only the residency step (``_ensure``) runs on the device worker: there is no Metal
+        residency to protect, so the render itself (an up-to-~10-min cloud poll, or a
+        multi-minute local Remotion/Chromium run) runs OFF the worker — otherwise it would block
+        every other media op (image/tts/stt/embed) for the duration. ``should_cancel`` is
+        threaded into the render so a "Stop mission" aborts promptly (the local backend
+        ``killpg``\\ s its whole subprocess tree)."""
         if not prompt.strip():
             raise ValueError("prompt must not be empty")
         from .. import seedance  # lazy: avoids a load-time cycle, keeps the module self-contained
-        entry = seedance.video_model(model or seedance.DEFAULT_VIDEO_MODEL)  # ValueError on unknown id
+        entry = seedance.video_model(model or seedance.default_video_model())  # ValueError on unknown id
         probe, load, run = seedance._backend(entry)
         out = self._asset_path("videos", "mp4", out_dir)
         started = time.monotonic()
-        # Residency (probe/evict/warm) runs on the device worker; the cloud render does NOT.
+        # Residency (probe/evict/warm) runs on the device worker; the render itself does NOT.
         backend = self._run_on_worker(
             lambda: self._ensure(
                 f"video:{entry.id}",
-                lambda: probe(entry),   # the cloud probe needs the entry (endpoint + env key)
+                lambda: probe(entry),   # both probes need the entry (endpoint+key / node+subtree)
                 lambda: load(entry),
             )
         )
-        run(backend, entry, prompt=prompt, out_path=out, should_cancel=should_cancel)
+        kwargs = {"prompt": prompt, "out_path": out, "should_cancel": should_cancel}
+        if entry.backend == "local":
+            kwargs["cuts"] = cuts   # cloud is prompt-only; its run() signature stays untouched
+        run(backend, entry, **kwargs)
         return VideoResult(
             path=out, prompt=prompt,
             seconds=round(time.monotonic() - started, 2), model=entry.id,
