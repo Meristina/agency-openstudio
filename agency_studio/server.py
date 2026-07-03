@@ -168,16 +168,23 @@ ASSET_CLAUSE = (
     "no asset is warranted — never invent one to fill space."
 )
 
-# The extra stanza appended to ASSET_CLAUSE only when a mission opts into cloud video. Kept OFF
+# The extra stanza appended to ASSET_CLAUSE only when a mission opts into video. Kept OFF
 # the base clause so a department is never invited to emit a ```asset video marker the studio
 # would only drop (wasted tokens + a phantom "I made a video") — the offer appears exactly when
 # the render path is actually enabled, mirroring how the video marker is parse-gated on the flag.
+# Backend-neutral: the render is the cloud seedance default or — since the OpenMontage fusion —
+# the local Remotion composition (env-selected, seedance.default_video_model); the marker never
+# knows or chooses which. ``cuts`` is the optional composition structure (whitelisted in
+# assets._clean_cuts); the cloud backend simply ignores it.
 ASSET_CLAUSE_VIDEO = (
-    "\nYou may also request ONE short marketing video (rendered via a cloud model):\n"
+    "\nYou may also request ONE short marketing video:\n"
     "```asset\n"
-    '{"type": "video", "prompt": "<concise description of the ~5s clip>"}\n'
+    '{"type": "video", "prompt": "<concise description of the short clip>", '
+    '"cuts": [{"type": "hero_title", "text": "...", "subtitle": "..."}, '
+    '{"type": "stat_card", "stat": "...", "subtitle": "..."}]}\n'
     "```\n"
-    "At most one video per mission; only `type` and `prompt` are honored."
+    "`cuts` is optional (scene types: text_card, hero_title, stat_card, callout). At most "
+    "one video per mission; only `type`, `prompt` and `cuts` are honored."
 )
 
 
@@ -1134,8 +1141,10 @@ class StudioHandler(BaseHTTPRequestHandler):
         is the tool-calling counterpart to Wave 5's read-only ``mcp`` resources flag; ``personas``
         injects the user's curated per-department persona doctrine; ``visual`` retrieves captions of
         the user's ingested images (a pure-local vector lookup); ``video`` lets a department request
-        ONE cloud-rendered marketing video (the studio's only off-machine mission-time render —
-        gated here, plus an env API key at render time). ``resume_from`` (Wave 7 crash-recovery) is
+        ONE rendered marketing video — the cloud seedance default (the studio's only off-machine
+        mission-time render — gated here, plus an env API key at render time), or the fully local
+        OpenMontage composition backend since the fusion
+        (``AGENCY_STUDIO_VIDEO_BACKEND=openmontage-remotion``, no network). ``resume_from`` (Wave 7 crash-recovery) is
         an optional checkpoint id: when present the goal/engine/flags are taken from the pinned
         checkpoint (see ``_handle_run_mission`` / ``_resolve_resume``), so the body goal is optional
         and only used as a stale-checkpoint cross-check."""

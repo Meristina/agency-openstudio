@@ -22,8 +22,13 @@ def test_default_video_model_is_registered_and_cloud():
 def test_every_registered_endpoint_is_https():
     # SECURITY.md #4 — an off-machine flow may only target https. The parser never lets a marker
     # name a model, so the registry is the ONLY place a video endpoint is chosen: assert them all.
+    # A LOCAL entry (the OpenMontage fusion) is the inverse invariant: no endpoint at all — it
+    # must never look like it has an off-machine surface.
     for entry in seedance.VIDEO_MODELS.values():
-        assert entry.endpoint.startswith("https://"), entry.id
+        if entry.backend == "cloud":
+            assert entry.endpoint.startswith("https://"), entry.id
+        else:
+            assert entry.endpoint == "" and entry.api_model == "", entry.id
 
 
 def test_video_model_unknown_id_raises():
@@ -31,16 +36,40 @@ def test_video_model_unknown_id_raises():
         seedance.video_model("nope")
 
 
-def test_seedance_is_cloud_only():
-    # Unlike visual RAG (local default + optional cloud), video has no local backend — text-to-video
-    # doesn't fit the 16 GB Mac, so the seam carries a single cloud triple.
+def test_static_registry_is_cloud_only_local_resolves_lazily():
+    # The static triple registry stays cloud-only; the OpenMontage `local` triple resolves
+    # lazily inside _backend (a subprocess-boundary module, imported only when selected).
     assert set(seedance._VIDEO_BACKENDS) == {"cloud"}
+    from agency_studio import openmontage_backend
+    probe, load, run = seedance._backend(seedance.VIDEO_MODELS["openmontage-remotion"])
+    assert (probe, load, run) == (openmontage_backend._probe_local,
+                                  openmontage_backend._load_local,
+                                  openmontage_backend._run_local)
 
 
 def test_backend_unknown_name_raises():
-    bad = seedance.VideoModel(id="x", label="x", backend="local")
+    bad = seedance.VideoModel(id="x", label="x", backend="nope")
     with pytest.raises(ValueError, match="unknown video backend"):
         seedance._backend(bad)
+
+
+# ── the env backend selector (default_video_model) ────────────────────────────
+def test_default_video_model_unset_env_is_cloud_default(monkeypatch):
+    monkeypatch.delenv(seedance.VIDEO_BACKEND_ENV, raising=False)
+    assert seedance.default_video_model() == seedance.DEFAULT_VIDEO_MODEL
+
+
+def test_default_video_model_env_selects_local(monkeypatch):
+    monkeypatch.setenv(seedance.VIDEO_BACKEND_ENV, "openmontage-remotion")
+    assert seedance.default_video_model() == "openmontage-remotion"
+
+
+def test_default_video_model_env_typo_fails_loud(monkeypatch):
+    # A typo must never silently fall back to the CLOUD default (an off-machine call the
+    # user thought they had redirected locally).
+    monkeypatch.setenv(seedance.VIDEO_BACKEND_ENV, "openmontage-typo")
+    with pytest.raises(ValueError, match=seedance.VIDEO_BACKEND_ENV):
+        seedance.default_video_model()
 
 
 # ── the cloud backend's safety gates (network-free) ───────────────────────────

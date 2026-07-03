@@ -22,9 +22,13 @@ Mission Console GUI) fused with the open-source agentic **video production** sys
 - **Vendoring**: `git subtree --squash`, pinned at upstream `0c202b5`; update via
   `git subtree pull`. Its internal `CLAUDE.md`/`.claude/` skills are **scoped** to the
   subtree by Claude Code (they apply when working on files under `openmontage/`).
-- **Integration**: the studio calls OpenMontage only across a **subprocess boundary**
-  (never imported in-process). A local video backend riding the Wave-3 asset pipeline
-  is the first integration brick — see `docs/OPENMONTAGE-FUSION.md`.
+- **Integration (brick A1, shipped)**: the studio calls OpenMontage only across a
+  **subprocess boundary** (never imported in-process). The local video backend rides the
+  Wave-3 asset pipeline: set `AGENCY_STUDIO_VIDEO_BACKEND=openmontage-remotion` (after a
+  one-time `npm install` in `openmontage/remotion-composer/`) and a mission's `video`
+  marker renders a fully local Remotion composition instead of the cloud seedance call —
+  zero network, same gallery/PDF. Details + the deferred A2 brick:
+  [`docs/OPENMONTAGE-FUSION.md`](./docs/OPENMONTAGE-FUSION.md).
 
 ---
 

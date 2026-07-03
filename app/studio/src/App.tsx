@@ -43,8 +43,9 @@ export default function App() {
   const [personaCount, setPersonaCount] = useState<number | null>(null);
   const [useVisual, setUseVisual] = useState(false);
   const [visualCount, setVisualCount] = useState<number | null>(null);
-  // Wave 6 — cloud video (seedance): opt-in per mission (default off) so a mission never
-  // reaches off-machine unless the user enables it AND an API key is present at render time.
+  // Wave 6 — video: opt-in per mission (default off). The backend is server-side
+  // (cloud seedance by default — off-machine only with an env API key at render time —
+  // or the local OpenMontage composition via AGENCY_STUDIO_VIDEO_BACKEND).
   const [useVideo, setUseVideo] = useState(false);
   const [events, setEvents] = useState<MissionEvent[]>([]);
   const [running, setRunning] = useState(false);
@@ -427,7 +428,7 @@ export default function App() {
                 onChange={(ev) => setUseVideo(ev.target.checked)}
                 disabled={running}
               />
-              Use cloud video
+              Use video (cloud / local OpenMontage)
             </label>
             <span className="hint">⌘/Ctrl+Enter to run</span>
           </div>

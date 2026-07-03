@@ -27,12 +27,15 @@ All three must hold for a single byte to leave the machine. The marker itself ne
 model tier, duration, or resolution — those are the parser's fixed safe caps (assets.py), so an
 untrusted marker can't weaponise an expensive/long render as a cost-DoS.
 
-Cloud-only by design
---------------------
-Unlike ``visual.py`` (a local MLX default + an optional cloud backend) there is no local video
-model — text-to-video does not fit the target Mac, so ``seedance-2.0`` is intrinsically remote.
-The backend seam therefore carries a single ``cloud`` triple. The concrete POST + poll +
-download is validated live on the network (deferred like Wave 2/5); until then ``_run_cloud``
+Cloud by default, local since the OpenMontage fusion
+----------------------------------------------------
+Text-to-*footage* generation does not fit the target Mac, so ``seedance-2.0`` (cloud) stays
+the default. But the OpenMontage fusion added a genuinely LOCAL alternative — *composition*
+video (animated text/stat scenes) rendered by ``openmontage/remotion-composer`` across a
+subprocess boundary (``openmontage_backend.py``, the ``local`` triple, resolved lazily in
+``_backend``). Select it per-install with ``AGENCY_STUDIO_VIDEO_BACKEND=openmontage-remotion``
+— zero server/GUI change, the ``make_extractor`` pattern. The cloud POST + poll + download is
+still validated live on the network (deferred like Wave 2/5); until then ``_run_cloud``
 degrades to a clean ``SeedanceUnavailable`` rather than a silent no-op.
 """
 
@@ -99,6 +102,11 @@ class VideoModel:
 
 DEFAULT_VIDEO_MODEL = "seedance-2.0"
 
+# Per-install backend selector (the knowledge.make_extractor pattern): name a registry id in
+# the env to change which video model a marker-driven render uses — the marker itself still
+# never chooses. Unset ⇒ DEFAULT_VIDEO_MODEL; an unknown name fails loud at render time.
+VIDEO_BACKEND_ENV = "AGENCY_STUDIO_VIDEO_BACKEND"
+
 # The concrete endpoint + request surface are validated live on the network (deferred like
 # Wave 2/5). Until then the cloud backend degrades to SeedanceUnavailable. The endpoint is
 # https (enforced by _probe_cloud); a marker never names a model, so this registry is the only
@@ -109,7 +117,28 @@ VIDEO_MODELS: "dict[str, VideoModel]" = {
         endpoint="https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
         api_model="seedance-2-0", default=True,
     ),
+    # The OpenMontage fusion's local backend — composition video (Remotion) rendered fully
+    # on-machine by openmontage/remotion-composer across a subprocess boundary. No endpoint,
+    # no key: its probe gates on node/npx + the vendored subtree (openmontage_backend.py).
+    "openmontage-remotion": VideoModel(
+        id="openmontage-remotion", label="OpenMontage Remotion (local, on-machine)",
+        backend="local",
+    ),
 }
+
+
+def default_video_model() -> str:
+    """The registry id a model-less render resolves to: ``$AGENCY_STUDIO_VIDEO_BACKEND`` when
+    set (fail-loud on an unknown name — a typo must not silently fall back to a cloud call),
+    else ``DEFAULT_VIDEO_MODEL``. The env is read at call time, like the API key."""
+    name = (os.environ.get(VIDEO_BACKEND_ENV) or "").strip()
+    if not name:
+        return DEFAULT_VIDEO_MODEL
+    if name not in VIDEO_MODELS:
+        raise ValueError(
+            f"unknown {VIDEO_BACKEND_ENV}={name!r} — available: {', '.join(VIDEO_MODELS)}"
+        )
+    return name
 
 
 def video_model(model_id: str) -> VideoModel:
@@ -293,7 +322,15 @@ _VIDEO_BACKENDS = {
 
 def _backend(entry: VideoModel):
     """The ``(probe, load, run)`` triple for a model's backend — mirrors ``visual._backend``.
-    ``ValueError`` on an unknown backend name."""
+    ``local`` (the OpenMontage fusion) resolves lazily so this module stays import-light and
+    self-contained when only the cloud path is exercised. ``ValueError`` on an unknown name."""
+    if entry.backend == "local":
+        from . import openmontage_backend  # lazy — subprocess-boundary module, stdlib-only
+        return (
+            openmontage_backend._probe_local,
+            openmontage_backend._load_local,
+            openmontage_backend._run_local,
+        )
     try:
         return _VIDEO_BACKENDS[entry.backend]
     except KeyError:
