@@ -231,13 +231,57 @@ Ark/DashScope ids are account-specific.
 | **Cloud video** (seedance / Volcengine Ark) | client implemented (create-task → poll → download, https-checked); offline-tested. Live render **deferred** — needs a Volcengine Ark key (China region; BytePlus international would need an endpoint override) | 🟡 implemented; live render deferred (key) |
 | **PDF export** (`[pdf]`) | installed `weasyprint` + `markdown`; `GET /api/mission/{id}/pdf` → **`200`**, a valid 67 KB PDF. macOS needs `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` at launch (homebrew glib/pango) | ✅ **live-proven** |
 | **GLiNER2** on-device KG (`[kg]`) | installed `gliner2` (torch); `AGENCY_STUDIO_KG_BACKEND=gliner2` extracted 10 triples from sample text with **no `claude` CLI**, RAM safe (~1.3 GB) | ✅ **live-proven** |
+
+## Post-#64 live re-validation (Jul 3) — real mission + the four core models, BlueStacks-safe
+
+After the Waves 0–6 audit-hardening pass (**#64**), a fresh live run on the reference Mac to confirm
+the fixes hold on the real path — deliberately run with **BlueStacks closed** for the FLUX step
+(the documented 16 GB FLUX + external-app jetsam caveat, **[#61]**); the mission + light models ran
+first with BlueStacks still up, since they carry no local-model RAM.
+
+**A full three-department mission, run to completion:** `POST /api/mission` with a B2B-SaaS goal →
+`route ["solve","product","marketing"]` → all three departments (solve 208 s · product 399 s ·
+marketing 624 s) → **a real veto loop: VETO (it.1) → VETO (it.2) → PASS-WITH-FIXES (it.3)** →
+`delivered:true`, dossier persisted (`missions/006-…`) and listed by the API. Total ~1185 s, 21 SSE
+frames. The inspector's live web spot-checks **caught an untraceable "~75 % first-week churn /
+NetSuite" figure and forced its retraction** across iterations — sourcing discipline working on real
+data, not a stub.
+
+**The four core local models, re-proven serial (16 GB mutual-exclusion held throughout):**
+
+| Model | Live result | Resident after |
+|---|---|---|
+| TTS `kokoro` | ✅ 2.3 s wav | — |
+| STT `whisper-large-v3-turbo` | ✅ TTS→STT round-trip, 3.5 s | `stt` |
+| embed `nomic-v1.5` | ✅ `POST /api/docs` → `201`, 1 chunk | `embed:nomic-text-v1.5` |
+| image `flux-schnell` (8-bit) | ✅ 768² PNG, 215 s, **no crash** | `flux-schnell` |
+
+Each load **evicted the prior resident** as designed. FLUX loaded with BlueStacks closed: a load
+spike to ~12 % free RAM, then steady ~31 %, never a jetsam — slow (~52 s/step, swap on 16 GB) but it
+completed and produced a coherent, on-prompt hero image.
+
+**First live sighting of a department emitting an `asset` marker — and the render gate working as
+designed.** The marketing department *chose* to emit a `{"type":"image", …}` marker (the missing half
+of the "Honest gaps" note below). It was **not** rendered because the mission ended `PASS-WITH-FIXES`,
+and the render bridge is gated on the **exact `PASS` token** (`runner_bridge.py:200` — deliberate:
+assets render only for a cleanly-passed deliverable). So the raw marker correctly stayed in the
+deliverable and no FLUX render fired mid-mission. This is the documented gate behaving as specified —
+which is why FLUX was validated deterministically via `/api/image` instead of gambling on a clean-PASS
+mission. Half the gap is now closed (a real marker was emitted); the render-then-rewrite half still
+awaits a mission that both emits a marker **and** earns a clean `PASS`.
+
 ## Honest gaps / not covered live
 
-- **An `asset` render inside a real mission.** The render bridge, marker parse/gate, `video`/image
-  branches, and `asset` SSE frames are all covered by offline tests, and `/api/video`→404 confirms
-  video is mission-only. But a real department did not *choose* to emit an image/video marker in
-  the marketing mission run, so an end-to-end "department emits marker → studio renders → deliverable
-  rewritten" was not observed. Cause is legitimate (the capability clause is optional), not a defect.
+- **An `asset` render inside a real mission — half closed (Jul 3).** The render bridge, marker
+  parse/gate, `video`/image branches, and `asset` SSE frames are all covered by offline tests, and
+  `/api/video`→404 confirms video is mission-only. A department **has now been observed emitting an
+  image marker** on a real mission (the marketing dept, Jul 3 re-validation) — closing the "did a
+  department ever choose to emit one?" half. The *render-then-rewrite* half is still unobserved,
+  because that mission ended `PASS-WITH-FIXES` and the bridge renders only on the **exact `PASS`
+  token** (`runner_bridge.py:200`, by design). So an end-to-end "department emits marker → studio
+  renders → deliverable rewritten" needs a mission that both emits a marker **and** earns a clean
+  `PASS`. Cause is legitimate (the capability clause is optional; the render gate is deliberate),
+  not a defect.
 - **The `knowledge` flag's active path — now CLOSED** (Jul 2 evening sweep). Both halves are
   live-proven on the reference Mac: the CLI **build** (`POST /api/graph/build` → real
   `ClaudeCliExtractor` → a 202-node / 139-edge graph; plus the **[#54]** rebuild lifecycle —
@@ -267,9 +311,12 @@ Not everything is "green". Being precise about what the live pass actually prove
 - **Since live-proven (Jul 3)** — PDF export (`[pdf]` installed → a real 67 KB PDF), the GLiNER2
   on-device KG backend (`[kg]` installed → triples with no CLI), and the **cloud VLM** (DashScope
   Qwen-VL → a real caption). See "Cloud backends".
-- **Still not exercised live** — an `asset` marker actually emitted-then-rendered inside a mission
-  (no department chose to emit one), and the **seedance cloud video render** (client implemented +
-  offline-tested; a live render needs a Volcengine Ark key).
+- **Still not exercised live** — an `asset` marker emitted-**then-rendered** inside a mission. A
+  department has now been seen *emitting* an image marker (Jul 3), but that mission ended
+  `PASS-WITH-FIXES`, and the render bridge only fires on a clean `PASS` (by design), so the
+  render-then-rewrite half still awaits a clean-PASS mission that emits a marker. Also the
+  **seedance cloud video render** (client implemented + offline-tested; a live render needs a
+  Volcengine Ark key).
 - **Failed** — `boogu-base` (OOM / swap on 16 GB, **[#39]**).
 
 The live pass paid for itself by catching two real bugs (#37, #40) and one hardware limit (#39)
