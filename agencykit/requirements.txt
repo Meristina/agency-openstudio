@@ -1,0 +1,3 @@
+# agency-kit has no runtime dependencies — missions run through a local agent CLI
+# engine (Claude Code / Codex / Gemini) via subprocess. Install one of those CLIs.
+# Dev/optional extras live in pyproject.toml: pip install -e ".[dev]"
