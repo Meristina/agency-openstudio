@@ -170,9 +170,11 @@ Offline suites cover it too (agency-kit +11 tests, studio +12); the drill is the
 ## Full live validation sweep (Jul 2 evening) — every model, every path, on the M4
 
 A single end-to-end pass that exercised **every runnable surface** on the reference Mac in one
-session: all local models, all mission pipeline flags, and the checkpoint/resume loop. The only
-untested surfaces are the two **cloud-only** flows (seedance video render + the optional cloud VLM),
-deferred by design for lack of API keys, and the GLiNER2 on-device KG backend (torch/Mac-deferred).
+session: all local models, all mission pipeline flags, and the checkpoint/resume loop. At the time
+the only untested surfaces were the two **cloud** flows and the GLiNER2 backend — since then the
+**cloud VLM has been live-validated** (see "Cloud backends" below), leaving only the seedance video
+render (needs a Volcengine Ark key) and the optional GLiNER2 on-device KG backend (now installed +
+tested — also below) as the last deferred items.
 
 **Models — 7/7 loadable pass** (serial, honouring 16 GB mutual-exclusion):
 
@@ -212,8 +214,23 @@ endpoint); PDF export stays a graceful `501` with `[pdf]`/WeasyPrint absent.
 _Note for a follow-up:_ the `knowledge` build produced 202 nodes including entities from the user's
 **real global mission history** — the sweep server ran without HOME isolation, so this is expected
 here, but it's worth a separate check that `GraphRetriever.build_from_history`'s project-scoping
-matches the intended per-project vs global semantics.
+matches the intended per-project vs global semantics. (Now fixed — a strict-scope build option so
+the graph only absorbs missions explicitly stamped to the project.)
 
+## Cloud backends + the last on-device extras (Jul 3)
+
+Two deferred surfaces were *unimplemented stubs*, not just un-keyed: `seedance._run_cloud` (video)
+and `visual._run_cloud` (VLM) each raised `Unavailable` after the key check. Both are now
+**implemented** (stdlib `urllib` clients, source-driven from each provider's API) and offline-tested;
+the video/VLM model ids are env-overridable (`AGENCY_STUDIO_VIDEO_MODEL` / `…_VISUAL_MODEL`) since
+Ark/DashScope ids are account-specific.
+
+| Element | Live test | Result |
+|---|---|---|
+| **Cloud VLM** (DashScope Qwen-VL) | with `AGENCY_STUDIO_VISUAL_API_KEY` set: `visual._run_cloud` on a test image (`qwen-vl-max`, `dashscope-intl`) → an accurate caption ("red circle on blue, 'SALE -50%', a promotional message"); and `POST /api/visual?cloud=1` → **`201`**, cloud caption → embed → stored | ✅ **live-proven** |
+| **Cloud video** (seedance / Volcengine Ark) | client implemented (create-task → poll → download, https-checked); offline-tested. Live render **deferred** — needs a Volcengine Ark key (China region; BytePlus international would need an endpoint override) | 🟡 implemented; live render deferred (key) |
+| **PDF export** (`[pdf]`) | installed `weasyprint` + `markdown`; `GET /api/mission/{id}/pdf` → **`200`**, a valid 67 KB PDF. macOS needs `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` at launch (homebrew glib/pango) | ✅ **live-proven** |
+| **GLiNER2** on-device KG (`[kg]`) | installed `gliner2` (torch); `AGENCY_STUDIO_KG_BACKEND=gliner2` extracted 10 triples from sample text with **no `claude` CLI**, RAM safe (~1.3 GB) | ✅ **live-proven** |
 ## Honest gaps / not covered live
 
 - **An `asset` render inside a real mission.** The render bridge, marker parse/gate, `video`/image
@@ -229,8 +246,9 @@ matches the intended per-project vs global semantics.
   `context_clause` injection). The only remaining KG gap is the **optional GLiNER2 on-device
   backend** (the `[kg]` extra; **[#47]/[#48]/[#50]**), which stays torch/Mac-deferred — not
   exercised, since the default CLI path needs no extra.
-- **The cloud paths** — seedance video render (`_run_cloud`) and the optional cloud VLM — remain
-  network-deferred (no live endpoint / API key), as designed.
+- **The cloud paths** — both `_run_cloud` clients are now implemented + offline-tested (Jul 3). The
+  **cloud VLM is live-proven** (DashScope Qwen-VL). Only the **seedance video render** remains
+  network-deferred — the client is done, but a live render needs a Volcengine Ark key (China region).
 
 ## Verdict — and an honest coverage split
 
@@ -246,10 +264,12 @@ Not everything is "green". Being precise about what the live pass actually prove
   `mcp` resources + `mcp_tools` (a real `server-everything`), `knowledge` (a 202-node graph built
   then retrieved), `visual` (image caption→retrieval), and `personas` (a curated store) all reached
   the active `done` state with real data.
-- **Not exercised live** — an `asset` marker actually emitted-then-rendered inside a mission (no
-  department chose to emit one), the real PDF render (`[pdf]` absent → 501), the GLiNER2 on-device
-  KG backend (torch/Mac-deferred), and the cloud paths (seedance render / cloud VLM, network-deferred
-  by design).
+- **Since live-proven (Jul 3)** — PDF export (`[pdf]` installed → a real 67 KB PDF), the GLiNER2
+  on-device KG backend (`[kg]` installed → triples with no CLI), and the **cloud VLM** (DashScope
+  Qwen-VL → a real caption). See "Cloud backends".
+- **Still not exercised live** — an `asset` marker actually emitted-then-rendered inside a mission
+  (no department chose to emit one), and the **seedance cloud video render** (client implemented +
+  offline-tested; a live render needs a Volcengine Ark key).
 - **Failed** — `boogu-base` (OOM / swap on 16 GB, **[#39]**).
 
 The live pass paid for itself by catching two real bugs (#37, #40) and one hardware limit (#39)
