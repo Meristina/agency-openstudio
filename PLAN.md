@@ -33,7 +33,7 @@ References: opencode `serve`, rivet-dev/sandbox-agent.
 **Done when**: a mission runs unchanged on claude; adding an engine = one contract
 implementation + its suite, with zero changes to the mission loop.
 
-## Brick 2 — The specialist army plays (a real marketing / B2B / event agency)
+## Brick 2 — The specialist army plays (a real marketing / B2B / event agency) *(done — `1ea04d7`, #4)*
 
 Today the mission loop only loads the condensed doctrine (`_shared-{dept}.md`) — the
 commanders/officers/soldiers of the 9 department kits
