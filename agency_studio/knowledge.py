@@ -728,19 +728,33 @@ class GraphRetriever:
     subgraph (clause stays None)."""
 
     def __init__(self, extractor: "Optional[Extractor]" = None, *, db_path: "Optional[Path]" = None):
-        self._extractor = extractor if extractor is not None else make_extractor()
+        # The extractor is resolved LAZILY (on first build), not here — so a pure READ path
+        # (retrieve / stats via GET /api/graph, or the mission-time injection) works even when
+        # AGENCY_STUDIO_KG_BACKEND is set to an invalid value (make_extractor would raise). This
+        # honours the module contract: "querying an already-built graph needs nothing at all".
+        # An explicit extractor (the offline suite's stub) is kept as-is.
+        self._extractor = extractor
         self._db_path = db_path or (rag.data_dir() / "knowledge.db")
         self._store = _GraphStore(self._db_path)
+        self._build_lock = threading.Lock()  # serialises a full rebuild's clear + re-add
+
+    def _get_extractor(self) -> "Extractor":
+        """Resolve the extraction backend on first build (deferred from ``__init__`` so a bad
+        ``$AGENCY_STUDIO_KG_BACKEND`` can't break the dependency-free read paths). Cached after."""
+        if self._extractor is None:
+            self._extractor = make_extractor()
+        return self._extractor
 
     # -- build ------------------------------------------------------------------
     def build_from_texts(self, items: "List[tuple[str, str]]") -> int:
         """Extract + store triples from ``(text, source_ref)`` pairs. Returns the count stored.
         The one method the offline suite drives with a stub extractor."""
+        extractor = self._get_extractor()
         total = 0
         for text, source_ref in items:
             if not (text or "").strip():
                 continue
-            total += self._store.add_triples(self._extractor.extract(text, source_ref), source_ref)
+            total += self._store.add_triples(extractor.extract(text, source_ref), source_ref)
         return total
 
     def _doc_items(self, retriever) -> "List[tuple[str, str]]":
@@ -805,15 +819,23 @@ class GraphRetriever:
         operation and retrieval tolerates an empty/partial graph (clause just None), so a concurrent
         mid-build read is harmless. ``strict_scope`` restricts the history source to missions
         explicitly stamped to ``project_root`` (see ``_history_items``). Returns the total triples
-        stored."""
+        stored.
+
+        The clear + re-add is held under ``_build_lock`` so two concurrent rebuilds can't interleave
+        one's ``clear()`` between the other's ``add_triples()`` calls (which would double-count a
+        source's weight or drop triples). Extraction — the slow, network/CLI part — stays OUTSIDE the
+        lock; the lock only guards the fast store swap, so concurrent builds serialise to a clean
+        last-writer-wins full replace instead of a corrupt merge."""
+        extractor = self._get_extractor()
         items = self._doc_items(retriever) + self._history_items(
             store, project_root=project_root, strict_scope=strict_scope)
         # Extract everything BEFORE touching the store — if any extraction raises, the existing
         # graph is left untouched.
-        extracted = [(self._extractor.extract(text, ref), ref)
+        extracted = [(extractor.extract(text, ref), ref)
                      for text, ref in items if (text or "").strip()]
-        self._store.clear()
-        return sum(self._store.add_triples(triples, ref) for triples, ref in extracted)
+        with self._build_lock:
+            self._store.clear()
+            return sum(self._store.add_triples(triples, ref) for triples, ref in extracted)
 
     # -- query ------------------------------------------------------------------
     def retrieve(self, query: str, *, k: "Optional[int]" = None) -> Subgraph:

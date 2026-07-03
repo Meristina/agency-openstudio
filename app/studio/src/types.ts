@@ -335,6 +335,15 @@ export function lastVerdict(d: Dossier): string | null {
   return verdicts.length ? verdicts[verdicts.length - 1].verdict ?? null : null;
 }
 
+/**
+ * Whether a URL from untrusted content (mission sources, web-search results) is safe to put in
+ * an href — only http(s), never `javascript:`/`data:`/`blob:`. Single home for this invariant so
+ * the timeline chips and the dossier source links stay in lockstep (used by both).
+ */
+export function isSafeHttpUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url);
+}
+
 /** Map a verdict token to its badge style class (shared by timeline + detail). */
 export function verdictClass(verdict: string): "ok" | "veto" | "warn" {
   if (verdict === "PASS") return "ok";

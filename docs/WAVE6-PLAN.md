@@ -508,7 +508,7 @@ when local.
 
 - **The live captioning surface.** The local MLX caption call (`_run_local`) is now **validated
   live on the Apple-Silicon Mac** against mlx-vlm 0.6.3 (fixed to the real call surface — image
-  path + `apply_chat_template(num_images=1)`; a real Qwen2.5-VL captions a generated image
+  path + `apply_chat_template(num_images=1)`; a real Qwen3-VL-8B captions a generated image
   accurately). Still deferred: the **cloud POST** (`_run_cloud`, network) and a full end-to-end
   `/api/visual` 200, which additionally needs the `[studio]` embed backend to vectorise the caption.
 - **A visual gallery / thumbnails.** The store is never web-served, so no image is served back;

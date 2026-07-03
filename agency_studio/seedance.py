@@ -40,11 +40,13 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 from urllib.parse import urlparse
 
 from .engines.local_media import MediaUnavailable
@@ -69,6 +71,11 @@ VIDEO_RESOLUTION = "720p"       # not 1080p/4k — untrusted output never picks 
 _HTTP_TIMEOUT = 60             # seconds per HTTP request
 _POLL_INTERVAL = 5            # seconds between task-status polls
 _POLL_MAX_ATTEMPTS = 120     # ~10 min ceiling (120 × 5 s) before giving up
+
+# Hard ceiling on the downloaded clip. A 5 s 720p mp4 is a few MB; this stops a hostile/broken
+# video_url from streaming an unbounded body into memory + disk on the 16 GB Mac.
+_MAX_VIDEO_BYTES = 200 * 1024 * 1024  # 200 MiB
+_DOWNLOAD_CHUNK = 1 << 20             # 1 MiB per read while streaming
 
 
 class SeedanceUnavailable(MediaUnavailable):
@@ -140,41 +147,111 @@ def _load_cloud(entry: VideoModel):
 
 
 # ── the raw network primitives (isolated so the offline suite monkeypatches them) ──
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse HTTP redirects on the AUTHENTICATED API calls.
+
+    The bearer key rides the ``Authorization`` header; urllib's default redirect handler
+    replays every request header on a 30x — so a redirect could bounce the key to another
+    host, or to plain ``http:`` (a downgrade), leaking it in cleartext. The Ark task API
+    answers directly, so a redirect is unexpected: treat it as an error rather than follow
+    it and forward the credential."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        raise urllib.error.HTTPError(
+            req.full_url, code,
+            f"seedance: refusing redirect to {newurl!r} (would forward the API key)",
+            headers, fp,
+        )
+
+
+class _HttpsOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Allow redirects on the UNauthenticated download (a CDN may 302 the media URL), but
+    re-validate https on EVERY hop so the initial-URL check can't be bypassed by a
+    downgrade to http mid-chain."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        if urlparse(newurl).scheme != "https":
+            raise urllib.error.HTTPError(
+                req.full_url, code, f"seedance: refusing non-https redirect to {newurl!r}",
+                headers, fp,
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+# Openers built once. The authenticated calls never follow a redirect; the download follows
+# only https→https hops.
+_API_OPENER = urllib.request.build_opener(_NoRedirectHandler())
+_DOWNLOAD_OPENER = urllib.request.build_opener(_HttpsOnlyRedirectHandler())
+
+
 def _http_post_json(url: str, payload: dict, key: str) -> dict:
     """POST ``payload`` as JSON with a bearer key, return the parsed JSON response. The key rides
     the Authorization header only — never the body, never logged (urllib errors carry the URL/status
-    but not request headers)."""
+    but not request headers). Redirects are refused so the key can't be forwarded off the endpoint."""
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"), method="POST",
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:  # nosec - https enforced by _probe_cloud
+    with _API_OPENER.open(req, timeout=_HTTP_TIMEOUT) as resp:  # nosec - https enforced by _probe_cloud, no redirects
         return json.loads(resp.read().decode("utf-8"))
 
 
 def _http_get_json(url: str, key: str) -> dict:
-    """GET a JSON resource with a bearer key → parsed JSON."""
+    """GET a JSON resource with a bearer key → parsed JSON. Redirects are refused (see
+    ``_NoRedirectHandler``) so the key never leaves the endpoint host/scheme."""
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
-    with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:  # nosec - https enforced upstream
+    with _API_OPENER.open(req, timeout=_HTTP_TIMEOUT) as resp:  # nosec - https enforced upstream, no redirects
         return json.loads(resp.read().decode("utf-8"))
 
 
-def _http_download(url: str, out_path: Path) -> None:
-    """Download ``url`` (an https media URL from the API response) to ``out_path``."""
+def _http_download(url: str, out_path: Path,
+                   should_cancel: "Callable[[], bool] | None" = None) -> None:
+    """Download ``url`` (an https media URL from the API response) to ``out_path``, streaming in
+    chunks with a hard byte ceiling (``_MAX_VIDEO_BYTES``) so an oversized/broken URL can't fill
+    RAM+disk. https is enforced on the initial URL AND every redirect hop (no auth header rides
+    this request, so following a CDN 302 is safe as long as it stays https).
+
+    Writes to a ``.part`` temp file in the same directory and atomically renames on success, so a
+    truncated/aborted download (a mid-stream error, the size cap, or a ``should_cancel`` abort)
+    NEVER leaves a partial .mp4 at ``out_path`` — it is always complete or absent. ``should_cancel``
+    (optional) is polled per chunk so a "Stop mission" aborts a slow download promptly."""
     if urlparse(url).scheme != "https":
         raise RuntimeError("seedance: refusing a non-https video_url")
-    with urllib.request.urlopen(url, timeout=_HTTP_TIMEOUT) as resp:  # nosec - https checked above
-        out_path.write_bytes(resp.read())
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(out_path.parent), suffix=".part")
+    tmp = Path(tmp_name)
+    try:
+        # Adopt the fd FIRST so it is always closed by this `with` — even if .open() below raises.
+        with os.fdopen(fd, "wb") as out:
+            with _DOWNLOAD_OPENER.open(url, timeout=_HTTP_TIMEOUT) as resp:  # nosec - https checked here + each hop
+                total = 0
+                while True:
+                    if should_cancel is not None and should_cancel():
+                        raise RuntimeError("seedance: download cancelled")
+                    chunk = resp.read(_DOWNLOAD_CHUNK)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > _MAX_VIDEO_BYTES:
+                        raise RuntimeError(f"seedance: video exceeded {_MAX_VIDEO_BYTES} bytes")
+                    out.write(chunk)
+        tmp.replace(out_path)  # atomic: out_path is complete or absent, never truncated
+    finally:
+        if tmp.exists():
+            tmp.unlink()  # a failed/aborted download leaves no partial behind
 
 
-def _run_cloud(backend, entry: VideoModel, *, prompt: str, out_path: Path) -> None:
+def _run_cloud(backend, entry: VideoModel, *, prompt: str, out_path: Path,
+               should_cancel: "Callable[[], bool] | None" = None) -> None:
     """Render one video from ``prompt`` via the seedance cloud API (Volcengine Ark) over https and
     write the mp4 to ``out_path``. Three network steps: POST create-task → poll the task until it
     succeeds → download the resulting video_url. The API key is read from the environment at call
     time (never from ``backend`` / disk), never logged. Duration/resolution are the fixed safe caps
     — the (untrusted) marker text is ONLY the prompt, never the compute size. A runtime API/network
     failure propagates as a ``RuntimeError`` (→ the render bridge writes a ``_[video unavailable]_``
-    placeholder), an absent key as ``SeedanceUnavailable`` (→ 501)."""
+    placeholder), an absent key as ``SeedanceUnavailable`` (→ 501). ``should_cancel`` (optional) is
+    polled each iteration so a "Stop mission" aborts the up-to-~10-min poll promptly instead of
+    waiting out the budget."""
     key = os.environ.get(CLOUD_API_KEY_ENV)
     if not key:  # defence in depth — _probe_cloud already gated this
         raise SeedanceUnavailable(f"cloud video needs an API key in ${CLOUD_API_KEY_ENV}")
@@ -193,6 +270,8 @@ def _run_cloud(backend, entry: VideoModel, *, prompt: str, out_path: Path) -> No
     # 2. poll until the task reaches a terminal state
     poll_url = f"{endpoint}/{task_id}"
     for _ in range(_POLL_MAX_ATTEMPTS):
+        if should_cancel is not None and should_cancel():
+            raise RuntimeError("seedance: render cancelled")
         time.sleep(_POLL_INTERVAL)
         status_body = _http_get_json(poll_url, key)
         status = (status_body.get("status") or "").lower()
@@ -200,7 +279,7 @@ def _run_cloud(backend, entry: VideoModel, *, prompt: str, out_path: Path) -> No
             video_url = (status_body.get("content") or {}).get("video_url")
             if not video_url:
                 raise RuntimeError("seedance: task succeeded but carried no video_url")
-            _http_download(video_url, out_path)   # 3. download the mp4 (https-checked)
+            _http_download(video_url, out_path, should_cancel)  # 3. download the mp4 (https-checked)
             return
         if status in ("failed", "rejected", "canceled", "cancelled"):
             raise RuntimeError(f"seedance render {status}: {status_body.get('error') or 'no detail'}")

@@ -38,10 +38,13 @@ export default function VisualDocsPanel() {
         for (const file of Array.from(files)) {
           await uploadVisual(file, { cloud });
         }
-        await refresh();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
+        // Refresh even on a mid-batch failure, so images captioned BEFORE the failing one show
+        // up — otherwise the user re-uploads them, and with cloud consent that re-sends the
+        // image off-machine a second time.
+        await refresh();
         setBusy(false);
         if (inputRef.current) inputRef.current.value = ""; // allow re-selecting the same file
       }

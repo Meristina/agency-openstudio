@@ -5,7 +5,7 @@
 
 import { useMemo } from "react";
 import { groupTimeline } from "../timeline";
-import { verdictClass } from "../types";
+import { isSafeHttpUrl, verdictClass } from "../types";
 import type { AssetStep } from "../timeline";
 import type { MissionEvent } from "../types";
 
@@ -92,18 +92,27 @@ export default function Timeline({ events, onResume }: { events: MissionEvent[];
               <p>{model.websearch.hits} result{model.websearch.hits === 1 ? "" : "s"} fetched</p>
               {model.websearch.sources.length > 0 && (
                 <div className="chips">
-                  {model.websearch.sources.map((s, i) => (
-                    <a
-                      key={`${s.url}-${i}`}
-                      className="chip"
-                      href={s.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title={s.url}
-                    >
-                      {s.title || s.url}
-                    </a>
-                  ))}
+                  {model.websearch.sources.map((s, i) =>
+                    // Web-search URLs are untrusted external content: only render a real link for
+                    // an http(s) URL (shared isSafeHttpUrl guard, same as dossier sources), so a
+                    // javascript:/data: URL can never reach an href. Anything else → plain chip.
+                    isSafeHttpUrl(s.url) ? (
+                      <a
+                        key={`${s.url}-${i}`}
+                        className="chip"
+                        href={s.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={s.url}
+                      >
+                        {s.title || s.url}
+                      </a>
+                    ) : (
+                      <span key={`${s.url}-${i}`} className="chip" title={s.url}>
+                        {s.title || s.url}
+                      </span>
+                    ),
+                  )}
                 </div>
               )}
             </>

@@ -39,6 +39,19 @@ describe("<MissionDetail>", () => {
     expect(container.textContent).toContain("internal note, no url");
   });
 
+  it("exports PDF via a button, not an <a href> navigation", () => {
+    // The export must NOT be a plain navigation link: a 501/404 would replace the SPA with raw
+    // JSON and, mid-mission, tear down the SSE stream (a server-side cancel). It's a button that
+    // fetches a blob instead — so assert there is no anchor pointing at the pdf endpoint.
+    const dossier: Dossier = { mission_id: "m5", goal: "demo", delivered: "body" };
+    const { container } = render(<MissionDetail dossier={dossier} />);
+    const btn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Export PDF"),
+    );
+    expect(btn).toBeTruthy();
+    expect(container.querySelector('a[href*="/pdf"]')).toBeNull();
+  });
+
   it("renders the persisted asset manifest as a per-mission gallery", () => {
     const dossier: Dossier = {
       mission_id: "m3",

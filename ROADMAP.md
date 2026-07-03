@@ -28,9 +28,11 @@
 > `context_clause` hook** as Wave 4 (no new agency-kit surface), each **opt-in per mission**
 > (default off — the Claude path already searches / speaks MCP). Offline suite runs anywhere;
 > the live web/MCP paths need a network / a real MCP server (deferred like Wave 2). **Wave 6 —
-> advanced extensions — is partly BUILT: three bricks.** (1) The **knowledge-graph brick**
-> (`knowledge.py`, graph-RAG over docs + history via Hyper-Extract, the `[kg]` extra, `knowledge`
-> flag + `graph` SSE phase + `GET/POST /api/graph` + GUI toggle) — studio PR #30, merged to `main`.
+> advanced extensions — is BUILT: all five bricks.** (1) The **knowledge-graph brick**
+> (`knowledge.py`, graph-RAG over docs + history; extraction via the default `ClaudeCliExtractor`
+> — the studio's `claude` CLI brain — or the optional on-device `GLiNER2Extractor` in the `[kg]`
+> extra, selected by `AGENCY_STUDIO_KG_BACKEND`; `knowledge` flag + `graph` SSE phase +
+> `GET/POST /api/graph` + GUI toggle) — studio PR #30, merged to `main`.
 > (2) The **MCP tool-calling brick** — a new additive agency-kit engine hook
 > (`mcp_config_path`/`mcp_allowed_tools` via `_with_mcp`, dept+synth only; agency-kit PR #10) + the
 > studio's `--mcp-config` builder + `mcp_tools` opt-in flag + SSE phase + GUI toggle (studio PR #32);
@@ -349,8 +351,9 @@ target Mac (M4, 16 GB, Python 3.12)** end-to-end through the HTTP server.
 the media endpoints + `/media/` serving in `server.py` · the Image/Voice tabs, gallery,
 and model-status chip in `app/studio/src/` · `[media]` extra · `tests/test_local_media.py`
 + `tests/test_server_media.py`.
-**Deferred** (will live under `agency_studio/`): `rag.py` · `websearch.py` ·
-`mcp_client.py` · `knowledge.py`.
+**Built (Waves 4-6)** under `agency_studio/`: `rag.py` (RAG) · `websearch.py` (web) ·
+`mcp_client.py` (MCP) · `knowledge.py` (knowledge graph) · `visual.py` (visual RAG) ·
+`seedance.py` (cloud video) · `personas.py` (persona doctrine) · `context_block.py`.
 
 **As-built launcher**: `agency_studio` is a **standalone package** with its own
 `build_parser()`/`main()` and a separate `agency-studio` console script. It **imports**

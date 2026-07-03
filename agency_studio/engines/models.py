@@ -82,13 +82,13 @@ KOKORO_VOICES = ModelFile(
     sha256="bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
 )
 
-# Hugging Face repo ids for the hub-managed back-ends, each PINNED to an immutable
-# commit SHA (the `*_REVISION` / `*_revision` fields below). HF content-addressing only
-# guarantees the bytes match the repo's CURRENT blob — not that the repo still points at
-# the known-good weights reviewed on the target Mac. Pinning a 40-hex commit SHA (itself
-# content-addressed) gives those hub weights the same supply-chain guarantee the Kokoro
-# SHA-256 manifest gives the direct-URL files (docs/SECURITY.md #4/#5), so a force-push
-# or a compromised mirror can't silently swap in different weights on the next download.
+# Hugging Face repo ids for the hub-managed back-ends, each PINNED to an immutable commit SHA
+# (the `*_REVISION` / `*_revision` fields below). HF content-addressing only guarantees the bytes
+# match the repo's CURRENT blob — not that the repo still points at the known-good weights reviewed
+# on the target Mac. Pinning a 40-hex commit SHA (itself content-addressed) gives those hub weights
+# the same supply-chain guarantee the Kokoro SHA-256 manifest gives the direct-URL files
+# (docs/SECURITY.md #4/#5), so a force-push or a compromised mirror can't silently swap in different
+# weights on the next download.
 STT_HF_REPO = "mlx-community/whisper-large-v3-turbo"  # MLX-converted Whisper turbo
 STT_HF_REVISION = "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb"
 
@@ -163,7 +163,11 @@ IMAGE_MODELS: "dict[str, ImageModel]" = {
         backend="mflux",
         module="mflux.models.flux2.variants.txt2img.flux2_klein", class_name="Flux2Klein",
         config_factory="flux2_klein_4b",
-        model_path=None,  # default black-forest-labs/FLUX.2-klein-4B is non-gated
+        # mflux's default repo for this config, named EXPLICITLY (not None) so `revision` pins it —
+        # _pinned_repo only applies a pin when both repo and revision are set. Same pattern as
+        # flux-schnell: the pinned snapshot resolves to a local path passed as model_path.
+        model_path="black-forest-labs/FLUX.2-klein-4B",  # non-gated
+        revision="e7b7dc27f91deacad38e78976d1f2b499d76a294",  # pin the reviewed weights (SECURITY.md #4/#5)
         quantize=8,  # quantize the 4B model on load to stay comfortable on 16 GB
         steps_default=4, steps_max=16,  # DISTILLED — high quality in ~4 steps; modest headroom
     ),

@@ -38,7 +38,7 @@ class _FakeManager:
             path=f"{out_dir}/audio/{len(self.calls)}.wav", voice=voice, seconds=2.0
         )
 
-    def generate_video(self, prompt, *, out_dir):
+    def generate_video(self, prompt, *, out_dir, should_cancel=None):
         self.calls.append(("video", prompt))
         if prompt in self._fail_on:
             raise RuntimeError("seedance cloud unavailable")

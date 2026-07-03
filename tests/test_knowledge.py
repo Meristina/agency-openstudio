@@ -457,7 +457,20 @@ def test_claude_cli_extractor_missing_agency_kit_raises_knowledge_unavailable(mo
 def test_graph_retriever_defaults_to_claude_cli_extractor(tmp_path, monkeypatch):
     monkeypatch.delenv(kg.KG_BACKEND_ENV, raising=False)
     gr = kg.GraphRetriever(db_path=tmp_path / "kg.db")
-    assert isinstance(gr._extractor, kg.ClaudeCliExtractor)
+    # The extractor is resolved lazily (not in __init__), so it is None until first needed.
+    assert gr._extractor is None
+    assert isinstance(gr._get_extractor(), kg.ClaudeCliExtractor)
+
+
+def test_graph_retriever_read_paths_work_with_invalid_backend_env(tmp_path, monkeypatch):
+    # A bad AGENCY_STUDIO_KG_BACKEND must not break the dependency-free READ paths (retrieve /
+    # stats): the extractor is only resolved on a build, so constructing + querying still works.
+    monkeypatch.setenv(kg.KG_BACKEND_ENV, "not-a-real-backend")
+    gr = kg.GraphRetriever(db_path=tmp_path / "kg.db")
+    assert gr.stats()["nodes"] == 0
+    assert gr.retrieve("anything").nodes == []          # empty graph → empty subgraph, no raise
+    with pytest.raises(ValueError, match="unknown"):
+        gr._get_extractor()                              # a build WOULD surface the bad env
 
 
 # ── optional on-device backend: GLiNER2 (the [kg] extra; model boundary stubbed) ─────────
@@ -681,7 +694,8 @@ def test_make_extractor_rejects_unknown_backend(monkeypatch):
 def test_graph_retriever_honours_backend_env(tmp_path, monkeypatch):
     monkeypatch.setenv(kg.KG_BACKEND_ENV, "gliner2")
     gr = kg.GraphRetriever(db_path=tmp_path / "kg.db")
-    assert isinstance(gr._extractor, kg.GLiNER2Extractor)
+    # The extractor is resolved lazily (on first build), so assert the env is honoured there.
+    assert isinstance(gr._get_extractor(), kg.GLiNER2Extractor)
 
 
 def test_knowledge_unavailable_is_an_importerror():

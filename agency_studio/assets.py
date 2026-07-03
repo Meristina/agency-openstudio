@@ -457,7 +457,8 @@ def render(
                     "block": req.block_index,
                 }
             elif req.type == "video":
-                result = manager.generate_video(req.prompt, out_dir=out_dir)
+                result = manager.generate_video(
+                    req.prompt, out_dir=out_dir, should_cancel=should_cancel)
                 entry = {
                     "type": "video", "status": "ok", "url": to_url(result.path),
                     "model": result.model, "seconds": result.seconds, "prompt": req.prompt,

@@ -36,10 +36,13 @@ export default function DocsPanel() {
         for (const file of Array.from(files)) {
           await ingestDoc(file);
         }
-        await refresh();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
+        // Refresh even on a mid-batch failure, so files ingested BEFORE the failing one show
+        // up — otherwise they're invisible and the user re-uploads them, duplicating chunks
+        // (the server dedups nothing; each upload gets a fresh id).
+        await refresh();
         setBusy(false);
         if (inputRef.current) inputRef.current.value = ""; // allow re-selecting the same file
       }

@@ -100,8 +100,10 @@ so the default remains fully local (covered by `tests/test_visual.py` + `tests/t
   the environment at call time and never appears in an error/SSE frame (rule #6).
 - **The local VLM download is pinned** (rules #4/#5): pulled by repo id through `huggingface_hub`
   (allowlisted host, content-addressed cache) and pinned to an immutable commit SHA in
-  `agency_studio/visual.py` (`VISUAL_MODELS[...].revision`), like the Wave-2/4 pins. (The pin is
-  finalized during live Mac validation; until then the local backend degrades to a clean 501.)
+  `agency_studio/visual.py` (`VISUAL_MODELS["qwen3-vl-local"].revision` — the same
+  `mlx-community/Qwen3-VL-8B-Instruct-4bit` repo + reviewed SHA the Boogu conditioner pins in
+  `engines/models.py`), like the Wave-2/4 pins, so a moved/force-pushed mirror can't swap the
+  weights on the next download.
 - **Retrieval is best-effort and never weakens the gate.** Image captions are injected as an
   additive `context_clause` (composed after RAG/web/MCP/knowledge); they reach the department +
   synthesis prompts only, never the router or Inspector, and the veto loop is unchanged.

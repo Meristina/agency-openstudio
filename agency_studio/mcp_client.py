@@ -30,6 +30,7 @@ prompt-injection residual any RAG/web tool carries.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -44,7 +45,20 @@ CONFIG_FILENAME = "mcp.json"
 MAX_SERVERS = 8
 MAX_RESOURCES_PER_SERVER = 5
 MAX_RESOURCE_CHARS = 4000
+# Byte ceiling for a single resource. When list_resources declares a size, one that exceeds this
+# is skipped BEFORE read_resource buffers it into memory — so an oversized resource on an otherwise
+# benign server can't exhaust RAM on the 16 GB Mac (declared-size is advisory in MCP, so the char
+# cap in _text_of remains the backstop when no size is declared).
+MAX_RESOURCE_BYTES = 1 << 20  # 1 MiB
 _SERVER_TIMEOUT_S = 20
+
+# A server name becomes the ``mcp__<name>`` allowed-tools token handed to the claude CLI. The CLI
+# splits --allowedTools on commas and whitespace, so a name carrying either (e.g. "docs,Bash")
+# would silently grant EXTRA built-in tools (arbitrary code execution via Bash) past
+# --strict-mcp-config. Forbid exactly those separators while still allowing the common punctuation
+# real server names use (dots/colons, e.g. "notion.prod", "team:wiki") — a denylist of the
+# injection chars, not a narrow allowlist that would silently drop otherwise-valid names.
+_UNSAFE_SERVER_NAME_RE = re.compile(r"[,\s]")
 
 
 class McpUnavailable(ImportError):
@@ -95,7 +109,10 @@ def _parse_server(raw: dict) -> "Optional[ServerConfig]":
         return None
     name = (raw.get("name") or "").strip()
     transport = (raw.get("transport") or "").strip().lower()
-    if not name or transport not in ("stdio", "http"):
+    # The name must be token-safe: it becomes an ``mcp__<name>`` allowed-tools pattern, and a
+    # comma/whitespace in it would smuggle extra tools past --strict-mcp-config. Reject (skip) a
+    # name carrying a separator, like any other malformed entry.
+    if not name or _UNSAFE_SERVER_NAME_RE.search(name) or transport not in ("stdio", "http"):
         return None
     enabled = bool(raw.get("enabled", True))
     if transport == "stdio":
@@ -171,22 +188,29 @@ def build_cli_config(servers: "Optional[List[ServerConfig]]" = None) -> "tuple[d
 
 # ── SDK seam (async, stubbed in tests) ──────────────────────────────────────────
 
-def _text_of(content) -> str:
+def _text_of(content, limit: int = MAX_RESOURCE_CHARS) -> str:
     """Best-effort extraction of readable text from an MCP ``read_resource`` result. The SDK
     returns a ``.contents`` list of parts; a TEXT part carries a ``str`` ``.text``, a BLOB part
     carries base64 in ``.blob`` and no usable ``.text`` — binary is not citable context, so blob
     parts are dropped (only ``str`` ``.text`` is kept). Isolated (like ``knowledge._coerce_triples``)
     so the one SDK-shape-uncertain surface is a single, easily-fixed function: a non-list
-    ``contents`` or a part whose ``.text`` is missing/non-``str`` is skipped, never raised."""
+    ``contents`` or a part whose ``.text`` is missing/non-``str`` is skipped, never raised.
+
+    Accumulation STOPS once ``limit`` chars are gathered, so a server returning many/huge text
+    parts can't build an unbounded joined string before the caller's truncation."""
     parts = getattr(content, "contents", None)
     if not isinstance(parts, (list, tuple)):
         return ""
-    chunks = []
+    chunks: "List[str]" = []
+    total = 0
     for part in parts:
         text = getattr(part, "text", None)
         if isinstance(text, str) and text:
             chunks.append(text)
-    return "\n".join(chunks)
+            total += len(text) + 1  # +1 for the join separator
+            if total >= limit:
+                break
+    return "\n".join(chunks)[:limit]
 
 
 def _require_sdk() -> None:
@@ -235,8 +259,14 @@ async def _collect(session, cfg: ServerConfig, k: int) -> "List[McpResource]":
     out: "List[McpResource]" = []
     for res in resources[:k]:
         uri = str(getattr(res, "uri", ""))
+        # Skip a resource whose DECLARED size is over the byte cap, before read_resource buffers
+        # it into memory. size is advisory in MCP (often absent) — when absent, _text_of's char
+        # cap is the backstop.
+        size = getattr(res, "size", None)
+        if isinstance(size, int) and size > MAX_RESOURCE_BYTES:
+            continue
         content = await session.read_resource(getattr(res, "uri", uri))
-        text = _text_of(content)[:MAX_RESOURCE_CHARS]
+        text = _text_of(content, MAX_RESOURCE_CHARS)
         out.append(McpResource(server=cfg.name, uri=uri,
                                name=getattr(res, "name", None) or uri, text=text))
     return out

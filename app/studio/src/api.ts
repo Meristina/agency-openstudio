@@ -88,6 +88,18 @@ export async function getMission(id: string): Promise<Dossier> {
 }
 
 /**
+ * Fetch a mission's exported PDF as a Blob. Used instead of a plain <a href> navigation
+ * so a 501 (no [pdf] extra) / 404 / 500 surfaces as a catchable error — rather than
+ * replacing the SPA with raw JSON and, for a still-running mission, aborting its SSE
+ * stream (which the server treats as a cancel).
+ */
+export async function fetchMissionPdf(id: string): Promise<Blob> {
+  const res = await fetch(`/api/mission/${encodeURIComponent(id)}/pdf`);
+  if (!res.ok) throw new Error(await errorText(res, "GET /api/mission/pdf"));
+  return res.blob();
+}
+
+/**
  * Cancel an in-flight mission by its run id (the `run` SSE frame). Sets the run's
  * cancel flag server-side, which kills the in-flight engine subprocess before any
  * persistence. Resolves true on 202; false for any other status. The request is
@@ -139,9 +151,13 @@ export async function runMission(
     }),
     signal: opts.signal,
   });
-  if (!res.ok || !res.body) {
-    const detail = res.ok ? "no response body" : `status ${res.status}`;
-    throw new Error(`POST /api/mission failed — ${detail}`);
+  if (!res.ok) {
+    // Surface the server's JSON reason (the 409 resume-mismatch detail, the 501 "upgrade
+    // agency-kit" hint, …) instead of a bare status — same as every other API wrapper.
+    throw new Error(await errorText(res, "POST /api/mission"));
+  }
+  if (!res.body) {
+    throw new Error("POST /api/mission failed — no response body");
   }
 
   const reader = res.body.getReader();

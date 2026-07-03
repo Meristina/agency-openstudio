@@ -79,7 +79,8 @@ def _stub_ark(monkeypatch, *, post=None, polls, download=None):
     monkeypatch.setattr(seedance, "_http_get_json",
                         lambda url, key: (calls["get"].append(url), next(seq))[1])
     monkeypatch.setattr(seedance, "_http_download",
-                        lambda url, out: (calls["dl"].append(url), out.write_bytes(download or b"MP4")))
+                        lambda url, out, should_cancel=None: (calls["dl"].append(url),
+                                                              out.write_bytes(download or b"MP4")))
     monkeypatch.setattr(seedance.time, "sleep", lambda s: None)  # no real wait between polls
     return calls
 
@@ -131,6 +132,75 @@ def test_cloud_run_no_task_id_raises(monkeypatch, tmp_path):
         seedance._run_cloud(seedance._load_cloud(entry), entry, prompt="x", out_path=tmp_path / "x.mp4")
 
 
+def test_cloud_run_poll_budget_exhaustion_raises(monkeypatch, tmp_path):
+    # A task that never reaches a terminal state must give up after _POLL_MAX_ATTEMPTS instead of
+    # hanging the mission worker forever. Guards the anti-hang bound (a `while True` regression would
+    # otherwise poll indefinitely with no test catching it).
+    import itertools
+    monkeypatch.setenv(seedance.CLOUD_API_KEY_ENV, "k")
+    monkeypatch.setattr(seedance, "_POLL_MAX_ATTEMPTS", 4)
+    calls = _stub_ark(monkeypatch, polls=itertools.repeat({"status": "running"}))
+    entry = seedance.VIDEO_MODELS[seedance.DEFAULT_VIDEO_MODEL]
+    with pytest.raises(RuntimeError, match="did not finish within the poll budget"):
+        seedance._run_cloud(seedance._load_cloud(entry), entry, prompt="x", out_path=tmp_path / "x.mp4")
+    assert len(calls["get"]) == 4   # polled exactly the budget, then gave up
+
+
+def test_cloud_run_honours_should_cancel(monkeypatch, tmp_path):
+    # A "Stop mission" (should_cancel → True) must abort the poll promptly rather than run out the
+    # ~10-min budget. First poll checks cancel BEFORE the status GET, so no GET happens.
+    import itertools
+    monkeypatch.setenv(seedance.CLOUD_API_KEY_ENV, "k")
+    calls = _stub_ark(monkeypatch, polls=itertools.repeat({"status": "running"}))
+    entry = seedance.VIDEO_MODELS[seedance.DEFAULT_VIDEO_MODEL]
+    with pytest.raises(RuntimeError, match="cancelled"):
+        seedance._run_cloud(seedance._load_cloud(entry), entry, prompt="x",
+                            out_path=tmp_path / "x.mp4", should_cancel=lambda: True)
+    assert calls["get"] == []   # aborted before the first status poll, no wasted network
+
+
+def test_cloud_download_streams_with_size_cap(monkeypatch, tmp_path):
+    # The real _http_download (not stubbed) must stream to disk and refuse an oversized body.
+    import io
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.close()
+
+    monkeypatch.setattr(seedance, "_MAX_VIDEO_BYTES", 8)
+    monkeypatch.setattr(seedance._DOWNLOAD_OPENER, "open",
+                        lambda url, timeout=None: _Resp(b"way too many bytes"))
+    out = tmp_path / "big.mp4"
+    with pytest.raises(RuntimeError, match="exceeded"):
+        seedance._http_download("https://cdn.example/big.mp4", out)
+    # No orphaned/truncated file left behind (temp-file + atomic rename), and no leftover .part.
+    assert not out.exists()
+    assert list(tmp_path.glob("*.part")) == []
+
+
+def test_cloud_download_cancel_leaves_no_partial(monkeypatch, tmp_path):
+    # A Stop during the download aborts promptly and leaves no partial .mp4 at out_path.
+    import io
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.close()
+
+    monkeypatch.setattr(seedance._DOWNLOAD_OPENER, "open",
+                        lambda url, timeout=None: _Resp(b"x" * 4096))
+    out = tmp_path / "clip.mp4"
+    with pytest.raises(RuntimeError, match="cancelled"):
+        seedance._http_download("https://cdn.example/x.mp4", out, should_cancel=lambda: True)
+    assert not out.exists()
+    assert list(tmp_path.glob("*.part")) == []
+
+
 def test_cloud_download_rejects_non_https(tmp_path):
     # Defence in depth: a video_url that isn't https is refused before any fetch (SECURITY.md #4).
     with pytest.raises(RuntimeError):
@@ -171,7 +241,7 @@ def test_generate_video_returns_videoresult_when_backend_stubbed(monkeypatch, tm
     # Stub the whole (probe, load, run) triple so the manager's happy path is exercised end-to-end
     # offline: it must write under videos/ and return a VideoResult with the resolved model id +
     # prompt. Patch `_backend` (not the module fns) because `_VIDEO_BACKENDS` binds direct refs.
-    def _fake_run(backend, entry, *, prompt, out_path):
+    def _fake_run(backend, entry, *, prompt, out_path, should_cancel=None):
         out_path.write_bytes(b"\x00fakemp4")   # simulate the downloaded clip
 
     monkeypatch.setattr(seedance, "_backend",

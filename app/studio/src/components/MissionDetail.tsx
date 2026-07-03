@@ -2,11 +2,13 @@
 // verdict, residual risk) plus the deliverable as Markdown. react-markdown is
 // used WITHOUT rehype-raw, so agency-authored Markdown can never inject raw HTML.
 
+import { useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { lastVerdict, verdictClass } from "../types";
+import { isSafeHttpUrl, lastVerdict, verdictClass } from "../types";
 import type { Dossier } from "../types";
 import type { ReactNode } from "react";
 import AssetGallery from "./AssetGallery";
+import { fetchMissionPdf } from "../api";
 
 function List({
   title,
@@ -37,7 +39,7 @@ function List({
  * studio's security ethos. A non-URL string degrades to plain text.
  */
 function sourceItem(url: string): ReactNode {
-  if (!/^https?:\/\//i.test(url)) return url;
+  if (!isSafeHttpUrl(url)) return url;
   return (
     <a className="source-link" href={url} target="_blank" rel="noopener noreferrer">
       {url}
@@ -46,6 +48,34 @@ function sourceItem(url: string): ReactNode {
 }
 
 export default function MissionDetail({ dossier, loading }: { dossier: Dossier | null; loading?: boolean }) {
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+
+  // Export via fetch → blob download rather than an <a href> navigation: a failed export
+  // (501 without the [pdf] extra, 404, 500) is shown inline instead of replacing the SPA
+  // with raw JSON, and a running mission's SSE stream is never torn down by a page unload.
+  async function exportPdf(missionId: string) {
+    setPdfBusy(true);
+    setPdfError(null);
+    try {
+      const blob = await fetchMissionPdf(missionId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${missionId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Defer the revoke: revoking in the same tick as click() can cancel the download before
+      // the browser starts streaming it (Firefox/Safari).
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (e) {
+      setPdfError(e instanceof Error ? e.message : "PDF export failed");
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
   if (loading) return <p className="muted">Loading dossier…</p>;
   if (!dossier) return <p className="muted">Select a mission, or run one, to see its dossier.</p>;
 
@@ -58,11 +88,17 @@ export default function MissionDetail({ dossier, loading }: { dossier: Dossier |
           {dossier.mission_id && <code>{dossier.mission_id}</code>}
           {verdict && <span className={`badge ${verdictClass(verdict)}`}>{verdict}</span>}
           {dossier.mission_id && (
-            <a className="pdf-link" href={`/api/mission/${encodeURIComponent(dossier.mission_id)}/pdf`}>
-              Export PDF
-            </a>
+            <button
+              type="button"
+              className="pdf-link"
+              disabled={pdfBusy}
+              onClick={() => exportPdf(dossier.mission_id!)}
+            >
+              {pdfBusy ? "Exporting…" : "Export PDF"}
+            </button>
           )}
         </div>
+        {pdfError && <p className="error-text" role="alert">PDF export failed: {pdfError}</p>}
         {dossier.route && dossier.route.length > 0 && (
           <div className="chips">
             {dossier.route.map((d) => (

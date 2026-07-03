@@ -34,7 +34,7 @@ import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 from urllib.parse import parse_qs, urlparse
 
 DEFAULT_HOST = "127.0.0.1"
@@ -507,6 +507,35 @@ def _require_int_in_range(value: object, lo: int, hi: int, name: str) -> int:
     return n
 
 
+def _str_field(payload: dict, key: str) -> str:
+    """Return ``payload[key]`` as a stripped ``str``. A NON-string JSON value (a number,
+    list, or object — e.g. ``{"goal": 123}``) yields ``""``, i.e. is treated as absent, so
+    the caller's own missing-field 400 fires cleanly instead of an ``AttributeError`` from
+    calling ``.strip()`` on a non-str dropping the connection."""
+    val = payload.get(key)
+    return val.strip() if isinstance(val, str) else ""
+
+
+# Bytes an upload filename may carry after sanitisation. A name is only ever used for a
+# suffix + a display title, so this is generous; it exists to stop an over-long name from
+# raising OSError('File name too long') when the temp file is opened.
+_MAX_FILENAME_LEN = 200
+
+
+def _safe_upload_filename(raw: object, fallback: str) -> str:
+    """Reduce a request-supplied upload filename to a safe basename.
+
+    Strips any directory component, removes control characters (crucially the NUL byte —
+    ``open()`` on a path containing ``\\x00`` raises ``ValueError('embedded null byte')``,
+    which uncaught would drop the connection), and bounds the length (an over-long name
+    raises ``OSError('File name too long')``). Falls back to ``fallback`` when the name
+    reduces to empty (``Path('.').name`` / ``Path('..').name`` are both ``''``)."""
+    name = Path(str(raw)).name
+    name = "".join(ch for ch in name if ch.isprintable() and ch not in '\x00/\\')
+    name = name[:_MAX_FILENAME_LEN].strip()
+    return name or fallback
+
+
 def _safe_mission_id(raw: str) -> "str | None":
     """Clean a request-supplied mission id and reject anything that could escape
     the store's filesystem path. Returns the validated id, or ``None``.
@@ -776,10 +805,37 @@ class StudioHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _safe_dispatch(self, route: "Callable[[str], None]") -> None:
+        """Run a routing thunk with a last-resort 500 guard.
+
+        Individual handlers already map their own expected failures (bad JSON → 400,
+        missing extra → 501, backend error → 500). This is the backstop for the
+        UNEXPECTED: e.g. a corrupt/unopenable RAG/visual/mission store making a plain
+        GET /api/docs raise mid-read. Without it that exception propagates out of the
+        handler and drops the connection with a bare traceback instead of a clean 500.
+        Best-effort: if a response was already (partly) sent — an SSE stream — the 500
+        send itself fails, which we swallow (the connection just closes)."""
+        try:
+            route(urlparse(self.path).path)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            # Only emit a 500 if no response has been started. A streaming (SSE) handler that
+            # raises mid-stream has already sent 200 + frames; a second status line would corrupt
+            # the event stream the still-connected client is parsing, so we leave it to close.
+            if getattr(self, "_response_started", False):
+                return
+            try:
+                self._send_error_json(500, "internal server error")
+            except Exception:
+                pass
+
     def do_GET(self) -> None:  # noqa: N802
         if not self._host_allowed():
             return
-        path = urlparse(self.path).path
+        self._safe_dispatch(self._route_get)
+
+    def _route_get(self, path: str) -> None:
         if path == "/api/missions":
             return self._handle_list_missions()
         if path == "/api/models":
@@ -808,7 +864,9 @@ class StudioHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         if not self._host_allowed():
             return
-        path = urlparse(self.path).path
+        self._safe_dispatch(self._route_post)
+
+    def _route_post(self, path: str) -> None:
         if path == "/api/mission":
             return self._handle_run_mission()
         if path == "/api/image":
@@ -834,7 +892,9 @@ class StudioHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:  # noqa: N802
         if not self._host_allowed():
             return
-        path = urlparse(self.path).path
+        self._safe_dispatch(self._route_delete)
+
+    def _route_delete(self, path: str) -> None:
         if path.startswith("/api/docs/"):
             return self._handle_delete_doc(path[len("/api/docs/"):])
         if path.startswith("/api/visual/"):
@@ -1082,8 +1142,8 @@ class StudioHandler(BaseHTTPRequestHandler):
         payload = self._read_json_body()
         if payload is None:
             return None  # _read_json_body already sent the error (and closed if needed)
-        goal = (payload.get("goal") or "").strip()
-        resume_from = (payload.get("resume_from") or "").strip()
+        goal = _str_field(payload, "goal")
+        resume_from = _str_field(payload, "resume_from")
         if not goal and not resume_from:
             self._send_error_json(400, "missing 'goal'")
             return None
@@ -1099,6 +1159,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         auto-reconnect); the stream ends at connection close — hence
         ``Connection: close``."""
         self.close_connection = True
+        self._response_started = True  # a 200 stream is now open — _safe_dispatch must not add a 500
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -1330,7 +1391,12 @@ class StudioHandler(BaseHTTPRequestHandler):
             self.wfile.write(b": heartbeat\n\n")
             self.wfile.flush()
             return True
-        except (BrokenPipeError, ConnectionResetError, socket.timeout):
+        except OSError:
+            # ANY socket write error = the client has gone. Catch the whole OSError family,
+            # not just BrokenPipe/ConnectionReset/timeout: on macOS (the target platform) a
+            # write to a closed peer can raise OSError(EPROTOTYPE)/ConnectionAbortedError, and
+            # letting that propagate would skip the cancel_event.set() upstream — leaving the
+            # worker running a paid mission the user believes is over.
             return False
 
     def _send_terminal_frame(self, result_box: dict) -> None:
@@ -1373,7 +1439,10 @@ class StudioHandler(BaseHTTPRequestHandler):
             self.wfile.write(frame)
             self.wfile.flush()
             return True
-        except (BrokenPipeError, ConnectionResetError, socket.timeout):
+        except OSError:
+            # Whole OSError family = client gone (see _write_heartbeat): includes macOS's
+            # EPROTOTYPE / ConnectionAbortedError on a mid-stream disconnect, so the caller
+            # reliably sets cancel_event instead of the exception propagating.
             return False
 
     # ── API: local multimodal (Wave 2 — image / TTS / STT) ────────────────────
@@ -1541,10 +1610,10 @@ class StudioHandler(BaseHTTPRequestHandler):
         import shutil
         import tempfile
         query = parse_qs(urlparse(self.path).query)
-        # Basename only (strip any path), and fall back to 'upload' for a name that reduces
-        # to empty — Path('.').name and Path('..').name are both '', which would otherwise
-        # make ``upload`` resolve to the temp DIR and raise IsADirectoryError on open().
-        filename = Path((query.get("filename", ["upload"])[0] or "upload")).name or "upload"
+        # Basename only, control-char/NUL-stripped, length-bounded (see _safe_upload_filename):
+        # a hostile ?filename= with an embedded NUL or a 300-char name would otherwise crash the
+        # temp-file open with ValueError/OSError and drop the connection instead of a clean answer.
+        filename = _safe_upload_filename(query.get("filename", ["upload"])[0], "upload")
         tmp_dir = Path(tempfile.mkdtemp(prefix="agency-doc-"))
         try:
             upload = tmp_dir / filename
@@ -1611,7 +1680,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         import shutil
         import tempfile
         query = parse_qs(urlparse(self.path).query)
-        filename = Path((query.get("filename", ["image"])[0] or "image")).name or "image"
+        filename = _safe_upload_filename(query.get("filename", ["image"])[0], "image")
         cloud = query.get("cloud", ["0"])[0] in ("1", "true", "yes")   # explicit off-machine consent
         tmp_dir = Path(tempfile.mkdtemp(prefix="agency-visual-"))
         try:
@@ -1698,7 +1767,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         payload = self._read_json_body()
         if payload is None:
             return
-        prompt = (payload.get("prompt") or "").strip()
+        prompt = _str_field(payload, "prompt")
         if not prompt:
             return self._send_error_json(400, "missing 'prompt'")
         # Validate client params up front (→ 400). With inputs already bounded here,
@@ -1740,7 +1809,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         payload = self._read_json_body()
         if payload is None:
             return
-        text = (payload.get("text") or "").strip()
+        text = _str_field(payload, "text")
         if not text:
             return self._send_error_json(400, "missing 'text'")
         # Validate a client-supplied voice up front (→ 400 with the allowlist), so an

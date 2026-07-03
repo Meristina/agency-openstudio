@@ -275,6 +275,26 @@ def _run_tts_backend(kokoro, *, text, voice, out_path) -> None:
     sf.write(str(out_path), samples, sample_rate)
 
 
+def _free_stt_weights() -> None:
+    """Drop the Whisper weights that ``mlx_whisper`` caches OUTSIDE our reference.
+
+    ``_load_stt_backend`` hands back the ``mlx_whisper`` module itself, and
+    ``mlx_whisper.transcribe`` stashes the loaded model on a module-level
+    ``ModelHolder`` class attribute — a strong reference that survives dropping
+    ``self._model``. So on a plain evict the ~1.6 GB of turbo weights stay resident
+    and the next model (e.g. FLUX 8-bit, ~12 GB) loads ON TOP of them, breaking the
+    single-resident rule on the 16 GB Mac. Reset the holder so ``_free_metal_cache``'s
+    gc + Metal-cache clear can actually reclaim the buffers. Guarded for API drift."""
+    try:
+        from mlx_whisper import transcribe as _t
+        holder = getattr(_t, "ModelHolder", None)
+        if holder is not None:
+            holder.model = None
+            holder.model_path = None
+    except Exception:
+        pass  # module absent or API moved — nothing to free, nothing to break
+
+
 def _free_metal_cache() -> None:
     """Best-effort release of MLX's Metal buffer cache after evicting a model, so the
     freed weights actually return to the OS (critical on a 16 GB Mac — a stale buffer
@@ -332,6 +352,11 @@ class ModelManager:
         return self._model
 
     def _evict(self) -> None:
+        # STT caches its weights on mlx_whisper's own ModelHolder, out of our reach —
+        # drop that too before the Metal-cache clear, or the outgoing turbo weights
+        # stay resident under the next model (breaks single-residency on the 16 GB Mac).
+        if self._resident == "stt":
+            _free_stt_weights()
         self._model = None
         self._resident = None
         _free_metal_cache()
@@ -486,6 +511,7 @@ class ModelManager:
     def generate_video(
         self, prompt: str, *, model: "Optional[str]" = None,
         out_dir: "str | Path | None" = None,
+        should_cancel: "Optional[Callable[[], bool]]" = None,
     ) -> VideoResult:
         """Render one video from ``prompt`` via the CLOUD seedance backend (Wave 6 — the seedance
         brick) and write the mp4 under ``videos/``. The studio's FIRST *cloud* asset render:
@@ -496,7 +522,12 @@ class ModelManager:
         Keyed by ``video:<id>`` so it flows through the same residency seam as every other model —
         a cloud client has no residency cost, but this keeps evict/warm logic uniform with the
         cloud-caption path. The backend is lazy-imported, so a missing key raises
-        ``SeedanceUnavailable`` (→ 501) from the probe, before any eviction."""
+        ``SeedanceUnavailable`` (→ 501) from the probe, before any eviction.
+
+        The lock is held ONLY for the residency step (``_ensure``): a cloud client has no Metal
+        residency to protect, so the up-to-~10-min network render runs lock-free — otherwise it
+        would block every other media op (image/tts/stt/embed) for the whole poll. ``should_cancel``
+        is threaded into that render so a "Stop mission" can abort the poll promptly."""
         if not prompt.strip():
             raise ValueError("prompt must not be empty")
         from .. import seedance  # lazy: avoids a load-time cycle, keeps the module self-contained
@@ -504,13 +535,14 @@ class ModelManager:
         probe, load, run = seedance._backend(entry)
         out = self._asset_path("videos", "mp4", out_dir)
         started = time.monotonic()
+        # Residency (probe/evict/warm) needs the lock; the cloud render does NOT.
         with self._lock:
             backend = self._ensure(
                 f"video:{entry.id}",
                 lambda: probe(entry),   # the cloud probe needs the entry (endpoint + env key)
                 lambda: load(entry),
             )
-            run(backend, entry, prompt=prompt, out_path=out)
+        run(backend, entry, prompt=prompt, out_path=out, should_cancel=should_cancel)
         return VideoResult(
             path=out, prompt=prompt,
             seconds=round(time.monotonic() - started, 2), model=entry.id,

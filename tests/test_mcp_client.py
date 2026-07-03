@@ -58,6 +58,22 @@ def test_skips_malformed_entries_but_keeps_good_ones():
     assert [s.name for s in mc.load_config()] == ["ok"]
 
 
+def test_rejects_name_with_tool_separator_chars_but_keeps_dotted_names():
+    # A name with a comma/space would become an "mcp__docs,Bash" allowed-tools token that the
+    # claude CLI splits into two tools — smuggling Bash past --strict-mcp-config. Such entries are
+    # skipped. But common punctuation (dots/colons) in real server names must NOT be dropped.
+    _write_config({"servers": [
+        {"name": "docs,Bash", "transport": "stdio", "command": "x"},   # comma → tool injection
+        {"name": "a b", "transport": "stdio", "command": "x"},          # space → tool injection
+        {"name": "notion.prod", "transport": "stdio", "command": "x"},  # dotted name is valid
+        {"name": "team:wiki", "transport": "http", "url": "https://x"}, # colon name is valid
+    ]})
+    cfgs = mc.load_config()
+    assert [s.name for s in cfgs] == ["notion.prod", "team:wiki"]
+    _config, allowed = mc.build_cli_config(cfgs)
+    assert allowed == ["mcp__notion.prod", "mcp__team:wiki"]   # no comma/space in any token
+
+
 def test_malformed_json_raises_valueerror():
     mc.config_path().write_text("{not json", encoding="utf-8")
     with pytest.raises(ValueError):

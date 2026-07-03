@@ -1232,7 +1232,7 @@ def test_build_render_assets_video_on_renders_via_manager(tmp_path):
     import queue
 
     class _FakeMgr:
-        def generate_video(self, prompt, *, out_dir):
+        def generate_video(self, prompt, *, out_dir, should_cancel=None):
             p = Path(out_dir) / "videos" / "v.mp4"
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_bytes(b"\x00mp4")
@@ -1940,6 +1940,38 @@ def test_build_graph_without_brain_returns_501(monkeypatch, tmp_path):
         assert "claude" in body.decode().lower()
     finally:
         httpd.shutdown()
+
+
+def test_build_graph_passes_strict_scope_and_project_root(monkeypatch, tmp_path):
+    # Success-path guard for the PR #60 cross-project KG leak: the server MUST call rebuild with
+    # strict_scope=True (whose default is the UNSAFE False) and the server's own project_root, so a
+    # regression dropping either kwarg — silently absorbing other projects' missions into this
+    # project's context — fails here instead of shipping green.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    captured = {}
+
+    class _StubKg:
+        def rebuild(self, retriever, store, *, project_root=None, strict_scope=False):
+            captured["project_root"] = project_root
+            captured["strict_scope"] = strict_scope
+            return 3
+
+        def stats(self):
+            return {"nodes": 2, "edges": 1}
+
+    monkeypatch.setattr(server.StudioHandler, "_kg_retriever", lambda self: _StubKg())
+    monkeypatch.setattr(server.StudioHandler, "_retriever", lambda self: object())
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _post(host, port, "/api/graph/build", body=b"")
+        assert resp.status == 201
+        stats = json.loads(body)
+        assert stats["extracted"] == 3 and stats["nodes"] == 2
+    finally:
+        httpd.shutdown()
+
+    assert captured["strict_scope"] is True                       # never the unsafe default
+    assert captured["project_root"] == str(httpd.project_root)    # scoped to THIS server's project
 
 
 # ── Wave 6 — MCP tool-calling: opt-in --mcp-config threaded into the engine ───────

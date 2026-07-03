@@ -120,6 +120,29 @@ def test_post_image_missing_prompt_400(monkeypatch, tmp_path):
         httpd.shutdown()
 
 
+def test_media_serves_mp4_with_video_mime(tmp_path):
+    # A rendered seedance clip is served from /media as video/mp4; the GUI's <video> gallery needs
+    # that MIME. Guards a MIME-map regression: "video/mp4" appears only in server.py's map, so
+    # removing it would otherwise leave the whole suite green while the gallery silently breaks.
+    videos = tmp_path / "studio_assets" / "videos"
+    videos.mkdir(parents=True)
+    (videos / "clip.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42stub")
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        try:
+            conn.request("GET", "/media/videos/clip.mp4")
+            resp = conn.getresponse()
+            body = resp.read()
+            assert resp.status == 200
+            assert resp.getheader("Content-Type") == "video/mp4"
+            assert body.startswith(b"\x00\x00\x00\x18ftyp")
+        finally:
+            conn.close()
+    finally:
+        httpd.shutdown()
+
+
 def test_post_image_explicit_model_echoed(monkeypatch, tmp_path):
     """An explicit valid model id is accepted and echoed back in the 200 JSON."""
     _stub_media(monkeypatch)
