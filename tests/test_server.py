@@ -1341,6 +1341,97 @@ def test_post_mission_passes_asset_hook_to_runner(monkeypatch, tmp_path):
     assert callable(captured["render_assets"])
 
 
+def test_post_mission_validates_and_forwards_escalation(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_cli import runner_bridge
+    captured = {}
+
+    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
+                  asset_clause=None, render_assets=None, escalation=None):
+        captured["escalation"] = escalation
+        return runner_bridge.MissionResult(path=tmp_path, dossier={"verdicts": [], "mission_id": "x"})
+
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "g", "escalation": {"enabled": True, "budget": 3}}),
+                     headers={"Content-Type": "application/json"})
+        _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    assert captured["escalation"] == {"enabled": True, "budget": 3}
+
+
+def test_post_mission_rejects_bad_escalation(tmp_path):
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _post(host, port, "/api/mission",
+                           body=json.dumps({"goal": "g", "escalation": {"budget": "3"}}))
+    finally:
+        httpd.shutdown()
+
+    assert resp.status == 400
+    assert b"escalation" in body
+
+
+def test_post_mission_rejects_negative_escalation_budget(tmp_path):
+    # review [6]: a negative budget must 400, not silently resolve to escalation-off
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _post(host, port, "/api/mission",
+                           body=json.dumps({"goal": "g", "escalation": {"enabled": True, "budget": -1}}))
+    finally:
+        httpd.shutdown()
+
+    assert resp.status == 400
+    assert b"budget" in body
+
+
+def test_resume_ignores_malformed_body_escalation(monkeypatch, tmp_path):
+    # review [7]: on resume the body's escalation is ignored (envelope wins), so a bare
+    # `"escalation": true` must not 400 the request and defeat crash recovery
+    from agency_studio import server as server_mod
+
+    handler = server_mod.StudioHandler.__new__(server_mod.StudioHandler)
+    handler._read_json_body = lambda: {"resume_from": "run-123", "escalation": True}
+    sent = []
+    handler._send_error_json = lambda code, msg: sent.append((code, msg))
+
+    parsed = handler._parse_mission_request()
+
+    assert sent == []                       # no 400 emitted
+    assert parsed is not None
+    assert parsed[9] == "run-123"           # resume_from preserved
+    assert parsed[10] is None               # body escalation dropped, not rejected
+
+
+def test_post_mission_drops_escalation_for_old_runner(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from agency_cli import runner_bridge
+    called = []
+
+    def _fake_run(goal, project_root, engine, on_event=None, should_cancel=None,
+                  asset_clause=None, render_assets=None):
+        called.append(True)
+        return runner_bridge.MissionResult(path=tmp_path, dossier={"verdicts": [], "mission_id": "x"})
+
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "g", "escalation": {"enabled": False, "budget": 6}}),
+                     headers={"Content-Type": "application/json"})
+        _read_sse(conn.getresponse())
+    finally:
+        httpd.shutdown()
+
+    assert called == [True]
+
+
 def test_done_frame_carries_asset_summary(monkeypatch, tmp_path):
     # The terminal `done` frame surfaces the manifest + rendered/total counts for the GUI.
     monkeypatch.setenv("HOME", str(tmp_path))

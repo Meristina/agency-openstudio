@@ -37,6 +37,15 @@ def _cmd_dry_run(args) -> int:
     return 0
 
 
+def _args_escalation(args):
+    if getattr(args, "no_escalation", False):
+        return False
+    budget = getattr(args, "escalation_budget", None)
+    if budget is None:
+        return None
+    return {"budget": budget}
+
+
 def _cmd_run(args) -> int:
     if getattr(args, "dry_run", False):
         return _cmd_dry_run(args)
@@ -45,6 +54,7 @@ def _cmd_run(args) -> int:
         result = runner_bridge.run(
             args.goal, project_root=args.path,
             engine=getattr(args, "engine", "claude-code"),
+            escalation=_args_escalation(args),
         )
     except (RuntimeError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
@@ -86,6 +96,7 @@ def _cmd_resume(args) -> int:
         result = runner_bridge.resume(
             args.mission_id, project_root=args.path,
             engine=getattr(args, "engine", "claude-code"),
+            escalation=_args_escalation(args),
         )
     except FileNotFoundError:
         print(f"error: mission '{args.mission_id}' not found in {store.missions_path()}",
@@ -144,6 +155,7 @@ def _cmd_batch(args) -> int:
             retry_failed=getattr(args, "retry_failed", False),
             limit=getattr(args, "limit", 0),
             engine=getattr(args, "engine", "claude-code"),
+            escalation=_args_escalation(args),
         )
     if cmd == "status":
         return batch_runner.status()
@@ -194,6 +206,10 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--engine", default="claude-code",
                     choices=_engine_choices(),
                     help="local agent CLI engine (default: claude-code). Each uses its own auth + web search.")
+    pr.add_argument("--no-escalation", action="store_true",
+                    help="run each department through the legacy doctrine-only path")
+    pr.add_argument("--escalation-budget", type=int, metavar="N",
+                    help="max escalation calls per department (0 disables escalation)")
     pr.set_defaults(func=_cmd_run)
 
     pm = sub.add_parser("missions", help="list saved missions from ~/.agency/missions/")
@@ -205,6 +221,10 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--engine", default="claude-code",
                      choices=_engine_choices(),
                      help="local agent CLI engine (default: claude-code)")
+    pre.add_argument("--no-escalation", action="store_true",
+                     help="run each department through the legacy doctrine-only path")
+    pre.add_argument("--escalation-budget", type=int, metavar="N",
+                     help="max escalation calls per department (0 disables escalation)")
     pre.set_defaults(func=_cmd_resume)
 
     pc = sub.add_parser("check", help="prerequisite / health check")
@@ -243,6 +263,10 @@ def build_parser() -> argparse.ArgumentParser:
     pbr.add_argument("--engine", default="claude-code",
                      choices=_engine_choices(),
                      help="local agent CLI engine (default: claude-code)")
+    pbr.add_argument("--no-escalation", action="store_true",
+                     help="run each department through the legacy doctrine-only path")
+    pbr.add_argument("--escalation-budget", type=int, metavar="N",
+                     help="max escalation calls per department (0 disables escalation)")
     pbr.set_defaults(func=_cmd_batch)
 
     pbs = bsub.add_parser("status", help="show queue and run state")

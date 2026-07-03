@@ -34,6 +34,40 @@ def test_dossier_md_renders_route_field_not_baseline():
     assert "assumptions" not in md, "product-kit 'assumptions' section leaked into agency dossier MD"
 
 
+def test_dossier_md_renders_escalation_section_only_when_present():
+    from agency_cli.runner_bridge import _dossier_md
+
+    base = {
+        "goal": "launch", "route": ["marketing"], "context": None, "iteration": 1,
+        "direction_check": None, "dept_outputs": {"marketing": "m-out"},
+        "decisions": [], "sources": [], "open_to_verify": [], "verdicts": [],
+    }
+    # absent key ⇒ no section (byte-identical off, Principle X)
+    assert "## Escalation" not in _dossier_md("001-test", base)
+
+    dossier = dict(base)
+    dossier["escalation"] = {
+        "marketing": {
+            "budget": 4, "consumed": 4, "est_tokens": 35900,
+            "finalized_by": "escalation",
+            "selection": {
+                "officers": ["officer-2-strategy"], "soldiers": ["soldier-stp"],
+                "rationale": {"soldier-stp": "STP fits"},
+            },
+            "invocations": [
+                {"role": "officer", "name": "officer-2-strategy", "est_tokens": 15000},
+                {"role": "soldier", "name": "soldier-positioning",
+                 "skipped": "budget-exhausted", "est_tokens": 0},
+            ],
+        },
+    }
+    md = _dossier_md("001-test", dossier)
+    assert "## Escalation" in md and "### marketing" in md
+    assert "budget: 4, consumed: 4" in md
+    assert "soldier-stp: STP fits" in md
+    assert "SKIPPED (budget-exhausted)" in md
+
+
 def test_dossier_md_lists_departments_run():
     from agency_cli.runner_bridge import _dossier_md
 
@@ -123,12 +157,14 @@ def _stub_mission(monkeypatch, *, verdict="PASS", delivered="HERO ASSET", residu
     captured = {"asset_clause": "<unset>", "context_clause": "<unset>",
                 "mcp_config_path": "<unset>", "mcp_allowed_tools": "<unset>",
                 "persona_doctrine": "<unset>",
-                "on_checkpoint": "<unset>", "resume_state": "<unset>"}
+                "on_checkpoint": "<unset>", "resume_state": "<unset>",
+                "escalation": "<unset>"}
 
     def _fake_run(goal, engine="claude-code", on_event=None, should_cancel=None,
                   asset_clause=None, context_clause=None,
                   mcp_config_path=None, mcp_allowed_tools=None,
-                  persona_doctrine=None, on_checkpoint=None, resume_state=None):
+                  persona_doctrine=None, on_checkpoint=None, resume_state=None,
+                  escalation=None):
         captured["asset_clause"] = asset_clause
         captured["context_clause"] = context_clause
         captured["mcp_config_path"] = mcp_config_path
@@ -136,6 +172,7 @@ def _stub_mission(monkeypatch, *, verdict="PASS", delivered="HERO ASSET", residu
         captured["persona_doctrine"] = persona_doctrine
         captured["on_checkpoint"] = on_checkpoint
         captured["resume_state"] = resume_state
+        captured["escalation"] = escalation
         return dict(base)  # a fresh copy per call
 
     monkeypatch.setattr("agency_cli.engines.cli_engine.run_mission_cli", _fake_run)
@@ -250,6 +287,31 @@ def test_default_run_forwards_no_context_clause(tmp_path, monkeypatch):
     captured = _stub_mission(monkeypatch, verdict="PASS")
     runner_bridge.run("launch a brand", project_root=str(tmp_path))
     assert captured["context_clause"] is None
+
+
+def test_escalation_defaults_on_and_opt_outs_are_resolved(tmp_path, monkeypatch):
+    from agency_cli import runner_bridge
+    from agency_cli.escalation import EscalationConfig
+
+    captured = _stub_mission(monkeypatch, verdict="PASS")
+    runner_bridge.run("launch a brand", project_root=str(tmp_path))
+    assert captured["escalation"] == EscalationConfig()
+
+    captured = _stub_mission(monkeypatch, verdict="PASS")
+    runner_bridge.run("launch a brand", project_root=str(tmp_path), escalation=False)
+    assert captured["escalation"] is None
+
+    captured = _stub_mission(monkeypatch, verdict="PASS")
+    runner_bridge.run("launch a brand", project_root=str(tmp_path), escalation={"budget": 0})
+    assert captured["escalation"] is None
+
+
+def test_escalation_dict_is_type_checked(tmp_path, monkeypatch):
+    from agency_cli import runner_bridge
+
+    _stub_mission(monkeypatch, verdict="PASS")
+    with pytest.raises(ValueError):
+        runner_bridge.run("launch", project_root=str(tmp_path), escalation={"enabled": "yes"})
 
 
 def test_mcp_tool_hook_is_threaded_to_the_engine(tmp_path, monkeypatch):
@@ -553,15 +615,18 @@ def test_cmd_run_forwards_engine(monkeypatch, tmp_path):
 
     calls = {}
 
-    def _fake_run(goal, project_root, engine="claude-code"):
+    def _fake_run(goal, project_root, engine="claude-code", escalation=None):
         calls["engine"] = engine
         calls["goal"] = goal
+        calls["escalation"] = escalation
         return MissionResult(path=tmp_path / "001-result", dossier={})
 
     monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
-    rc = _cmd_run(Namespace(goal="ship it", path=str(tmp_path), engine="gemini", dry_run=False))
+    rc = _cmd_run(Namespace(goal="ship it", path=str(tmp_path), engine="gemini", dry_run=False,
+                            no_escalation=False, escalation_budget=8))
     assert rc == 0
     assert calls.get("engine") == "gemini", "--engine not forwarded to runner_bridge.run"
+    assert calls["escalation"] == {"budget": 8}
 
 
 # ---- agency run --dry-run ---------------------------------------------------
@@ -573,7 +638,8 @@ def test_cmd_dry_run_shows_route(capsys, monkeypatch):
 
     monkeypatch.setattr("agency_kit.router.keyword_classify", lambda goal: ["product", "marketing"])
 
-    rc = _cmd_run(Namespace(goal="launch our product", path=".", engine="claude-code", dry_run=True))
+    rc = _cmd_run(Namespace(goal="launch our product", path=".", engine="claude-code", dry_run=True,
+                            no_escalation=False, escalation_budget=None))
     assert rc == 0
     out = capsys.readouterr().out
     assert "product" in out
@@ -637,16 +703,18 @@ def test_cmd_batch_run_flags(monkeypatch):
 
     calls = {}
 
-    def _fake_run(retry_failed, limit, engine):
-        calls.update({"rf": retry_failed, "lim": limit, "engine": engine})
+    def _fake_run(retry_failed, limit, engine, escalation=None):
+        calls.update({"rf": retry_failed, "lim": limit, "engine": engine, "escalation": escalation})
         return 0
 
     monkeypatch.setattr(batch_runner, "run", _fake_run)
-    rc = _cmd_batch(Namespace(batch_cmd="run", retry_failed=True, limit=5, engine="codex"))
+    rc = _cmd_batch(Namespace(batch_cmd="run", retry_failed=True, limit=5, engine="codex",
+                              no_escalation=True, escalation_budget=8))
     assert rc == 0
     assert calls["rf"] is True
     assert calls["lim"] == 5
     assert calls["engine"] == "codex"
+    assert calls["escalation"] is False
 
 
 # ---- batch_runner file I/O --------------------------------------------------

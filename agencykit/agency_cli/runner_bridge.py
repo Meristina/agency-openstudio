@@ -32,6 +32,28 @@ def _last_verdict(dossier: dict) -> str:
     return last.get("verdict", "DELIVERED") if isinstance(last, dict) else "DELIVERED"
 
 
+def _resolve_escalation(value):
+    from .escalation import EscalationConfig
+    if value is None:
+        return EscalationConfig()
+    if value is False:
+        return None
+    if isinstance(value, EscalationConfig):
+        return value if value.enabled and value.budget > 0 else None
+    if not isinstance(value, dict):
+        raise ValueError("escalation must be None, False, EscalationConfig, or dict")
+    allowed = {"enabled", "budget"}
+    if set(value) - allowed:
+        raise ValueError("escalation contains unknown keys")
+    enabled = value.get("enabled", True)
+    budget = value.get("budget", 6)
+    if not isinstance(enabled, bool) or not isinstance(budget, int) or isinstance(budget, bool):
+        raise ValueError("escalation.enabled must be bool and escalation.budget must be int")
+    if not enabled or budget <= 0:
+        return None
+    return EscalationConfig(enabled=enabled, budget=budget)
+
+
 def _next_id(missions: Path) -> str:
     nums = []
     if missions.exists():
@@ -64,6 +86,41 @@ def _dossier_md(mission_id: str, d: dict) -> str:
         lines.append(f"- {json.dumps(v, ensure_ascii=False)}")
     if d.get("residual_risk"):
         lines.append(f"\n## Residual risk\n{d['residual_risk']}")
+    # Escalation trace addendum. Keyed on `escalation` so a run without it (the key
+    # is absent — escalation off or pre-feature) is byte-identical, mirroring `assets`.
+    escalation = d.get("escalation")
+    if escalation and isinstance(escalation, dict):
+        lines.append("\n## Escalation")
+        for dept, trace in escalation.items():
+            if not isinstance(trace, dict):
+                lines.append(f"- {dept}: {json.dumps(trace, ensure_ascii=False)}")
+                continue
+            lines.append(f"\n### {dept}")
+            lines.append(
+                f"- budget: {trace.get('budget')}, consumed: {trace.get('consumed')}, "
+                f"est_tokens: {trace.get('est_tokens')} (advisory)"
+            )
+            if trace.get("finalized_by"):
+                reason = f" ({trace['fallback_reason']})" if trace.get("fallback_reason") else ""
+                lines.append(f"- finalized by: {trace['finalized_by']}{reason}")
+            sel = trace.get("selection") or {}
+            if sel.get("fallback"):
+                lines.append(f"- selection fallback: {sel['fallback']}")
+            elif sel.get("officers") or sel.get("soldiers"):
+                lines.append(
+                    f"- selection: officers={sel.get('officers')}, soldiers={sel.get('soldiers')}"
+                )
+                for name, why in (sel.get("rationale") or {}).items():
+                    lines.append(f"  - {name}: {why}")
+            for inv in trace.get("invocations") or []:
+                if not isinstance(inv, dict):
+                    continue
+                if inv.get("skipped"):
+                    lines.append(f"- {inv.get('role')} {inv.get('name')}: SKIPPED ({inv['skipped']})")
+                else:
+                    lines.append(
+                        f"- {inv.get('role')} {inv.get('name')} (est_tokens: {inv.get('est_tokens', 0)})"
+                    )
     # Studio multimodal addendum. Keyed on `assets` so a non-studio run (the key is
     # absent) is byte-identical to the pre-Wave-3 output. Each entry is a render
     # manifest dict ({type, status, url|reason, model, seconds}); a non-dict entry
@@ -129,6 +186,7 @@ def _run_and_persist(
     persona_doctrine: Optional[dict] = None,
     on_checkpoint: Optional[Callable[[dict], None]] = None,
     resume_state: Optional[dict] = None,
+    escalation=None,
 ) -> MissionResult:
     """Drive the engine for `goal`, persist to the ~/.agency store (so
     `agency missions/resume/export` see it) AND serialize the project-local
@@ -185,6 +243,7 @@ def _run_and_persist(
         persona_doctrine=persona_doctrine,
         on_checkpoint=on_checkpoint,
         resume_state=resume_state,
+        escalation=_resolve_escalation(escalation),
     )
     dossier["mission_id"] = store.new_mission_id(goal)
     # Stamp the canonical project root so store.list_missions can scope history to
@@ -221,6 +280,7 @@ def run(
     persona_doctrine: Optional[dict] = None,
     on_checkpoint: Optional[Callable[[dict], None]] = None,
     resume_state: Optional[dict] = None,
+    escalation=None,
 ) -> MissionResult:
     """Headless run: drive a local agent CLI engine, then serialize the dossier.
 
@@ -257,6 +317,7 @@ def run(
         mcp_config_path=mcp_config_path, mcp_allowed_tools=mcp_allowed_tools,
         persona_doctrine=persona_doctrine,
         on_checkpoint=on_checkpoint, resume_state=resume_state,
+        escalation=escalation,
     )
 
 
@@ -273,6 +334,7 @@ def resume(
     mcp_allowed_tools: Optional[list] = None,
     persona_doctrine: Optional[dict] = None,
     on_checkpoint: Optional[Callable[[dict], None]] = None,
+    escalation=None,
 ) -> MissionResult:
     """Re-run a COMPLETED mission's goal through the engine, from scratch.
 
@@ -300,4 +362,5 @@ def resume(
         mcp_config_path=mcp_config_path, mcp_allowed_tools=mcp_allowed_tools,
         persona_doctrine=persona_doctrine,
         on_checkpoint=on_checkpoint,
+        escalation=escalation,
     )

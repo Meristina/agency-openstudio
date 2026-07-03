@@ -985,7 +985,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         if request is None:
             return  # a 400 was already sent
         (goal, engine, web_search, use_mcp, use_knowledge, use_mcp_tools,
-         use_personas, use_visual, use_video, resume_from) = request
+         use_personas, use_visual, use_video, resume_from, escalation) = request
         # Resume: resolve the checkpoint BEFORE _begin_sse so any failure is a clean JSON error
         # (a broken SSE stream would be far worse UX). The envelope pins goal/engine/flags, so a
         # resumed run reconstructs the exact mission — the body's flags are ignored on resume.
@@ -1005,6 +1005,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             web_search, use_mcp, use_knowledge = bool(f.get("web_search")), bool(f.get("mcp")), bool(f.get("knowledge"))
             use_mcp_tools, use_personas = bool(f.get("mcp_tools")), bool(f.get("personas"))
             use_visual, use_video = bool(f.get("visual")), bool(f.get("video"))
+            escalation = f.get("escalation")
         engine = engine or "claude-code"  # apply the default now that resume-vs-explicit is resolved
         # Refuse an unknown/unvalidated engine BEFORE opening the SSE stream, so it surfaces as a
         # clean JSON 4xx (consistent with the resume-path errors above) rather than a mid-stream
@@ -1042,7 +1043,8 @@ class StudioHandler(BaseHTTPRequestHandler):
                                               use_knowledge, use_mcp_tools, use_personas,
                                               use_visual, use_video, run_id=run_id,
                                               explicit_cancel=explicit_cancel,
-                                              resume_envelope=resume_envelope)
+                                              resume_envelope=resume_envelope,
+                                              escalation=escalation)
         finally:
             # Deregister the instant the run is over — BEFORE writing the terminal
             # frame — so a cancel arriving during that (socket-write) window gets a
@@ -1153,9 +1155,10 @@ class StudioHandler(BaseHTTPRequestHandler):
         entry["cancel"].set()
         self._send_json({"status": "cancelling", "run_id": run_id}, status=202)
 
-    def _parse_mission_request(self) -> "tuple[str, str | None, bool, bool, bool, bool, bool, bool, bool, str] | None":
+    def _parse_mission_request(self) -> "tuple[str, str | None, bool, bool, bool, bool, bool, bool, bool, str, dict | None] | None":
         """Read + validate the JSON body. Returns ``(goal, engine, web_search, use_mcp,
-        use_knowledge, use_mcp_tools, use_personas, use_visual, use_video, resume_from)``, or
+        use_knowledge, use_mcp_tools, use_personas, use_visual, use_video, resume_from,
+        escalation)``, or
         ``None`` after sending the matching error: a 400 for bad JSON / a non-object body / a
         missing goal (unless ``resume_from`` is present — a resume reconstructs the goal from the
         pinned checkpoint), or the error ``_read_body`` already sent (400/408/411/413) for a
@@ -1181,6 +1184,12 @@ class StudioHandler(BaseHTTPRequestHandler):
         if not goal and not resume_from:
             self._send_error_json(400, "missing 'goal'")
             return None
+        # On resume the body's escalation is ignored (the pinned envelope's value wins in
+        # _handle_run_mission), so don't 400 a resume request over a malformed body field —
+        # that would defeat crash recovery for a caller sending e.g. {"resume_from":..., "escalation":true}.
+        escalation = None if resume_from else self._parse_escalation(payload.get("escalation"))
+        if escalation is False:
+            return None
         # Engine may be None here (caller left it unset) — the default is applied in
         # _handle_run_mission so a resume can tell "unset" (reuse the pinned engine) apart
         # from an explicit choice (override the pinned engine — the escape hatch when the
@@ -1189,7 +1198,28 @@ class StudioHandler(BaseHTTPRequestHandler):
                 bool(payload.get("web_search")), bool(payload.get("mcp")),
                 bool(payload.get("knowledge")), bool(payload.get("mcp_tools")),
                 bool(payload.get("personas")), bool(payload.get("visual")),
-                bool(payload.get("video")), resume_from)
+                bool(payload.get("video")), resume_from, escalation)
+
+    def _parse_escalation(self, value):
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            self._send_error_json(400, "escalation must be an object")
+            return False
+        if set(value) - {"enabled", "budget"}:
+            self._send_error_json(400, "escalation contains unknown keys")
+            return False
+        enabled = value.get("enabled", True)
+        budget = value.get("budget", 6)
+        if not isinstance(enabled, bool) or not isinstance(budget, int) or isinstance(budget, bool):
+            self._send_error_json(400, "escalation.enabled must be bool and escalation.budget must be int")
+            return False
+        if budget < 0:
+            # budget 0 legitimately means "off"; a negative budget is a client error — reject it
+            # loudly rather than let it resolve to a silent escalation-off (the user asked for it on).
+            self._send_error_json(400, "escalation.budget must be >= 0")
+            return False
+        return {"enabled": enabled, "budget": budget}
 
     def _begin_sse(self) -> None:
         """Emit the SSE response headers. The Mission Console consumes this via
@@ -1213,6 +1243,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         use_video: bool = False, run_id: str = "",
         explicit_cancel: "threading.Event | None" = None,
         resume_envelope: "dict | None" = None,
+        escalation: "dict | None" = None,
     ) -> "dict | None":
         """Run the mission on a worker thread and stream its progress events.
 
@@ -1246,6 +1277,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             "mcp_tools": use_mcp_tools, "personas": use_personas,
             "visual": use_visual, "video": use_video,
         }
+        if escalation is not None:
+            checkpoint_flags["escalation"] = escalation
         checkpoint_created = (resume_envelope or {}).get("created") or datetime.now(timezone.utc).isoformat()
         # Wave 6 — persona doctrine: the curated persona store lives under docs_root (never
         # web-served), beside the RAG/KG stores. Captured here (a str path) so the worker closes
@@ -1358,6 +1391,8 @@ class StudioHandler(BaseHTTPRequestHandler):
                     run_kwargs["on_checkpoint"] = _on_checkpoint
                 if resume_envelope is not None and "resume_state" in run_params:
                     run_kwargs["resume_state"] = resume_envelope.get("state")
+                if escalation is not None and "escalation" in run_params:
+                    run_kwargs["escalation"] = escalation
                 result_box["result"] = runner_bridge.run(**run_kwargs)
             except MissionCancelled:
                 # Stopped before any persistence. Recorded so that — when the client

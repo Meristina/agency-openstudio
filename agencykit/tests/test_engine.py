@@ -10,6 +10,7 @@ import threading
 import pytest
 
 from agency_cli.engines import cli_engine
+from agency_cli.escalation import EscalationConfig
 
 
 def test_engines_registry_has_three_web_search_engines():
@@ -182,6 +183,158 @@ def test_none_checkpoint_and_resume_are_byte_identical(monkeypatch):
     withnone = cli_engine.run_mission_cli("ship a feature", engine="claude-code",
                                           on_checkpoint=None, resume_state=None)
     assert withnone == base
+
+
+def test_escalation_disabled_and_zero_are_call_identical(monkeypatch):
+    monkeypatch.setattr(cli_engine.shutil, "which", lambda b: "/usr/local/bin/" + b)
+
+    def run(escalation):
+        calls = []
+        verdicts = iter(["VERDICT: PASS"])
+
+        def _call(cmd, prompt, timeout=900, should_cancel=None):
+            calls.append((list(cmd), prompt))
+            low = prompt.lower()
+            if "json array" in low:
+                return '["marketing"]'
+            if "issue a verdict" in low:
+                return next(verdicts)
+            return "OUTPUT"
+
+        monkeypatch.setattr(cli_engine, "_call", _call)
+        dossier = cli_engine.run_mission_cli("launch", engine="claude-code", escalation=escalation)
+        return calls, dossier
+
+    base_calls, base = run(None)
+    disabled_calls, disabled = run(EscalationConfig(enabled=False))
+    zero_calls, zero = run(EscalationConfig(budget=0))
+
+    assert disabled_calls == base_calls == zero_calls
+    assert "escalation" not in base
+    assert "escalation" not in disabled
+    assert "escalation" not in zero
+
+
+def test_active_escalation_attaches_department_trace(monkeypatch):
+    monkeypatch.setattr(cli_engine.shutil, "which", lambda b: "/usr/local/bin/" + b)
+
+    def _call(cmd, prompt, timeout=900, should_cancel=None):
+        low = prompt.lower()
+        if "json array" in low:
+            return '["marketing"]'
+        if "compact specialist roster" in low:
+            return '{"officers":["officer-2-strategy"],"soldiers":["soldier-stp"],"rationale":{}}'
+        if "issue a verdict" in low:
+            return "VERDICT: PASS"
+        return "OUTPUT"
+
+    monkeypatch.setattr(cli_engine, "_call", _call)
+    dossier = cli_engine.run_mission_cli(
+        "position a B2B analytics product",
+        engine="claude-code",
+        escalation=EscalationConfig(budget=4),
+    )
+
+    trace = dossier["escalation"]["marketing"]
+    assert [i["role"] for i in trace["invocations"]] == ["selection", "commander", "officer", "soldier"]
+    assert trace["consumed"] == 4
+
+
+def test_active_escalation_checkpoint_and_old_resume_default(monkeypatch):
+    monkeypatch.setattr(cli_engine.shutil, "which", lambda b: "/usr/local/bin/" + b)
+    snaps = []
+
+    def _call(cmd, prompt, timeout=900, should_cancel=None):
+        low = prompt.lower()
+        if "json array" in low:
+            return '["marketing"]'
+        if "compact specialist roster" in low:
+            return '{"officers":[],"soldiers":["soldier-stp"],"rationale":{}}'
+        if "issue a verdict" in low:
+            return "VERDICT: PASS"
+        return "OUTPUT"
+
+    monkeypatch.setattr(cli_engine, "_call", _call)
+    state = {"route": ["marketing"], "dept_outputs": {}, "verdicts": [], "iteration": 0, "delivered": ""}
+    dossier = cli_engine.run_mission_cli(
+        "launch",
+        engine="claude-code",
+        resume_state=state,
+        escalation=EscalationConfig(budget=3),
+        on_checkpoint=snaps.append,
+    )
+
+    assert dossier["escalation"]["marketing"]["selection"]["soldiers"] == ["soldier-stp"]
+    assert any(s["phase"] == "dept" and "marketing" in s["escalation"] for s in snaps)
+
+
+def test_veto_loop_inspector_prompt_invariant_with_escalation(monkeypatch):
+    def run(escalation):
+        monkeypatch.setattr(cli_engine.shutil, "which", lambda b: "/usr/local/bin/" + b)
+        inspector_prompts = []
+        verdicts = iter(["VETO: fix", "VERDICT: PASS"])
+
+        def _call(cmd, prompt, timeout=900, should_cancel=None):
+            low = prompt.lower()
+            if "json array" in low:
+                return '["marketing"]'
+            if "compact specialist roster" in low:
+                return '{"officers":[],"soldiers":[],"rationale":{}}'
+            if "issue a verdict" in low:
+                inspector_prompts.append(prompt)
+                return next(verdicts)
+            return "OUTPUT"
+
+        monkeypatch.setattr(cli_engine, "_call", _call)
+        dossier = cli_engine.run_mission_cli("launch", engine="claude-code", escalation=escalation)
+        return dossier, inspector_prompts
+
+    off, off_prompts = run(None)
+    on, on_prompts = run(EscalationConfig())
+
+    assert [v["verdict"] for v in off["verdicts"]] == ["VETO", "PASS"]
+    assert [v["verdict"] for v in on["verdicts"]] == ["VETO", "PASS"]
+    assert off_prompts == on_prompts
+
+
+def test_fmt_dept_outputs_synthesis_sees_full_output():
+    # review [1]: synthesis must NOT truncate a department's assembled multi-specialist
+    # output (limit=None), or the escalation depth never reaches the delivered dossier;
+    # the prior-dept context path still truncates (default limit) with its marker
+    big = "X" * 12000
+    truncated = cli_engine._fmt_dept_outputs({"product": big})            # default limit
+    full = cli_engine._fmt_dept_outputs({"product": big}, limit=None)     # synthesis path
+    assert "truncated" in truncated and len(truncated) < 8000
+    assert big in full and "truncated" not in full
+
+
+def test_active_escalation_traces_multiple_departments_independently(monkeypatch):
+    monkeypatch.setattr(cli_engine.shutil, "which", lambda b: "/usr/local/bin/" + b)
+
+    def _call(cmd, prompt, timeout=900, should_cancel=None):
+        low = prompt.lower()
+        if "json array" in low:
+            return '["marketing", "product", "comms"]'
+        if "compact specialist roster" in low and "commander-comms" in low:
+            return '{"officers":["comms/o6-events"],"soldiers":[],"rationale":{"comms/o6-events":"event"}}'
+        if "compact specialist roster" in low and "commander-product" in low:
+            return '{"officers":["officer-1-discovery"],"soldiers":[],"rationale":{}}'
+        if "compact specialist roster" in low:
+            return '{"officers":["officer-2-strategy"],"soldiers":[],"rationale":{}}'
+        if "issue a verdict" in low:
+            return "VERDICT: PASS"
+        return "OUTPUT"
+
+    monkeypatch.setattr(cli_engine, "_call", _call)
+    dossier = cli_engine.run_mission_cli(
+        "B2B 360 launch with product, marketing, and event communications",
+        engine="claude-code",
+        escalation=EscalationConfig(budget=3),
+    )
+
+    assert set(dossier["escalation"]) == {"marketing", "product", "comms"}
+    assert all(trace["budget"] == 3 and trace["consumed"] <= 3 for trace in dossier["escalation"].values())
+    assert dossier["escalation"]["comms"]["invocations"][-1]["virtual"] is True
 
 
 def test_resume_skips_routing_and_completed_departments(monkeypatch):
