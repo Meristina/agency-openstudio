@@ -12,7 +12,7 @@ free/paid model choice.
 
 ---
 
-## Brick 0 — Foundations *(in progress)*
+## Brick 0 — Foundations *(done — `3089b23`)*
 
 Spec-kit initialized (`specify init` + claude integration), constitution ratified by
 the user, canonical `AGENTS.md` + `CLAUDE.md` symlink, `agencykit/` (the
@@ -22,7 +22,7 @@ committed.
 suite (160 tests) are green, and the repo installs standalone
 (`pip install -e ./agencykit && pip install -e .`).
 
-## Brick 1 — The Engine contract (multi-CLI abstraction, claude validated)
+## Brick 1 — The Engine contract (multi-CLI abstraction, claude validated) *(done — `a3f9b30`)*
 
 Formalize the `ENGINES` dict in `agencykit/agency_cli/engines/cli_engine.py` into an
 explicit `Engine` contract: `run(prompt)` / `route(prompt)` / declared capabilities
