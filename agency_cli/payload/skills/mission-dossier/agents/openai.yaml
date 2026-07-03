@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agency Mission Dossier"
+  short_description: "Cross-department dossier protocol for agency missions"
+  default_prompt: "Use $mission-dossier to maintain the cross-department dossier — read it in at the start of each phase and write the phase output back before moving on."

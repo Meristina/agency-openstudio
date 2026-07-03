@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cross-Dept Synthesis"
+  short_description: "Combine department outputs into one coherent agency deliverable"
+  default_prompt: "Use $cross-dept-synthesis after all routed departments have completed to combine their outputs — map overlaps, surface contradictions, trace handoffs, and produce one agency voice."
