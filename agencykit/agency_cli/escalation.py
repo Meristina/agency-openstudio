@@ -406,16 +406,29 @@ def run_department(
         _emit(on_event, {"phase": "escalation", "dept": dept, "step": role, "name": name, "status": "done"})
         return output
 
+    def finalize_via_fallback(reason: str, prior: str = "") -> str:
+        # The condensed-doctrine fallback for a department that could not assemble
+        # specialist work. Guarded exactly like spend(): a cancel propagates, any
+        # other failure degrades to `prior` (the commander brief, or "") instead of
+        # aborting the whole mission (FR-007). Not counted against the escalation
+        # budget — it is the pre-feature department call, not a specialist invocation.
+        trace["finalized_by"] = "doctrine-fallback"
+        trace["fallback_reason"] = reason
+        _check_cancel(should_cancel, cancelled)
+        try:
+            return call(exec_cmd, _fallback_prompt(dept, goal, dept_outputs, commander_doc, reason),
+                        timeout=run_timeout, should_cancel=should_cancel)
+        except cancelled:
+            raise
+        except Exception:
+            trace["fallback_reason"] = f"{reason}+fallback-call-failed"
+            return prior
+
     selection_text = spend("selection", f"{commander.name}-selection", _selection_prompt(dept, goal, dept_outputs, roster, budget), base_cmd)
     selection, selected_any = _validate_selection(dept, _extract_json_object(selection_text or ""), roster)
     trace["selection"] = selection
     if not selected_any:
-        reason = selection.get("fallback") or "router-selected-none"
-        prompt = _fallback_prompt(dept, goal, dept_outputs, commander_doc, reason)
-        output = call(exec_cmd, prompt, timeout=run_timeout, should_cancel=should_cancel)
-        trace["finalized_by"] = "doctrine-fallback"
-        trace["fallback_reason"] = reason
-        return output, trace
+        return finalize_via_fallback(selection.get("fallback") or "router-selected-none"), trace
 
     commander_prompt = _specialist_prompt(
         dept,
@@ -481,10 +494,18 @@ def run_department(
         spend("soldier", name, prompt, exec_cmd)
 
     output = _assemble(commander_output or "", trace["invocations"])
+    ran_specialists = any(
+        i.get("role") in ("officer", "soldier") and i.get("output")
+        for i in trace["invocations"]
+    )
     if not output.strip():
-        output = call(exec_cmd, _fallback_prompt(dept, goal, dept_outputs, commander_doc, "budget-exhausted-before-assembly"), timeout=run_timeout, should_cancel=should_cancel)
-        trace["finalized_by"] = "doctrine-fallback"
-        trace["fallback_reason"] = "budget-exhausted-before-assembly"
+        output = finalize_via_fallback("budget-exhausted-before-assembly")
+    elif not ran_specialists:
+        # the commander ran but every selected officer/soldier was skipped or failed —
+        # this is not a real escalation, so fall back to a full-doctrine deliverable
+        # rather than ship the thin commander brief mislabelled as escalation; keep the
+        # brief if even the fallback call fails
+        output = finalize_via_fallback("all-specialists-failed", prior=output)
     else:
         trace["finalized_by"] = "escalation"
     return output, trace

@@ -18,7 +18,10 @@ def _recorder(outputs):
         if should_cancel and should_cancel():
             from agency_cli.engines.cli_engine import MissionCancelled
             raise MissionCancelled()
-        return queue.pop(0)
+        item = queue.pop(0)
+        if isinstance(item, BaseException):
+            raise item  # a queued exception simulates a failing CLI call
+        return item
 
     return call, calls
 
@@ -132,6 +135,55 @@ def test_budget_exhaustion_records_skips_and_keeps_output():
         "budget-exhausted",
     ]
     assert "COMMANDER OUT" in output and "OFFICER OUT" in output
+
+
+def test_fallback_call_failure_degrades_instead_of_aborting():
+    # T043: the doctrine-fallback call must degrade like every specialist call — a
+    # failing CLI there (e.g. a session limit) must not abort the whole mission (FR-007)
+    from agency_cli.engines.cli_engine import MissionCancelled
+    roster = escalation.build_roster(PAYLOAD)
+    call, calls = _recorder([
+        json.dumps({"officers": [], "soldiers": [], "rationale": {}}),  # router selects nothing
+        RuntimeError("CLI engine 'claude' exited 1: session limit"),     # fallback call fails
+    ])
+
+    output, trace = escalation.run_department(
+        "marketing", "quick sanity", {}, config=escalation.EscalationConfig(),
+        roster=roster, call=call, base_cmd=["base"], exec_cmd=["exec"], run_timeout=9,
+        cancelled=MissionCancelled,
+    )
+
+    assert output == ""  # degraded to the (empty) prior, no exception raised
+    assert trace["finalized_by"] == "doctrine-fallback"
+    assert trace["fallback_reason"] == "router-selected-none+fallback-call-failed"
+    assert len(calls) == 2
+
+
+def test_all_specialists_failed_marks_doctrine_fallback_not_escalation():
+    # T043: when the commander runs but every selected specialist fails, the dept is
+    # NOT a real escalation — it must fall back to a full-doctrine deliverable and be
+    # labelled doctrine-fallback, not silently reported as finalized_by=escalation
+    from agency_cli.engines.cli_engine import MissionCancelled
+    roster = escalation.build_roster(PAYLOAD)
+    call, _ = _recorder([
+        json.dumps({"officers": ["officer-2-strategy"], "soldiers": ["soldier-stp"], "rationale": {}}),
+        "COMMANDER OUT",
+        RuntimeError("CLI exited 1"),   # officer-2-strategy fails
+        RuntimeError("CLI exited 1"),   # soldier-stp fails
+        "DOCTRINE FALLBACK OUT",        # the doctrine fallback succeeds
+    ])
+
+    output, trace = escalation.run_department(
+        "marketing", "launch", {}, config=escalation.EscalationConfig(),
+        roster=roster, call=call, base_cmd=["base"], exec_cmd=["exec"], run_timeout=9,
+        cancelled=MissionCancelled,
+    )
+
+    assert output == "DOCTRINE FALLBACK OUT"
+    assert trace["finalized_by"] == "doctrine-fallback"
+    assert trace["fallback_reason"] == "all-specialists-failed"
+    call_failed = [i for i in trace["invocations"] if i.get("skipped") == "call-failed"]
+    assert {i["name"] for i in call_failed} == {"officer-2-strategy", "soldier-stp"}
 
 
 def test_null_officers_in_selection_does_not_crash():
