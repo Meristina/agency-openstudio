@@ -82,13 +82,17 @@ def run(goal, engine="claude-code", ..., escalation=None): ...
 
 ## 4. `agency` CLI flags
 
-```
+```text
 agency run  "goal" [--no-escalation] [--escalation-budget N]
 agency batch run    [--no-escalation] [--escalation-budget N]
 agency resume <id>  [--no-escalation] [--escalation-budget N]
 ```
 
 `--escalation-budget 0` ≡ `--no-escalation`. Defaults: escalation on, budget 6.
+
+**Precedence**: `--no-escalation` ALWAYS wins when both flags are given — an explicit
+disable beats a budget tune, whatever `N` says (`--no-escalation --escalation-budget 8`
+⇒ disabled). The studio parser applies the same rule (below).
 
 ## 5. Studio mission request (HTTP, additive field)
 
@@ -98,7 +102,10 @@ agency resume <id>  [--no-escalation] [--escalation-budget N]
 { "escalation": { "enabled": true, "budget": 6 } }
 ```
 
-- Absent ⇒ product default (on). Types strictly validated (bool / int, `400` on junk).
+- Absent ⇒ product default (on, budget 6). Both keys optional: missing `enabled` ⇒
+  `true`, missing `budget` ⇒ `6`. Types strictly validated (bool / int, `400` on junk).
+- Same precedence as the CLI: `"enabled": false` wins over any `budget` value;
+  `"budget": 0` ≡ `"enabled": false`.
 - Forwarded to `runner_bridge.run` ONLY if its signature accepts `escalation`
   (existing `inspect.signature` degradation pattern — an older agencykit ignores it).
 - No new endpoint, no bind/CORS/path change (Principle VI untouched).

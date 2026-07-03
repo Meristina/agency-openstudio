@@ -34,10 +34,11 @@ agency run "big launch" --escalation-budget 10           # allow a deeper chain
 agency run "tiny check" --escalation-budget 0            # ≡ --no-escalation
 ```
 
-From the studio, the mission request accepts an optional field (default on):
+From the studio, the mission request accepts an optional field — both keys optional,
+defaults `enabled: true`, `budget: 6`; `enabled: false` wins over any budget:
 
 ```json
-{ "goal": "…", "escalation": { "enabled": false } }
+{ "goal": "…", "escalation": { "enabled": false, "budget": 6 } }
 ```
 
 ## Event / comms mission (virtual officers)

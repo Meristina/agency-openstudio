@@ -38,9 +38,12 @@ today.
 **Project Type**: Library (agencykit orchestration) + thin studio server passthrough.
 
 **Performance Goals**: A department's escalation adds at most `budget` subprocess calls
-(default cap: 6 — 1 selection + 1 commander + up to 2 officers + up to 2 soldiers).
-Mission wall-time stays bounded by `(1 route + Σ per-dept (1 + budget) + MAX_ITERS ×
-(synth + inspect)) × spec.run_timeout`.
+(default cap: 6 — 1 selection + 1 commander + up to 2 officers + up to 2 soldiers); the
+budget covers the whole chain including the selection call. Mission wall-time stays
+bounded by `(1 route + Σ per-dept budget + MAX_ITERS × (synth + inspect)) ×
+spec.run_timeout` — plus at most one extra condensed-doctrine call for a department only
+in the degenerate doctrine-fallback case (escalation ran but produced nothing
+assemblable).
 
 **Constraints**: Escalation off ⇒ byte-identical prompts/calls (Principle X); veto-loop
 inputs and logic untouched (Art. IX); router/inspector never see MCP tools or escalation

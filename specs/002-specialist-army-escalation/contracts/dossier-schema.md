@@ -56,9 +56,12 @@ optional top-level key. All existing keys are unchanged in name, type, and seman
   byte-identical to the pre-feature dossier (SC-003).
 - `consumed <= budget` for every department (SC-002).
 - Every invocation carries either `output` or `skipped`, never both.
-- A department that ran doctrine-only under active escalation carries
-  `"no_escalation": "<reason>"` instead of `selection`/`invocations` — the decision is
-  explicit, never silent (US1 scenario 3).
+- The trace shape is identical in every case (same keys as data-model.md): a department
+  finalized doctrine-only under active escalation KEEPS its `selection` (or fallback
+  marker) and any partial `invocations`, and carries `finalized_by: "doctrine-fallback"`
+  plus a `fallback_reason` (`selection-unparseable` / `router-selected-none` /
+  `budget-exhausted-before-assembly`) — the decision is explicit, never silent
+  (US1 scenario 3).
 
 ## Checkpoint snapshot (version stays 1)
 

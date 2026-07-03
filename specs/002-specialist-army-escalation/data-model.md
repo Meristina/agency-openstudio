@@ -86,20 +86,26 @@ One entry per escalation subprocess call, appended in execution order.
   "budget": 6,
   "consumed": 5,
   "est_tokens": 41230,
-  "selection": { "...": "the parsed Selection object or its fallback marker" },
-  "invocations": [ "InvocationRecord, execution order" ],
+  "selection": { "...": "the parsed Selection object, or a fallback marker" },
+  "invocations": [ "InvocationRecord, execution order (may be empty)" ],
   "finalized_by": "escalation | doctrine-fallback",
-  "no_escalation": "reason string — only when the dept ran doctrine-only"
+  "fallback_reason": "selection-unparseable | router-selected-none | budget-exhausted-before-assembly"
 }
 ```
 
-`finalized_by` disambiguates the hybrid case: `"escalation"` (default) when the
-department output was assembled from specialist work; `"doctrine-fallback"` when
-escalation started but could not produce assemblable output (e.g. budget 1 — the
-selection call consumed the whole cap before the commander ran) and the department was
-finalized by a condensed-doctrine call. The fallback call itself is OUTSIDE the
-escalation budget (it is the pre-feature department call, not a specialist invocation)
-and is not an `InvocationRecord`; the partial invocations that DID run stay in the trace.
+**The trace shape is the same in every case** — `selection` and `invocations` are always
+present (the selection call that ran is always recorded; a fallback replaces `selection`
+with its marker, e.g. `{"fallback": "selection-unparseable"}`). `finalized_by` says what
+produced the department output: `"escalation"` (default) when it was assembled from
+specialist work; `"doctrine-fallback"` when escalation started but could not produce
+assemblable output — router legitimately selected nothing, selection was unparseable, or
+the budget was exhausted before anything assemblable ran (e.g. budget 1: the selection
+call consumed the whole cap) — and the department was finalized by a condensed-doctrine
+call. `fallback_reason` is present iff `finalized_by == "doctrine-fallback"`, making the
+no-escalation decision explicit, never silent (US1 scenario 3). The fallback call itself
+is OUTSIDE the escalation budget (it is the pre-feature department call, not a specialist
+invocation) and is not an `InvocationRecord`; the partial invocations that DID run stay
+in the trace.
 
 Invariants (tested): `consumed == len([i for i in invocations if not i.skipped])`;
 `consumed <= budget` (SC-002); `est_tokens == sum(i.est_tokens)`; a department with
@@ -132,7 +138,7 @@ existing "dept not in dept_outputs ⇒ re-run" invariant is untouched.
 
 ## State transitions (one escalated department)
 
-```
+```text
 doctrine-ready ─▶ selecting ─▶ commanding ─▶ officer(s) ─▶ soldier(s) ─▶ assembled
       │               │ unparseable ⇒ doctrine-only (fallback recorded)
       │               ├ budget hit at ANY arrow ⇒ skip-remaining, assemble what exists

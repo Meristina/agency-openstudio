@@ -93,7 +93,9 @@ contains the labeled specialist sections.
       (deterministic, no extra assembly call — count the `_call` invocations)
 - [ ] T011 [P] [US1] Explicit no-escalation test in `agencykit/tests/test_escalation.py`:
       router selects nothing ⇒ dept runs doctrine-only and the trace records
-      `no_escalation` with a reason (US1 scenario 3 — never silent)
+      `finalized_by: "doctrine-fallback"` with `fallback_reason:
+      "router-selected-none"`, keeping the selection invocation (US1 scenario 3 —
+      never silent)
 
 ### Implementation for User Story 1
 
@@ -187,8 +189,9 @@ per department.
       goals ⇒ different selections, each selected name carrying a rationale (SC-005,
       FR-012; missing rationale ⇒ `"(no rationale returned)"` recorded)
 - [ ] T027 [P] [US3] Fallback test in `agencykit/tests/test_escalation.py`: unparseable /
-      empty selection output ⇒ doctrine-only execution recorded as
-      `{"fallback": "selection-unparseable"}` (edge case)
+      empty selection output ⇒ doctrine-only execution with `selection` recorded as the
+      `{"fallback": "selection-unparseable"}` marker, `finalized_by:
+      "doctrine-fallback"`, `fallback_reason: "selection-unparseable"` (edge case)
 - [ ] T028 [P] [US3] Missing-specialist test in `agencykit/tests/test_escalation.py`:
       selected soldier's file absent ⇒ `{"skipped": "missing-file"}`, mission completes,
       no fabricated substitute (FR-007, SC-006)

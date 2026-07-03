@@ -124,7 +124,7 @@ standalone-agencykit test expectations wholesale.
 **Decision** (per escalated department, all via existing `_call`, cancel-checked between
 calls, `_emit` events at each step):
 
-```
+```text
 1. selection  (base cmd)      → {officers, soldiers, rationale} | fallback
 2. commander  (exec_cmd)      → department brief: phase directives per selected officer
 3. per officer (exec_cmd)     → phase deliverable (officer doctrine, or virtual-officer
