@@ -241,9 +241,21 @@ per department.
       documented there
 - [X] T040 Full offline gate: `cd agencykit && pytest tests/ -q` and `pytest tests/ -q`
       (repo root) both green (SC-007)
-- [ ] T041 Live validation on `claude-code` (per research.md D10): one marketing mission
-      (SC-001), one comms/event mission (SC-004), one B2B-360 mission — dossier traces
-      captured and recorded in the PR description
+- [X] T041 Live validation on `claude-code` (per research.md D10): one marketing mission
+      (SC-001, PASS — 3 officers + 1 soldier traced), one comms/event mission (SC-004,
+      virtual officers comms/o1|o2|o6 traced, veto loop exercised), one B2B-360 mission
+      (product + marketing + comms, 3 traces, checkpoint/resume validated live). Surfaced
+      a robustness finding: the doctrine-fallback call (escalation.py:415) is the only
+      call site not wrapped by spend()'s graceful-degradation try/except — a session-limit
+      on that call crashed the mission (recovered cleanly by checkpoint/resume) while the
+      same failure on any specialist call degrades to call-failed. Follow-up below (T043).
+- [ ] T043 [follow-up from T041] Wrap the doctrine-fallback call (escalation.py:415) in
+      the same try/except as spend() so a failing fallback degrades (empty/flagged dept
+      output) instead of aborting the mission; and when every selected specialist ends in
+      call-failed, mark the dept trace (e.g. finalized_by="doctrine-fallback" +
+      fallback_reason="all-specialists-failed") instead of finalized_by="escalation", so a
+      commander-only degraded department is not silently reported as a full escalation.
+      Offline test: scripted call() raising on the fallback / on all specialists.
 - [X] T042 Walk `specs/002-specialist-army-escalation/quickstart.md` end-to-end and fix
       any drift between it and the shipped CLI/studio surfaces
 
