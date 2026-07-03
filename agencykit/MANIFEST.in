@@ -1,0 +1,3 @@
+# Ship the bundled payload in source distributions (wheel uses package-data too).
+recursive-include agency_cli/payload *
+include README.md requirements.txt

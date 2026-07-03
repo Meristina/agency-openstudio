@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agency Routing"
+  short_description: "Classify a mission goal into the minimal ordered set of departments"
+  default_prompt: "Use $routing to classify a mission goal into the right departments (solve / product / marketing / finance / comms / data / ops / people / tech) and order — or to reclassify after a REDIRECT."

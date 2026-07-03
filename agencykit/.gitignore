@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.claude/skills/
+skills-lock.json
+missions/
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.DS_Store
