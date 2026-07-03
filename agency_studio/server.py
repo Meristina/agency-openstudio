@@ -989,17 +989,42 @@ class StudioHandler(BaseHTTPRequestHandler):
         # Resume: resolve the checkpoint BEFORE _begin_sse so any failure is a clean JSON error
         # (a broken SSE stream would be far worse UX). The envelope pins goal/engine/flags, so a
         # resumed run reconstructs the exact mission — the body's flags are ignored on resume.
+        # EXCEPTION: an explicit body engine overrides the pinned one. This is the escape hatch
+        # for a checkpoint whose pinned engine is no longer validated (e.g. a pre-existing codex
+        # run): the caller can resume it with a validated engine of their choosing — an explicit
+        # choice, never a silent substitution. The mission's route/dept_outputs/verdicts do not
+        # depend on which engine produced them, so continuing on another validated engine is sound.
         resume_envelope = None
         if resume_from:
             resume_envelope = self._resolve_resume(resume_from, goal)
             if resume_envelope is None:
                 return  # _resolve_resume already sent the matching error (400/404/409/501)
             goal = resume_envelope.get("goal") or ""
-            engine = resume_envelope.get("engine") or engine
+            engine = engine or resume_envelope.get("engine")  # explicit body engine wins; else pinned
             f = resume_envelope.get("flags") or {}
             web_search, use_mcp, use_knowledge = bool(f.get("web_search")), bool(f.get("mcp")), bool(f.get("knowledge"))
             use_mcp_tools, use_personas = bool(f.get("mcp_tools")), bool(f.get("personas"))
             use_visual, use_video = bool(f.get("visual")), bool(f.get("video"))
+        engine = engine or "claude-code"  # apply the default now that resume-vs-explicit is resolved
+        # Refuse an unknown/unvalidated engine BEFORE opening the SSE stream, so it surfaces as a
+        # clean JSON 4xx (consistent with the resume-path errors above) rather than a mid-stream
+        # phase:"error" frame. run_mission_cli re-checks, but only after the stream is already open.
+        # Guarded on the helper being present so an older pinned agency-kit degrades gracefully
+        # (the mission loop still enforces the same guard, just as an SSE error).
+        try:
+            from agency_cli.engines.cli_engine import ensure_production_engine, EngineNotValidated
+        except ImportError:
+            ensure_production_engine = EngineNotValidated = None
+        if ensure_production_engine is not None:
+            try:
+                ensure_production_engine(engine)
+            except EngineNotValidated as exc:
+                return self._send_error_json(422, str(exc))
+            except ValueError as exc:
+                return self._send_error_json(400, str(exc))
+        else:
+            print("[studio] installed agency-kit lacks ensure_production_engine; "
+                  "skipping pre-SSE engine validation (the mission loop still enforces it)")
         self._begin_sse()
         # Register an ephemeral run id BEFORE streaming, and announce it as the first
         # frame, so the GUI can stop this exact run via POST /api/mission/{id}/cancel
@@ -1128,7 +1153,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         entry["cancel"].set()
         self._send_json({"status": "cancelling", "run_id": run_id}, status=202)
 
-    def _parse_mission_request(self) -> "tuple[str, str, bool, bool, bool, bool, bool, bool, bool, str] | None":
+    def _parse_mission_request(self) -> "tuple[str, str | None, bool, bool, bool, bool, bool, bool, bool, str] | None":
         """Read + validate the JSON body. Returns ``(goal, engine, web_search, use_mcp,
         use_knowledge, use_mcp_tools, use_personas, use_visual, use_video, resume_from)``, or
         ``None`` after sending the matching error: a 400 for bad JSON / a non-object body / a
@@ -1156,7 +1181,11 @@ class StudioHandler(BaseHTTPRequestHandler):
         if not goal and not resume_from:
             self._send_error_json(400, "missing 'goal'")
             return None
-        return (goal, payload.get("engine") or "claude-code",
+        # Engine may be None here (caller left it unset) — the default is applied in
+        # _handle_run_mission so a resume can tell "unset" (reuse the pinned engine) apart
+        # from an explicit choice (override the pinned engine — the escape hatch when the
+        # pinned engine is no longer validated).
+        return (goal, (payload.get("engine") or "").strip() or None,
                 bool(payload.get("web_search")), bool(payload.get("mcp")),
                 bool(payload.get("knowledge")), bool(payload.get("mcp_tools")),
                 bool(payload.get("personas")), bool(payload.get("visual")),

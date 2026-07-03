@@ -224,9 +224,9 @@ def run(
 ) -> MissionResult:
     """Headless run: drive a local agent CLI engine, then serialize the dossier.
 
-    engine="claude-code" — `claude -p "..." --allowedTools WebSearch`  (default)
-    engine="codex"       — `codex --search exec ... -- "..."`
-    engine="gemini"      — `gemini -p "..."`
+    engine="claude-code" — `claude -p "..." --allowedTools WebSearch`  (default, validated)
+    engine="codex" / "gemini" — registered but NOT validated: run_mission_cli refuses them
+        with EngineNotValidated until they are validated end-to-end (no silent substitution).
     No API key required: each CLI uses its own authenticated session + web search.
 
     `on_event` is an optional observational progress callback (route/dept/synth/

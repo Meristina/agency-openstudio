@@ -431,7 +431,7 @@ def test_run_mission_cli_raises_clear_error_when_binary_missing(monkeypatch):
     # Engine known but its CLI is not on PATH → fail fast with a clear RuntimeError.
     monkeypatch.setattr(cli_engine.shutil, "which", lambda b: None)
     with pytest.raises(RuntimeError, match="not found on PATH|needs the"):
-        cli_engine.run_mission_cli("goal", engine="gemini")
+        cli_engine.run_mission_cli("goal", engine="claude-code")
 
 
 def test_call_reports_missing_binary(monkeypatch):

@@ -17,7 +17,7 @@ every role — router, each department, and the inspector — guided by the doct
 files in `agents/`. Each CLI brings its own auth and its own live web search.
 
 ```
-agency run "<goal>" --engine claude-code|codex|gemini
+agency run "<goal>" --engine claude-code   # codex/gemini registered but refused until validated
   └─ agency_cli/engines/cli_engine.run_mission_cli(goal, engine)
        ROUTE → EXECUTE (per dept) → SYNTHESIZE → INSPECT   (all via subprocess _call)
 ```
@@ -114,7 +114,7 @@ own inspector handles that).
 | Command | Description |
 |---|---|
 | `agency init [path] [--agent claude\|codex\|cursor\|copilot\|gemini\|opencode]` | Scaffold `.agency/` + harness slash commands |
-| `agency run "goal" [--engine claude-code\|codex\|gemini] [--dry-run]` | Headless mission via the engine — routes, executes, inspects |
+| `agency run "goal" [--engine claude-code] [--dry-run]` | Headless mission via the engine — routes, executes, inspects (codex/gemini refused until validated) |
 | `agency missions` | List all saved missions from `~/.agency/missions/` |
 | `agency resume <mission_id> [--engine ...]` | Re-run a saved mission's goal through the engine |
 | `agency check [path]` | Health check — constitution present + at least one engine CLI on PATH |
@@ -145,20 +145,27 @@ own inspector handles that).
 
 ## Engine wiring
 
-`agency_cli/engines/cli_engine.py` maps each engine to its headless CLI invocation:
+`agency_cli/engines/cli_engine.py` keeps engine wiring in `ENGINE_SPECS`: one
+`EngineSpec` per engine with argv, validation status, web-search capability, and
+per-call timeouts (`kill_tree_on_cancel` is a declared guarantee — `_call` always
+terminates the whole process group). `ENGINES` and `_ROUTE_CMD` are derived
+compatibility views, mutated in place so a held reference never goes stale:
 
 ```python
-ENGINES = {
-    "claude-code": ["claude", "--allowedTools", "WebSearch", "-p"],
-    "codex":       ["codex", "--search", "exec", "--color", "never", "--sandbox", "read-only", "--"],
-    "gemini":      ["gemini", "-p"],
+ENGINE_SPECS = {
+    "claude-code": EngineSpec(..., web_search_headless=True, validated=True),
+    "codex":       EngineSpec(..., web_search_headless=True, validated=False),
+    "gemini":      EngineSpec(..., web_search_headless=True, validated=False),
 }
 ```
 
-`_call(cmd, prompt)` shells out via `subprocess.run`; per-department doctrine is loaded
-from `agents/_shared-<dept>.md`. Adding an engine is one row in `ENGINES` + `_ROUTE_CMD`,
-but only if it can do live web search headlessly — without it a mission would fabricate
-data (Art. I). The inspector's output is stored as `verdicts: [{engine, verdict, detail}]`
-— `verdict` is a short token (PASS / PASS-WITH-FIXES / VETO, via `_short_verdict`) for
-listing, `detail` keeps the full inspector text. The engine is single-shot: there is no
-programmatic loop-back on a VETO.
+`_call(cmd, prompt)` shells out through the subprocess boundary; per-department doctrine is loaded
+from `agents/_shared-<dept>.md`. Adding an engine is one `register_engine(EngineSpec(...))` plus
+contract tests, but only if it can do live web search headlessly (`EngineSpec.__post_init__`
+rejects a `validated=True` spec without it). Registered but unvalidated engines (`codex`,
+`gemini`) refuse production missions (`EngineNotValidated`) until validation passes, with no
+silent substitution. The
+inspector's output is stored as `verdicts: [{engine, verdict, detail}]` — `verdict`
+is a short token (PASS / PASS-WITH-FIXES / VETO, via `_short_verdict`) for listing,
+`detail` keeps the full inspector text. The veto loop retries synthesis on VETO or
+PASS-WITH-FIXES up to `MAX_ITERS`.

@@ -77,10 +77,11 @@ def init(target: str, agent: str = "claude") -> dict:
 
 
 def _engine_binaries() -> dict:
-    """Map each engine to its CLI binary, derived from cli_engine.ENGINES (the
-    single source of truth) so the names never drift."""
-    from .engines.cli_engine import ENGINES
-    return {engine: cmd[0] for engine, cmd in ENGINES.items()}
+    """Map each engine name to ``(binary, validated)``, derived from
+    cli_engine.ENGINE_SPECS (the single source of truth) so names and validation
+    status never drift."""
+    from .engines.cli_engine import ENGINE_SPECS
+    return {name: (spec.run_cmd[0], spec.validated) for name, spec in ENGINE_SPECS.items()}
 
 
 def check(target: str = ".") -> list:
@@ -103,13 +104,22 @@ def check(target: str = ".") -> list:
         "pip install -e . (editable) or pip install agency-kit",
     ))
 
-    # at least one agent CLI engine available on PATH
-    found = [eng for eng, binary in _engine_binaries().items() if shutil.which(binary)]
-    detail = (f"available: {', '.join(found)}" if found
-              else "none on PATH — install Claude Code, Codex CLI, or Gemini CLI")
+    # At least one VALIDATED engine's CLI on PATH. Only validated engines may run a
+    # production mission, so an unvalidated engine on PATH (codex/gemini) does NOT make
+    # the studio runnable — reporting it as healthy would be misleading.
+    engines = _engine_binaries()
+    validated_found = [n for n, (binary, ok) in engines.items() if ok and shutil.which(binary)]
+    unvalidated_found = [n for n, (binary, ok) in engines.items() if not ok and shutil.which(binary)]
+    if validated_found:
+        detail = f"available: {', '.join(validated_found)}"
+    elif unvalidated_found:
+        detail = (f"only unvalidated engines on PATH ({', '.join(unvalidated_found)}) — "
+                  "they are refused for missions; install a validated engine (Claude Code)")
+    else:
+        detail = "none on PATH — install a validated engine (Claude Code)"
     checks.append((
-        "at least one engine CLI available (claude | codex | gemini)",
-        bool(found),
+        "at least one validated engine CLI available",
+        bool(validated_found),
         detail,
     ))
     return checks

@@ -113,6 +113,17 @@ def status() -> int:
 
 def run(retry_failed: bool = False, limit: int = 0, engine: str = "claude-code") -> int:
     """Run pending goals sequentially through the engine, updating state after each."""
+    # Pre-flight the engine ONCE: an unknown or unvalidated --engine is a permanent
+    # configuration error, not a per-goal failure. Refusing up front leaves the whole
+    # queue untouched (nothing flipped to 'failed', no retry counters burned) so a
+    # corrected re-run still finds the goals pending.
+    from .engines.cli_engine import ensure_production_engine, EngineNotValidated
+    try:
+        ensure_production_engine(engine)
+    except (EngineNotValidated, ValueError) as exc:
+        print(f"[batch] Refusing to run: {exc}")
+        return 2
+
     queue = _read_tsv(_queue_path())
     state = {r["id"]: r for r in _read_tsv(_state_path())}
 

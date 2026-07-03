@@ -26,8 +26,10 @@ pytest tests/test_router.py -q      # keyword router
 agency check
 
 # CLI — pick the engine with --engine (default: claude-code)
+# Only VALIDATED engines run missions: claude-code is validated; codex/gemini are
+# registered but refused (EngineNotValidated) until validated end-to-end.
 agency init [path] [--agent claude|codex|cursor|copilot|gemini|opencode]
-agency run "goal" [--dry-run] [--engine claude-code|codex|gemini]
+agency run "goal" [--dry-run] [--engine claude-code]   # codex/gemini refused until validated
 agency missions
 agency resume <mission_id> [--engine ...]    # re-runs the saved goal via the engine
 agency sync [--strict]
@@ -78,17 +80,17 @@ Departments are sovereign (Art. IV): the engine passes the full previous output 
 
 ### Engine wiring (`agency_cli/engines/cli_engine.py`)
 
-`ENGINES` maps an engine name to its headless CLI invocation; all three enable live web search (Art. I requires real sourced facts):
+`ENGINE_SPECS` is the single source of truth for engine wiring: command argv, validation status, web-search capability, and per-call timeouts. (`kill_tree_on_cancel` is declared for the contract; `_call` always terminates the whole process group today, so it records that guarantee rather than toggling behavior.) `ENGINES` and `_ROUTE_CMD` are derived compatibility views (mutated in place, never rebound, so a held reference stays live) for CLI choices and older readers; the mission loop reads `ENGINE_SPECS` directly. Construction (`EngineSpec.__post_init__`) rejects an inconsistent spec — e.g. `validated=True` without `web_search_headless` — so `register_engine` fails fast instead of deferring to mission time.
 
 ```python
-ENGINES = {
-    "claude-code": ["claude", "--allowedTools", "WebSearch", "-p"],
-    "codex":       ["codex", "--search", "exec", "--color", "never", "--sandbox", "read-only", "--"],
-    "gemini":      ["gemini", "-p"],
+ENGINE_SPECS = {
+    "claude-code": EngineSpec(..., web_search_headless=True, validated=True),
+    "codex":       EngineSpec(..., web_search_headless=True, validated=False),
+    "gemini":      EngineSpec(..., web_search_headless=True, validated=False),
 }
 ```
 
-`_call(cmd, prompt)` shells out via `subprocess.run`. Adding an engine = one row in `ENGINES` + `_ROUTE_CMD`, but only if it can do live web search headlessly (without it a mission would fabricate data — Art. I). `cursor-agent` (no web search), `opencode` (needs explicit model), and `copilot` (search unverified) are deliberately not wired.
+`_call(cmd, prompt)` shells out through the subprocess boundary. Adding an engine = one `EngineSpec` plus contract tests; the engine must guarantee headless web search, and it stays `validated=False` until it passes end-to-end validation. Registered but unvalidated engines (`codex`, `gemini`) refuse production missions with `EngineNotValidated`.
 
 ### Single source of truth for department names
 
@@ -117,7 +119,7 @@ All source files under `agents/` are mirrored to `payload/agents/`. The drift gu
 
 | File | Role |
 |---|---|
-| `agency_cli/engines/cli_engine.py` | `run_mission_cli()` + `ENGINES` — the whole route→execute→synthesize→inspect loop via subprocess |
+| `agency_cli/engines/cli_engine.py` | `run_mission_cli()` + `ENGINE_SPECS` — the whole route→execute→synthesize→inspect loop via subprocess |
 | `agency_cli/runner_bridge.py` | `run()` / `resume()` — drive the engine, save to store + serialize `missions/<id>/` |
 | `agency_cli/cli.py` | All CLI subcommands + the `--engine` flag |
 | `agency_cli/batch_runner.py` | `agency batch` queue — runs each goal through the engine |
@@ -136,12 +138,13 @@ agency-kit reads **no** environment variables for execution. Each engine CLI han
 - **codex** — `codex` CLI session
 - **gemini** — `gemini` CLI session
 
-Pick the engine per run with `--engine claude-code|codex|gemini` (default `claude-code`).
+Pick the engine per run with `--engine` (default `claude-code`). Only `claude-code` is validated and will run a mission; `codex`/`gemini` are registered but refused (`EngineNotValidated`) until validated end-to-end.
 
 ## Test architecture
 
 `tests/conftest.py` is intentionally minimal — there is no SDK to stub. The suite runs fully offline:
 - `test_engine.py` — monkeypatches `cli_engine._call` (the subprocess wrapper) to exercise the mission loop without any CLI installed.
+- `test_engine_contract.py` — the Engine-contract suite: registry/views, `EngineSpec` invariants, and the Art. II refusal guards (all offline); plus subprocess/kill-tree tests that spawn real fake binaries on a temp `PATH` (no network, no real CLI, no Node) and are `@requires_posix` (skipped on Windows).
 - `test_router.py` — the pure keyword classifier.
 - `test_structure.py` — import spine, the `dependency_layers` ordering model, and the payload drift guards.
 - `test_cli.py` — CLI dispatch with `runner_bridge`/`batch_runner` monkeypatched.

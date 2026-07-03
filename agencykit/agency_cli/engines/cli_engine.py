@@ -3,17 +3,21 @@
 Uses subprocess instead of any LLM SDK or API key: each CLI tool uses its own
 authenticated session and its own live web search.
 
-Supported engines (all provide live web search, which Art. I of the constitution
-requires — facts must come from real searched sources, never invented):
-  claude-code   claude --allowedTools WebSearch -p "<prompt>"
-  codex         codex --search exec --color never --sandbox read-only -- "<prompt>"
-  gemini        gemini -p "<prompt>"        (google_web_search built-in, on by default)
+Registered engines (all declare live headless web search — facts must come from real
+searched sources, never invented). Only VALIDATED engines may drive a production
+mission; unvalidated ones stay registered but are refused (EngineNotValidated) until
+they pass end-to-end validation:
+  claude-code   claude --allowedTools WebSearch -p "<prompt>"     [validated]
+  codex         codex --search exec --color never --sandbox read-only -- "<prompt>"  [unvalidated]
+  gemini        gemini -p "<prompt>"        (google_web_search built-in)  [unvalidated]
 
 Extension point: other agent CLIs (cursor-agent, opencode, copilot) can be added
-to ENGINES below, but only once they can guarantee live web search headlessly —
-without it a mission would fabricate data and violate Art. I.
+via register_engine(EngineSpec(...)), but only once they can guarantee live web
+search headlessly — without it a mission would fabricate data. A new engine stays
+validated=False until it is validated end-to-end.
 """
 
+from dataclasses import dataclass
 import json
 import os
 import re
@@ -27,19 +31,145 @@ from typing import Callable, Optional
 
 from agency_kit.departments import DEPT_NAMES, VALID_DEPTS
 
-# Execution commands — live web search enabled for real research
-ENGINES: dict = {
-    "claude-code": ["claude", "--allowedTools", "WebSearch", "-p"],
-    "codex": ["codex", "--search", "exec", "--color", "never", "--sandbox", "read-only", "--"],
-    "gemini": ["gemini", "-p"],
+
+@dataclass(frozen=True)
+class EngineSpec:
+    """One engine's contract: how to invoke it, what it guarantees, and whether
+    it may drive a production mission.
+
+    ``kill_tree_on_cancel`` records the guarantee that cancelling or timing out a
+    call terminates the engine's whole process group (``_call`` always does this
+    today, via ``_signal_tree``); it is declared here so the capability is part of
+    the contract. Construction enforces the invariants below (fail fast at
+    registration, not deep inside a mission)."""
+
+    name: str
+    run_cmd: tuple[str, ...]
+    route_cmd: tuple[str, ...]
+    web_search_headless: bool
+    validated: bool
+    run_timeout: int = 900
+    route_timeout: int = 60
+    kill_tree_on_cancel: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("EngineSpec.name must be non-empty")
+        if not self.run_cmd or not self.route_cmd:
+            raise ValueError(
+                f"EngineSpec '{self.name}': run_cmd and route_cmd must be non-empty argv tuples"
+            )
+        if self.validated and not self.web_search_headless:
+            raise ValueError(
+                f"EngineSpec '{self.name}': a validated engine MUST guarantee headless web "
+                "search (the engine-neutrality precondition) — set web_search_headless=True "
+                "or leave the engine validated=False"
+            )
+        if self.run_timeout <= 0 or self.route_timeout <= 0:
+            raise ValueError(f"EngineSpec '{self.name}': timeouts must be positive")
+
+
+class EngineNotValidated(RuntimeError):
+    """A known, registered engine refused because it may not drive a production mission.
+
+    Raised when the selected engine is unvalidated, or (defence in depth) declares no
+    guaranteed headless web search. Messages name the engine, the reason, and the
+    validated alternative(s) so callers can surface an actionable refusal — with no
+    silent substitution of a different engine.
+    """
+
+
+ENGINE_SPECS: dict[str, EngineSpec] = {
+    "claude-code": EngineSpec(
+        name="claude-code",
+        run_cmd=("claude", "--allowedTools", "WebSearch", "-p"),
+        route_cmd=("claude", "-p"),
+        web_search_headless=True,
+        validated=True,
+    ),
+    "codex": EngineSpec(
+        name="codex",
+        run_cmd=("codex", "--search", "exec", "--color", "never", "--sandbox", "read-only", "--"),
+        route_cmd=("codex", "--color", "never", "--sandbox", "read-only", "--"),
+        web_search_headless=True,
+        validated=False,
+    ),
+    "gemini": EngineSpec(
+        name="gemini",
+        run_cmd=("gemini", "-p"),
+        route_cmd=("gemini", "-p"),
+        web_search_headless=True,
+        validated=False,
+    ),
 }
 
-# Routing commands — classification only, no web search needed
-_ROUTE_CMD: dict = {
-    "claude-code": ["claude", "-p"],
-    "codex": ["codex", "--color", "never", "--sandbox", "read-only", "--"],
-    "gemini": ["gemini", "-p"],
-}
+
+# Compatibility views over ENGINE_SPECS for older readers (CLI --engine choices,
+# `agency check`). Mutated IN PLACE by _refresh_engine_views so a consumer that did
+# `from cli_engine import ENGINES` keeps a live reference after register_engine —
+# never rebound, or such a reference would go stale. ENGINE_SPECS is the sole source
+# of truth; the mission loop reads it directly, not these views.
+ENGINES: dict = {}
+_ROUTE_CMD: dict = {}
+
+
+def _refresh_engine_views() -> None:
+    ENGINES.clear()
+    ENGINES.update({name: list(spec.run_cmd) for name, spec in ENGINE_SPECS.items()})
+    _ROUTE_CMD.clear()
+    _ROUTE_CMD.update({name: list(spec.route_cmd) for name, spec in ENGINE_SPECS.items()})
+
+
+def register_engine(spec: EngineSpec) -> None:
+    """Insert or replace an engine spec and refresh the compatibility views.
+
+    The single supported way to add an engine at runtime (Brick 9). Writing
+    ENGINE_SPECS directly skips the view refresh and drifts the CLI/`agency check`
+    surfaces, so always go through here."""
+    ENGINE_SPECS[spec.name] = spec
+    _refresh_engine_views()
+
+
+_refresh_engine_views()
+
+
+def _validated_engine_names() -> str:
+    names = [name for name, spec in ENGINE_SPECS.items() if spec.validated]
+    return ", ".join(names) if names else "none"
+
+
+def ensure_production_engine(engine: str) -> "EngineSpec":
+    """Resolve an engine and enforce the Art. II production preconditions, returning its spec.
+
+    The single gate for "may this engine run a production mission?": unknown name →
+    ``ValueError``; registered-but-unvalidated → ``EngineNotValidated``; validated without
+    guaranteed headless web search → ``EngineNotValidated`` (defence in depth — the EngineSpec
+    invariant makes this state unconstructible through the public API, so it can only arise
+    from a hand-built object). No engine is ever silently substituted for the one requested.
+
+    Shared by ``run_mission_cli`` (its opening guard) and any caller that must pre-flight an
+    engine before doing work (e.g. the batch runner, so one bad ``--engine`` refuses the whole
+    queue up front instead of failing every goal in turn)."""
+    spec = ENGINE_SPECS.get(engine)
+    if spec is None:
+        raise ValueError(
+            f"Unknown engine '{engine}'. Registered: {', '.join(ENGINE_SPECS)} "
+            f"(validated for production: {_validated_engine_names()})."
+        )
+    if not spec.validated:
+        raise EngineNotValidated(
+            f"engine '{engine}' is registered but NOT validated for production missions. "
+            f"Validated engine(s): {_validated_engine_names()}. "
+            "Select a validated engine, or validate this one end-to-end before use — "
+            "no other engine is substituted for the one you chose."
+        )
+    if not spec.web_search_headless:
+        raise EngineNotValidated(
+            f"engine '{engine}' cannot run production missions because "
+            "web_search_headless=False; guaranteed headless web search is required for "
+            f"research-grade work. Validated engine(s): {_validated_engine_names()}."
+        )
+    return spec
 
 
 def _with_mcp(
@@ -218,7 +348,8 @@ def _route_via_cli(
     model returns unparseable output, or to a minimal prompt if the doctrine file is
     absent.
     """
-    route_cmd = _ROUTE_CMD.get(engine, _ROUTE_CMD["claude-code"])
+    spec = ENGINE_SPECS.get(engine, ENGINE_SPECS["claude-code"])
+    route_cmd = list(spec.route_cmd)
     doctrine = _load("router-agency")
     header = doctrine if doctrine else (
         "You are an agency mission router. Deploy the MINIMUM set of departments the "
@@ -236,7 +367,7 @@ def _route_via_cli(
     )
 
     try:
-        response = _call(route_cmd, prompt, timeout=60, should_cancel=should_cancel)
+        response = _call(route_cmd, prompt, timeout=spec.route_timeout, should_cancel=should_cancel)
         match = re.search(r'\[.*?\]', response, re.DOTALL)
         if match:
             depts = json.loads(match.group())
@@ -529,6 +660,11 @@ def run_mission_cli(
 ) -> dict:
     """Run a full mission via a local agent CLI tool: route → execute → synthesize → inspect.
 
+    Known but unvalidated engines are refused before binary lookup or subprocess
+    work starts; there is no silent substitution for production missions. A
+    validated engine must also declare guaranteed headless web search, the hard
+    precondition for research-grade mission work under Constitution Art. II.
+
     The inspector is a real gate (Art. IX): on VETO or PASS-WITH-FIXES the synthesis is
     re-run with the inspector's findings injected as required fixes, up to MAX_ITERS. If
     it still hasn't PASSed at the cap, the best result is delivered with a residual_risk
@@ -599,17 +735,26 @@ def run_mission_cli(
     veto loop body / ``_short_verdict`` logic is unchanged — resume with identical inputs reproduces
     the exact state as-if the crash never happened.
     """
-    cmd = ENGINES.get(engine)
-    if cmd is None:
-        raise ValueError(f"Unknown engine '{engine}'. Available: {', '.join(ENGINES)}")
+    spec = ensure_production_engine(engine)  # unknown / unvalidated / no-web-search → refuse
+    cmd = list(spec.run_cmd)
     # Departments + synthesis may call the user's MCP tools; the router + inspector never do
     # (they run on the base `cmd`), so the quality gate's inputs are untouched by this hook.
     exec_cmd = _with_mcp(cmd, mcp_config_path, mcp_allowed_tools)
-    if shutil.which(cmd[0]) is None:  # fail fast with a clear message if the CLI is absent
-        raise RuntimeError(
-            f"engine '{engine}' needs the '{cmd[0]}' CLI on PATH — install it and "
-            f"authenticate first. Check availability with: agency check"
-        )
+    # Fail fast with a clear message if either CLI is absent. Both are checked because an
+    # engine may use a different binary for routing than for research work; the run binary
+    # is checked first so the message is byte-identical for the built-in engines (which
+    # share one binary, so the route binary is a no-op dedupe). A missing route binary would
+    # otherwise be swallowed by _route_via_cli's keyword fallback, silently degrading routing.
+    checked_binaries: list = []
+    for binary in (cmd[0], spec.route_cmd[0]):
+        if binary in checked_binaries:
+            continue
+        checked_binaries.append(binary)
+        if shutil.which(binary) is None:
+            raise RuntimeError(
+                f"engine '{engine}' needs the '{binary}' CLI on PATH — install it and "
+                f"authenticate first. Check availability with: agency check"
+            )
     # Resume: validate the snapshot up front (fail loud — a bad resume must not silently re-run
     # from scratch and re-spend the work the checkpoint exists to save).
     if resume_state is not None:
@@ -644,6 +789,7 @@ def run_mission_cli(
             _dept_prompt(dept, goal, dept_outputs, asset_clause=asset_clause,
                          context_clause=context_clause,
                          persona_doctrine=persona_doctrine),
+            timeout=spec.run_timeout,
             should_cancel=should_cancel,
         )
         print("done", flush=True)
@@ -677,6 +823,7 @@ def run_mission_cli(
             _synth_prompt(goal, route, dept_outputs, fixes, asset_clause=asset_clause,
                           context_clause=context_clause,
                           persona_doctrine=persona_doctrine),
+            timeout=spec.run_timeout,
             should_cancel=should_cancel,
         )
         print("done", flush=True)
@@ -685,7 +832,7 @@ def run_mission_cli(
         print(f"[{engine}] inspecting...", end=" ", flush=True)
         _emit(on_event, {"phase": "inspect", "iteration": iteration, "status": "start"})
         verdict_text = _call(
-            cmd, _inspect_prompt(goal, delivered), should_cancel=should_cancel
+            cmd, _inspect_prompt(goal, delivered), timeout=spec.run_timeout, should_cancel=should_cancel
         )
         token = _short_verdict(verdict_text)
         print(token, flush=True)
