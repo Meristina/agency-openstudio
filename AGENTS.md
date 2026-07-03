@@ -1,4 +1,4 @@
-# AGENTS.md — Agency OpenStudio (« Agence 360 »)
+# AGENTS.md — Agency OpenStudio ("Agency 360")
 
 Canonical agent context for this repository. `CLAUDE.md` is a symlink to this file;
 other agent CLIs (codex, gemini, opencode…) read this file directly. Phase-gated
@@ -63,7 +63,7 @@ The roadmap is **`PLAN.md`** (bricks 0–9), executed brick by brick through spe
 - `agencykit/` — the agency-kit-studio fork (pinned @ `fc8ac76`), carrying the studio
   hooks (`on_event`, `should_cancel`, `asset_clause`, `context_clause`,
   `persona_doctrine`, `mcp_config_path`, checkpoint/resume). Same subtree rules. The
-  métier army (marketing-kit, comms-kit, … 9 kits) is snapshotted in
+  specialist army (marketing-kit, comms-kit, … 9 kits) is snapshotted in
   `agencykit/agency_cli/payload/`.
 
 ## Conventions

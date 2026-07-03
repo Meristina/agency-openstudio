@@ -1,113 +1,117 @@
-# PLAN.md — Agence 360 : la feuille de route brick par brick
+# PLAN.md — Agency 360: the brick-by-brick roadmap
 
-Chaque brick est un cycle **spec-kit** complet — `/speckit.specify` → `/speckit.clarify`
-→ `/speckit.plan` → `/speckit.tasks` → `/speckit.implement` — mergeable indépendamment,
-dans cet ordre. La gouvernance vit dans la constitution
-(`.specify/memory/constitution.md`) ; le contexte agents dans `AGENTS.md`.
+Each brick is a full **spec-kit** cycle — `/speckit.specify` → `/speckit.clarify` →
+`/speckit.plan` → `/speckit.tasks` → `/speckit.implement` — independently mergeable, in
+this order. Governance lives in the constitution (`.specify/memory/constitution.md`);
+agent context in `AGENTS.md`.
 
-**Vision** : une agence multimédia / B2B 360 / événementielle pilotée par des agents CLI
-sur abonnement (zéro coût marginal), recherche internet obligatoire et vérifiable,
-production jusqu'à la vidéo, interface « boîte magique » pour non-techniciens,
-cross-platform, choix des modèles gratuit/payant.
-
----
-
-## Brick 0 — Fondations *(en cours)*
-
-Spec-kit initialisé (`specify init` + intégration claude), constitution ratifiée par
-l'utilisateur, `AGENTS.md` canonique + `CLAUDE.md` symlink, `agencykit/` (le fork
-agency-kit-studio, épinglé) et `openmontage/` (épinglé) vendorés, ce PLAN.md commité.
-**Fait quand** : `specify check` passe, la suite studio (484 tests) et la suite
-agencykit (70 tests) sont vertes, le dépôt s'installe seul (`pip install -e ./agencykit
-&& pip install -e .`).
-
-## Brick 1 — Le contrat Engine (abstraction multi-CLI, claude validé)
-
-Formaliser le dict `ENGINES` d'`agencykit/agency_cli/engines/cli_engine.py` en un
-contrat `Engine` explicite : `run(prompt)` / `route(prompt)` / capacités déclarées
-(`web_search_headless: bool` — précondition constitutionnelle) / kill-tree sur cancel.
-Le moteur **claude-code est le seul validé v1** ; codex/gemini restent enregistrés mais
-marqués non-validés. Suite de contrat offline (un faux binaire par moteur).
-Références : opencode `serve`, rivet-dev/sandbox-agent.
-**Fait quand** : une mission tourne inchangée sur claude ; ajouter un moteur = une
-implémentation du contrat + sa suite, zéro modification de la boucle de mission.
-
-## Brick 2 — L'armée métier joue (agence marketing / B2B / événementiel réelle)
-
-Aujourd'hui la boucle de mission ne charge que la doctrine condensée
-(`_shared-{dept}.md`) — les commandants/officiers/soldats des 9 kits
-(`agencykit/agency_cli/payload/` : 177 agents, 110 skills) ne participent jamais.
-Câbler une **escalade à budget maîtrisé** : doctrine condensée → officier de la phase
-concernée → soldat méthode (JTBD, STP, Pareto, PERT…), sélectionnés par le routeur du
-département. L'événementiel (comms-kit) et le B2B 360 deviennent opérationnels.
-**Fait quand** : une mission marketing invoque réellement ≥1 officier + ≥1 soldat
-tracés dans le dossier ; le coût token par département reste borné et mesuré.
-
-## Brick 3 — Internet vérifiable (de la garantie molle à la post-condition)
-
-Le mandat « no invented information » est aujourd'hui prompt-only. Le durcir :
-extraction des citations du livrable, résolution des URLs (HEAD, offline-stubbé en
-test), seuil minimal de sources par département, verdict inspecteur enrichi d'un
-rapport de vérification. Pattern de référence : gpt-researcher (Apache-2.0).
-**Fait quand** : un livrable sans sources résolvables est bloqué par l'inspecteur avec
-un rapport actionnable ; le taux de sources vérifiées apparaît dans le dossier et le GUI.
-
-## Brick 4 — Capabilities & choix des modèles (fin de l'env-only)
-
-`GET /api/capabilities` agrège tous les registres (IMAGE_MODELS, VIDEO_MODELS,
-VISUAL_MODELS, EMBED_MODELS, extracteurs KG, STT/TTS à promouvoir en registres) **+ le
-ToolRegistry OpenMontage** (son axe LOCAL / LOCAL_GPU / API = gratuit/payant natif).
-Sélection persistée côté serveur (settings), exposée à l'utilisateur — les env vars
-restent le override. **Fait quand** : l'utilisateur choisit ses modèles/outils
-(gratuit/payant, dispo/indispo) depuis l'interface sans toucher un terminal.
-
-## Brick 5 — Cross-platform (« n'importe quelle machine »)
-
-Des backends non-Mac derrière les registres existants, même pattern
-qu'`openmontage-remotion` : image (stable-diffusion.cpp MIT, ou passerelle LocalAI
-MIT), STT (whisper.cpp / faster-whisper), TTS (Piper / Kokoro-onnx CPU), embeddings
-(llama.cpp `/v1/embedding`). Chaque backend : probe → 501 propre si absent.
-**Fait quand** : la même mission avec assets tourne sur un Linux/Windows sans MLX,
-suite offline verte partout.
-
-## Brick 6 — Clients & projets
-
-Taxonomie client / projet / campagne au-dessus du store (le stamp `project_root`
-existant est le hook) : champs dans le dossier, endpoints de groupement, migration
-douce des missions existantes. **Fait quand** : l'historique se navigue par client et
-par campagne, et un livrable appartient à un projet.
-
-## Brick 7 — La boîte magique (refonte UI sur mesure)
-
-Nouvelle application front : **un seul point d'entrée** (« que voulez-vous
-produire ? »), brief guidé par secteur/domaine/type de livrable, timeline de mission
-vivante, **bibliothèque de livrables** par client, **import** de matériel existant
-(docs, images, briefs, vidéos), **export bundle** (PDF / zip média / dossier complet),
-i18n FR/EN, panneau modèles (Brick 4). Chaque écran = sa propre spec.
-Références UX : AnythingLLM (workspace = projet), Jan (local-first).
-**Fait quand** : un utilisateur non technicien produit un livrable complet
-(recherche → stratégie → vidéo → export) sans aide.
-
-## Brick 8 — Recettes livrables (mission → production en 1 clic)
-
-Exposer les 13 pipelines OpenMontage + des recettes agence composées (campagne
-complète, pitch client, événement clé-en-main, pack contenu social) : une recette
-enchaîne mission (départements) → assets (image/voix) → composition (vidéo) → export.
-**Fait quand** : « lance-moi une campagne pour X » produit le dossier stratégique ET
-les créas associées en une exécution.
-
-## Brick 9 — Multi-CLI réel
-
-codex et gemini validés bout-en-bout sur le contrat Brick 1 (recherche web headless
-vérifiée par moteur), opencode ajouté ; matrice de compatibilité moteurs × capacités
-publiée dans le README. **Fait quand** : la même mission passe sur deux moteurs avec
-dossiers comparables et sources vérifiées (Brick 3) sur chacun.
+**Vision**: a multimedia / B2B 360 / event agency driven by subscription CLI agents
+(zero marginal cost), with mandatory and verifiable internet research, production all
+the way to video, a "magic box" interface for non-technical users, cross-platform,
+free/paid model choice.
 
 ---
 
-## Invariants (toutes bricks)
+## Brick 0 — Foundations *(in progress)*
 
-Suite offline verte à chaque merge · zéro dépendance runtime du core · frontières
-subprocess respectées · opt-in réseau par mission · sécurité (127.0.0.1, pas de CORS
-`*`, path guards, clés env-only) · Conventional Commits + PR squash vers `main` ·
-veto-loop d'agency-kit jamais modifié en comportement.
+Spec-kit initialized (`specify init` + claude integration), constitution ratified by
+the user, canonical `AGENTS.md` + `CLAUDE.md` symlink, `agencykit/` (the
+agency-kit-studio fork, pinned) and `openmontage/` (pinned) vendored, this PLAN.md
+committed.
+**Done when**: `specify check` passes, the studio suite (484 tests) and the agencykit
+suite (160 tests) are green, and the repo installs standalone
+(`pip install -e ./agencykit && pip install -e .`).
+
+## Brick 1 — The Engine contract (multi-CLI abstraction, claude validated)
+
+Formalize the `ENGINES` dict in `agencykit/agency_cli/engines/cli_engine.py` into an
+explicit `Engine` contract: `run(prompt)` / `route(prompt)` / declared capabilities
+(`web_search_headless: bool` — a constitutional precondition) / kill-tree on cancel.
+**claude-code is the only validated v1 engine**; codex/gemini stay registered but
+marked unvalidated. Offline contract suite (one fake binary per engine).
+References: opencode `serve`, rivet-dev/sandbox-agent.
+**Done when**: a mission runs unchanged on claude; adding an engine = one contract
+implementation + its suite, with zero changes to the mission loop.
+
+## Brick 2 — The specialist army plays (a real marketing / B2B / event agency)
+
+Today the mission loop only loads the condensed doctrine (`_shared-{dept}.md`) — the
+commanders/officers/soldiers of the 9 department kits
+(`agencykit/agency_cli/payload/`: 177 agents, 110 skills) never participate. Wire a
+**budget-controlled escalation**: condensed doctrine → the phase's officer → the method
+soldier (JTBD, STP, Pareto, PERT…), selected by the department's router. Event work
+(comms-kit) and B2B 360 become operational.
+**Done when**: a marketing mission actually invokes ≥1 officer + ≥1 soldier, traced in
+the dossier; the per-department token cost stays bounded and measured.
+
+## Brick 3 — Verifiable internet (from soft guarantee to postcondition)
+
+The "no invented information" mandate is prompt-only today. Harden it: extract
+citations from the deliverable, resolve URLs (HEAD, offline-stubbed in tests), enforce
+a minimum source count per department, and enrich the inspector verdict with a
+verification report. Reference pattern: gpt-researcher (Apache-2.0).
+**Done when**: a deliverable without resolvable sources is blocked by the inspector
+with an actionable report; the verified-source rate shows in the dossier and the GUI.
+
+## Brick 4 — Capabilities & model choice (the end of env-only)
+
+`GET /api/capabilities` aggregates every registry (IMAGE_MODELS, VIDEO_MODELS,
+VISUAL_MODELS, EMBED_MODELS, KG extractors, STT/TTS to be promoted into registries)
+**plus the OpenMontage ToolRegistry** (its LOCAL / LOCAL_GPU / API axis = native
+free/paid metadata). Server-side persisted selection (settings) exposed to the user —
+env vars remain the override.
+**Done when**: the user picks their models/tools (free/paid, available/unavailable)
+from the interface without touching a terminal.
+
+## Brick 5 — Cross-platform ("any machine")
+
+Non-Mac backends behind the existing registries, same pattern as
+`openmontage-remotion`: image (stable-diffusion.cpp MIT, or a LocalAI MIT gateway),
+STT (whisper.cpp / faster-whisper), TTS (Piper / Kokoro-onnx CPU), embeddings
+(llama.cpp `/v1/embedding`). Every backend: probe → clean 501 when absent.
+**Done when**: the same mission with assets runs on a Linux/Windows box without MLX,
+with the offline suite green everywhere.
+
+## Brick 6 — Clients & projects
+
+A client / project / campaign taxonomy above the store (the existing `project_root`
+stamp is the hook): dossier fields, grouping endpoints, soft migration of existing
+missions.
+**Done when**: history is browsable by client and campaign, and every deliverable
+belongs to a project.
+
+## Brick 7 — The magic box (full custom UI redesign)
+
+A new front-end application: **a single entry point** ("what do you want to
+produce?"), a guided brief by sector/domain/deliverable type, a live mission timeline,
+a **deliverable library** per client, **import** of existing material (docs, images,
+briefs, videos), **export bundles** (PDF / media zip / full dossier), EN/FR i18n, and
+the model panel (Brick 4). Every screen gets its own spec.
+UX references: AnythingLLM (workspace = project), Jan (local-first).
+**Done when**: a non-technical user produces a complete deliverable
+(research → strategy → video → export) unassisted.
+
+## Brick 8 — Deliverable recipes (mission → production in one click)
+
+Expose the 13 OpenMontage pipelines plus composed agency recipes (full campaign,
+client pitch, turnkey event, social content pack): a recipe chains mission
+(departments) → assets (image/voice) → composition (video) → export.
+**Done when**: "launch a campaign for X" produces the strategy dossier AND the
+associated creatives in a single run.
+
+## Brick 9 — Real multi-CLI
+
+codex and gemini validated end-to-end against the Brick 1 contract (headless web
+search verified per engine), opencode added; an engines × capabilities compatibility
+matrix published in the README.
+**Done when**: the same mission passes on two engines with comparable dossiers and
+verified sources (Brick 3) on each.
+
+---
+
+## Invariants (all bricks)
+
+Offline suite green on every merge · zero runtime dependencies in the core ·
+subprocess boundaries respected · per-mission network opt-in · security (127.0.0.1, no
+CORS `*`, path guards, env-only keys) · Conventional Commits + squash PRs to `main` ·
+agency-kit's veto loop never changes behavior.
