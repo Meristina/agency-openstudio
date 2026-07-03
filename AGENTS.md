@@ -81,3 +81,8 @@ The roadmap is **`PLAN.md`** (bricks 0–9), executed brick by brick through spe
 Pre-fusion history (agency-studio's Waves 0–6, live-test reports, the old roadmap) is
 archived in `docs/legacy/`. The OpenMontage fusion decision record is
 `docs/OPENMONTAGE-FUSION.md`.
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->
