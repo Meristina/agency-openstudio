@@ -1,104 +1,53 @@
-# Agency OpenStudio
+# Agency OpenStudio — l'agence 360 ultime
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](./LICENSE)
 
-**Agency OpenStudio = agency-studio × [OpenMontage](https://github.com/calesthio/OpenMontage).**
-The local-first agentic studio (agency-kit orchestration + local multimodal layer +
-Mission Console GUI) fused with the open-source agentic **video production** system
-(12 pipelines, 52 tools, Remotion/HyperFrames rendering), vendored at
-[`openmontage/`](./openmontage/).
+**Une agence multimédia, B2B et événementielle complète, pilotée par des agents CLI sur
+abonnement mensuel — zéro coût marginal par mission.** L'utilisateur entre dans une
+« boîte magique » : il décrit ce qu'il veut (une recherche, une stratégie, une campagne,
+une vidéo, un événement…) et l'agence recherche sur internet, décide, produit et exporte
+le livrable — du brief à la vidéo finale.
 
-## The OpenMontage fusion
+## Les trois piliers (un seul dépôt, autonome)
 
-- **What `openmontage/` brings**: full agentic video production — research → script →
-  asset generation → editing → Remotion/HyperFrames composition. Zero-key path included
-  (Piper TTS, Archive.org/NASA/Wikimedia footage, Remotion rendering).
-- **Run it standalone**: `cd openmontage && make setup`, then open it in your AI coding
-  assistant (see `openmontage/README.md`). Prereqs: Python 3.10+, Node 18+, ffmpeg.
-- **Licensing**: OpenMontage is **AGPL-3.0**, so the combined work is
-  **AGPL-3.0-only** (see [`LICENSE`](./LICENSE)). The pre-fusion agency-studio code
-  remains available under MIT — see [`LICENSE.MIT`](./LICENSE.MIT) and
-  [`docs/LICENSES.md`](./docs/LICENSES.md).
-- **Vendoring**: `git subtree --squash`, pinned at upstream `0c202b5`; update via
-  `git subtree pull`. Its internal `CLAUDE.md`/`.claude/` skills are **scoped** to the
-  subtree by Claude Code (they apply when working on files under `openmontage/`).
-- **Integration (brick A1, shipped)**: the studio calls OpenMontage only across a
-  **subprocess boundary** (never imported in-process). The local video backend rides the
-  Wave-3 asset pipeline: set `AGENCY_STUDIO_VIDEO_BACKEND=openmontage-remotion` (after a
-  one-time `npm install` in `openmontage/remotion-composer/`) and a mission's `video`
-  marker renders a fully local Remotion composition instead of the cloud seedance call —
-  zero network, same gallery/PDF. Details + the deferred A2 brick:
-  [`docs/OPENMONTAGE-FUSION.md`](./docs/OPENMONTAGE-FUSION.md).
+| Pilier | Répertoire | Rôle |
+|---|---|---|
+| **agency-kit** (fork studio) | [`agencykit/`](./agencykit/) | Le cerveau : route → 9 départements métiers (solve, product, marketing, finance, comms, data, ops, people, tech) → synthèse → inspecteur avec veto. Multi-moteurs : claude-code / codex / gemini. Recherche internet obligatoire, sources citées. |
+| **OpenMontage** | [`openmontage/`](./openmontage/) | La production : 122 outils (locaux gratuits / GPU / API payantes), 13 pipelines vidéo, rendu Remotion + HyperFrames. |
+| **Le studio** | [`agency_studio/`](./agency_studio/) + [`app/studio/`](./app/studio/) | Le serveur local (Python stdlib, zéro dépendance), les moteurs multimodaux locaux (image, voix, RAG, vidéo) et l'interface web. |
 
----
+## Démarrage
 
-> **Status: Waves 0-3 shipped.** Core (0-1): the stdlib HTTP/SSE server + `on_event`
-> hook and the React Mission Console (`app/studio/`). **Wave 2** — local multimodal
-> (image / speech-to-text / text-to-speech) on Apple Silicon (Metal) — is built and
-> **validated live on an M4**: `POST /api/image|/api/tts|/api/stt` + Image/Voice GUI
-> tabs, gallery, and a warm-model chip. **Wave 3** — multimodal as a department
-> deliverable (assets rendered into the dossier + gallery + PDF) — is shipped. Setup: a
-> Python 3.10+ venv with the `[media]` extra + system `ffmpeg` (for STT); the image model
-> defaults to a non-gated 8-bit FLUX.1-schnell mirror (no Hugging Face login). Waves
-> **4-6** (RAG, web search, MCP, extensions) remain deferred — see [`ROADMAP.md`](./ROADMAP.md).
+```bash
+# 1. Le venv + le cerveau (le fork agency-kit vendored) + le studio
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ./agencykit
+pip install -e .
 
-**Agency Studio** is a **local-first agentic studio**. It stacks
-[agency-kit](https://github.com/Meristina/agency-kit) (the *brain* that orchestrates
-9 departments — route → execute → synthesize → inspect with veto) on top of a **local
-multimodal layer** (image generation, speech-to-text, text-to-speech, document RAG).
+# 2. Un agent CLI sur PATH (le moteur v1 validé est claude)
+#    claude / codex / gemini — voir agencykit/README.md
 
-The point is not to build yet another model runner (LM Studio, Jan, GPT4All,
-Uncensored-Local-Studio already do that) — it's to add the **orchestration layer** on top,
-with a clean GUI and a sound security posture.
-
-## Guiding principle
-
-- 🧠 **Brain = Opus via the Claude CLI subscription** (the `claude-code` engine already
-  wired into agency-kit) → strong reasoning at **zero marginal cost**.
-- 🦾 **Hands = local models** (FLUX image, Whisper STT, Kokoro TTS — shipped; RAG
-  embeddings in Wave 4), targeting **Apple Silicon / Metal**, loaded **mutually
-  exclusively** (16 GB constraint).
-- 🖥️ **Screen = a React/Vite GUI** served locally, with a live mission timeline (SSE).
-- 🔒 **Security first**: bind `127.0.0.1`, no `*` CORS, anti path-traversal guard
-  (the inverse of the flaws found in existing runners).
-- ⚖️ **Licensing**: the combined work is **AGPL-3.0** since the OpenMontage fusion
-  (pre-fusion studio code stays MIT-available — `LICENSE.MIT`); new components still
-  *prefer* MIT/Apache sources.
-
-## What it will do (once implemented)
-
-```
-agency-studio        # launches the local server + opens the Mission Console
-→ type a goal        # "launch a campaign for X in Morocco"
-→ watch departments run live (route → depts → synth → inspect)
-→ get the dossier + deliverable, with generated images and a spoken summary
+# 3. Lancer
+agency-studio          # (alias : agency-openstudio) → http://127.0.0.1:8765
 ```
 
-## Usage
+Extras optionnels (chargés paresseusement ; absents ⇒ 501 propre + hint) :
+`[media]` image/STT/TTS Apple Silicon · `[studio]` RAG · `[web]` recherche web ·
+`[mcp]` ressources MCP · `[visual]` RAG visuel · `[pdf]` export. La vidéo locale
+(OpenMontage/Remotion) demande Node 18+ et un `npm install` unique dans
+`openmontage/remotion-composer/` (`AGENCY_STUDIO_VIDEO_BACKEND=openmontage-remotion`).
 
-```
-agency-studio                       # serve the Mission Console on 127.0.0.1:8765
-agency-studio --port 9000           # custom port
-agency-studio --path /some/project  # project dir where missions/ + studio_assets/ live
-```
+## La feuille de route
 
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--host` | `127.0.0.1` | Bind host — **loopback only**; a non-loopback host is refused (see `docs/SECURITY.md`). |
-| `--port` | `8765` | Bind port. |
-| `--path` | `.` | Project dir where mission history (`missions/`) and generated assets (`studio_assets/`) are written. |
-| `--static-root` | `<path>/app/studio/dist` if built | Path to the built GUI (the API still serves without it). |
-| `--media-budget-mb` | `2048` | Cap `studio_assets/` size in MB; oldest generated assets are evicted first. `0` disables the cap. |
-| `--version` | — | Print the version and exit. |
+Le développement suit **[`PLAN.md`](./PLAN.md)** — bricks 0 à 9, chacun un cycle
+**spec-kit** complet (constitution → specify → plan → tasks → implement). Gouvernance :
+la constitution spec-kit (`.specify/memory/constitution.md`) ; contexte agents :
+[`AGENTS.md`](./AGENTS.md) (canonique — `CLAUDE.md` est un symlink).
 
-## Documentation
+## Licence
 
-- 🗺️ [`ROADMAP.md`](./ROADMAP.md) — the full build plan (waves 0-6).
-- 🏛️ [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — target architecture + streaming flow.
-- 🔐 [`docs/SECURITY.md`](./docs/SECURITY.md) — the non-negotiable security guard.
-- 📜 [`docs/LICENSES.md`](./docs/LICENSES.md) — third-party component inventory and licenses.
-- 🤖 [`CLAUDE.md`](./CLAUDE.md) — guidance for Claude Code in this repo.
-
-## License
-
-MIT — see [`LICENSE`](./LICENSE).
+**AGPL-3.0-only** (l'œuvre combinée, depuis la fusion OpenMontage). Le code
+agency-studio pré-fusion reste disponible sous MIT ([`LICENSE.MIT`](./LICENSE.MIT)).
+Composants tiers : [`docs/LICENSES.md`](./docs/LICENSES.md). Décision de fusion :
+[`docs/OPENMONTAGE-FUSION.md`](./docs/OPENMONTAGE-FUSION.md). Historique pré-fusion
+(Waves 0–6) : [`docs/legacy/`](./docs/legacy/).
