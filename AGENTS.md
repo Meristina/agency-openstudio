@@ -85,7 +85,7 @@ archived in `docs/legacy/`. The OpenMontage fusion decision record is
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/002-specialist-army-escalation/plan.md` (feature branch
-`002-specialist-army-escalation`, supporting artifacts in
-`specs/002-specialist-army-escalation/`).
+`specs/003-verifiable-sources/plan.md` (feature branch
+`003-verifiable-sources`, supporting artifacts in
+`specs/003-verifiable-sources/`).
 <!-- SPECKIT END -->
