@@ -4,6 +4,7 @@ Subcommands: init, run, missions, resume, check, sync, tui, export, batch.
 """
 
 import argparse
+import inspect
 import sys
 
 # Flush stdout immediately so `agency run` output is visible in real time when
@@ -46,15 +47,39 @@ def _args_escalation(args):
     return {"budget": budget}
 
 
+def _nonnegative_int(value: str) -> int:
+    n = int(value)
+    if n < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return n
+
+
+def _args_verification(args):
+    min_sources = getattr(args, "min_sources", 3)
+    resolve = bool(getattr(args, "resolve_sources", False))
+    if min_sources == 0 and not resolve:
+        return None
+    return {"min_sources": min_sources, "resolve": resolve}
+
+
+def _call_supported(fn, *args, **kwargs):
+    sig = inspect.signature(fn)
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        return fn(*args, **kwargs)
+    return fn(*args, **{k: v for k, v in kwargs.items() if k in sig.parameters})
+
+
 def _cmd_run(args) -> int:
     if getattr(args, "dry_run", False):
         return _cmd_dry_run(args)
     from . import runner_bridge
     try:
-        result = runner_bridge.run(
+        result = _call_supported(
+            runner_bridge.run,
             args.goal, project_root=args.path,
             engine=getattr(args, "engine", "claude-code"),
             escalation=_args_escalation(args),
+            verification=_args_verification(args),
         )
     except (RuntimeError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
@@ -93,10 +118,12 @@ def _cmd_resume(args) -> int:
     from agency_kit import store
     from . import runner_bridge
     try:
-        result = runner_bridge.resume(
+        result = _call_supported(
+            runner_bridge.resume,
             args.mission_id, project_root=args.path,
             engine=getattr(args, "engine", "claude-code"),
             escalation=_args_escalation(args),
+            verification=_args_verification(args),
         )
     except FileNotFoundError:
         print(f"error: mission '{args.mission_id}' not found in {store.missions_path()}",
@@ -151,11 +178,13 @@ def _cmd_batch(args) -> int:
     if cmd == "add":
         return batch_runner.add(args.goal, priority=args.priority, notes=args.notes)
     if cmd == "run":
-        return batch_runner.run(
+        return _call_supported(
+            batch_runner.run,
             retry_failed=getattr(args, "retry_failed", False),
             limit=getattr(args, "limit", 0),
             engine=getattr(args, "engine", "claude-code"),
             escalation=_args_escalation(args),
+            verification=_args_verification(args),
         )
     if cmd == "status":
         return batch_runner.status()
@@ -210,6 +239,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="run each department through the legacy doctrine-only path")
     pr.add_argument("--escalation-budget", type=int, metavar="N",
                     help="max escalation calls per department (0 disables escalation)")
+    pr.add_argument("--min-sources", type=_nonnegative_int, default=3, metavar="N",
+                    help="minimum counted sources per department (0 disables the blocking gate; report-only when combined with --resolve-sources)")
+    pr.add_argument("--resolve-sources", action="store_true",
+                    help="probe cited URLs online with HTTPS HEAD requests")
     pr.set_defaults(func=_cmd_run)
 
     pm = sub.add_parser("missions", help="list saved missions from ~/.agency/missions/")
@@ -225,6 +258,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="run each department through the legacy doctrine-only path")
     pre.add_argument("--escalation-budget", type=int, metavar="N",
                      help="max escalation calls per department (0 disables escalation)")
+    pre.add_argument("--min-sources", type=_nonnegative_int, default=3, metavar="N",
+                     help="minimum counted sources per department (0 disables the blocking gate; report-only when combined with --resolve-sources)")
+    pre.add_argument("--resolve-sources", action="store_true",
+                     help="probe cited URLs online with HTTPS HEAD requests")
     pre.set_defaults(func=_cmd_resume)
 
     pc = sub.add_parser("check", help="prerequisite / health check")
@@ -267,6 +304,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="run each department through the legacy doctrine-only path")
     pbr.add_argument("--escalation-budget", type=int, metavar="N",
                      help="max escalation calls per department (0 disables escalation)")
+    pbr.add_argument("--min-sources", type=_nonnegative_int, default=3, metavar="N",
+                     help="minimum counted sources per department (0 disables the blocking gate; report-only when combined with --resolve-sources)")
+    pbr.add_argument("--resolve-sources", action="store_true",
+                     help="probe cited URLs online with HTTPS HEAD requests")
     pbr.set_defaults(func=_cmd_batch)
 
     pbs = bsub.add_parser("status", help="show queue and run state")

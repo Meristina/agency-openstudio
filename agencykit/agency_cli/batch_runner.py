@@ -111,7 +111,7 @@ def status() -> int:
     return 0
 
 
-def run(retry_failed: bool = False, limit: int = 0, engine: str = "claude-code", escalation=None) -> int:
+def run(retry_failed: bool = False, limit: int = 0, engine: str = "claude-code", escalation=None, verification=None) -> int:
     """Run pending goals sequentially through the engine, updating state after each."""
     # Pre-flight the engine ONCE: an unknown or unvalidated --engine is a permanent
     # configuration error, not a per-goal failure. Refusing up front leaves the whole
@@ -166,7 +166,7 @@ def run(retry_failed: bool = False, limit: int = 0, engine: str = "claude-code",
         _write_state(state)
 
         try:
-            result = runner_bridge.run(goal, engine=engine, escalation=escalation)
+            result = runner_bridge.run(goal, engine=engine, escalation=escalation, verification=verification)
         except Exception as exc:
             s["status"] = "failed"
             s["last_verdict"] = f"ERROR: {str(exc)[:80]}"

@@ -54,6 +54,17 @@ def _resolve_escalation(value):
     return EscalationConfig(enabled=enabled, budget=budget)
 
 
+def _resolve_verification(value):
+    from .verification import VerificationConfig, coerce_config
+    if isinstance(value, VerificationConfig):
+        return None if value.min_sources == 0 and not value.resolve else value
+    try:
+        config = coerce_config(value)
+    except Exception:
+        config = VerificationConfig()
+    return None if config.min_sources == 0 and not config.resolve else config
+
+
 def _next_id(missions: Path) -> str:
     nums = []
     if missions.exists():
@@ -78,6 +89,9 @@ def _dossier_md(mission_id: str, d: dict) -> str:
     lines.append("\n## Sources")
     for i, s in enumerate(d.get("sources", []) or [], 1):
         lines.append(f"{i}. {s}")
+    verification = d.get("verification")
+    if isinstance(verification, dict) and isinstance(verification.get("final"), dict):
+        lines.extend(_verification_md(verification))
     lines.append("\n## Open to verify")
     for o in d.get("open_to_verify", []) or []:
         lines.append(f"- {o}")
@@ -145,6 +159,47 @@ def _dossier_md(mission_id: str, d: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _verification_md(verification: dict) -> list[str]:
+    final = verification.get("final") or {}
+    lines = ["\n## Source verification"]
+    sources = final.get("sources") or []
+    rate = final.get("rate")
+    if rate is None:
+        # `rate` is None for distinct reasons — resolution off, total network outage,
+        # or zero checkable sources. Never claim "not enabled" for an enabled run.
+        # final.resolve (the cycle that produced this rate) is the driver; the
+        # mission-level config is only the fallback for records lacking the field.
+        reason = (
+            "resolution not enabled"
+            if not final.get("resolve", verification.get("resolve"))
+            else "network unavailable or no checkable sources"
+        )
+        lines.append(
+            f"- Verified-source rate: unverified ({reason}) — counted {len(sources)} cited sources"
+        )
+    else:
+        checkable = sum(1 for s in sources if s.get("status") in {"resolved", "ambiguous", "unresolved"})
+        resolved = sum(1 for s in sources if s.get("status") == "resolved")
+        lines.append(f"- Verified-source rate: {round(rate * 100)}% ({resolved} of {checkable} checkable)")
+    lines.append(f"- Minimum per department: {verification.get('min_sources')}")
+    per_dept = final.get("per_dept") or {}
+    if per_dept:
+        lines.append("\n| Department | Counted | Min | OK |")
+        lines.append("|---|---:|---:|---|")
+        for dept, item in per_dept.items():
+            ok = "yes" if item.get("ok") else "no"
+            lines.append(f"| {dept} | {item.get('counted', 0)} | {item.get('min', 0)} | {ok} |")
+    unresolved = [s for s in sources if s.get("status") == "unresolved"]
+    for src in unresolved:
+        lines.append(f"- Unresolved: {src.get('url')} ({src.get('detail')})")
+    for claim in final.get("missing") or []:
+        lines.append(f"- Missing sources: {claim}")
+    truncated = int(final.get("truncated") or 0)
+    if truncated:
+        lines.append(f"- {truncated} sources not checked — cap reached")
+    return lines
+
+
 def serialize_dossier(dossier: dict, project_root) -> Path:
     """Write the dossier + deliverable into a fresh missions/<NNN-slug>/ folder."""
     project_root = Path(project_root)
@@ -187,6 +242,7 @@ def _run_and_persist(
     on_checkpoint: Optional[Callable[[dict], None]] = None,
     resume_state: Optional[dict] = None,
     escalation=None,
+    verification=None,
 ) -> MissionResult:
     """Drive the engine for `goal`, persist to the ~/.agency store (so
     `agency missions/resume/export` see it) AND serialize the project-local
@@ -231,8 +287,8 @@ def _run_and_persist(
     """
     from agency_kit import store
     from .engines.cli_engine import run_mission_cli
-    dossier = run_mission_cli(
-        goal,
+    import inspect
+    engine_kwargs = dict(
         engine=engine,
         on_event=on_event,
         should_cancel=should_cancel,
@@ -245,6 +301,9 @@ def _run_and_persist(
         resume_state=resume_state,
         escalation=_resolve_escalation(escalation),
     )
+    if "verification" in inspect.signature(run_mission_cli).parameters:
+        engine_kwargs["verification"] = _resolve_verification(verification)
+    dossier = run_mission_cli(goal, **engine_kwargs)
     dossier["mission_id"] = store.new_mission_id(goal)
     # Stamp the canonical project root so store.list_missions can scope history to
     # this project (the Studio GUI launched with --path), not the global store.
@@ -281,6 +340,7 @@ def run(
     on_checkpoint: Optional[Callable[[dict], None]] = None,
     resume_state: Optional[dict] = None,
     escalation=None,
+    verification=None,
 ) -> MissionResult:
     """Headless run: drive a local agent CLI engine, then serialize the dossier.
 
@@ -318,6 +378,7 @@ def run(
         persona_doctrine=persona_doctrine,
         on_checkpoint=on_checkpoint, resume_state=resume_state,
         escalation=escalation,
+        verification=verification,
     )
 
 
@@ -335,6 +396,7 @@ def resume(
     persona_doctrine: Optional[dict] = None,
     on_checkpoint: Optional[Callable[[dict], None]] = None,
     escalation=None,
+    verification=None,
 ) -> MissionResult:
     """Re-run a COMPLETED mission's goal through the engine, from scratch.
 
@@ -363,4 +425,5 @@ def resume(
         persona_doctrine=persona_doctrine,
         on_checkpoint=on_checkpoint,
         escalation=escalation,
+        verification=verification,
     )

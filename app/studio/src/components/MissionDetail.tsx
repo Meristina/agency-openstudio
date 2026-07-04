@@ -47,6 +47,10 @@ function sourceItem(url: string): ReactNode {
   );
 }
 
+function pct(rate: number): string {
+  return `${Math.round(rate * 100)}%`;
+}
+
 export default function MissionDetail({ dossier, loading }: { dossier: Dossier | null; loading?: boolean }) {
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
@@ -118,6 +122,52 @@ export default function MissionDetail({ dossier, loading }: { dossier: Dossier |
       </section>
 
       <AssetGallery items={dossier.assets} />
+
+      {dossier.verification?.final && (
+        <section className="detail-list">
+          <h4>Source verification</h4>
+          <p>
+            {/* final.resolve (the cycle that produced this rate) drives the copy —
+                not the mission-level config — so the message describes what actually
+                happened in the delivered cycle. */}
+            {dossier.verification.final.rate === null
+              ? `unverified — ${dossier.verification.final.resolve ? "network unavailable or no checkable sources" : "resolution not enabled"}`
+              : `Verified-source rate: ${pct(dossier.verification.final.rate)}`}
+          </p>
+          {Object.keys(dossier.verification.final.per_dept).length > 0 && (
+            <table>
+              <thead>
+                <tr><th>Department</th><th>Counted</th><th>Min</th><th>OK</th></tr>
+              </thead>
+              <tbody>
+                {Object.entries(dossier.verification.final.per_dept).map(([dept, item]) => (
+                  <tr key={dept}>
+                    <td>{dept}</td>
+                    <td>{item.counted}</td>
+                    <td>{item.min}</td>
+                    <td>{item.ok ? "yes" : "no"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {dossier.verification.final.sources.length > 0 && (
+            <ul>
+              {dossier.verification.final.sources.map((s) => (
+                <li key={s.url}>
+                  {sourceItem(s.url)} — {s.status}{s.detail ? ` (${s.detail})` : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+          {dossier.verification.final.missing.length > 0 && (
+            <List title="Missing sources" items={dossier.verification.final.missing} />
+          )}
+          {dossier.verification.final.truncated > 0 && (
+            <p>{dossier.verification.final.truncated} source{dossier.verification.final.truncated === 1 ? "" : "s"} not checked — cap reached</p>
+          )}
+        </section>
+      )}
 
       <List title="Decisions" items={dossier.decisions} />
       <List title="Sources" items={dossier.sources} renderItem={sourceItem} />

@@ -25,7 +25,7 @@ export default function Timeline({ events, onResume }: { events: MissionEvent[];
   // Re-fold only when the event list itself changes — not on the per-second
   // `elapsed`-tick re-renders App fires during a run.
   const model = useMemo(() => groupTimeline(events), [events]);
-  const empty = !model.retrieval && !model.visual && !model.websearch && !model.mcp && !model.mcpTools && !model.graph && !model.persona && !model.route && model.depts.length === 0 && !model.terminal;
+  const empty = !model.retrieval && !model.visual && !model.websearch && !model.mcp && !model.mcpTools && !model.graph && !model.persona && !model.route && model.depts.length === 0 && model.verify.length === 0 && !model.terminal;
 
   if (empty) return <p className="muted">No events yet — run a mission to see the live timeline.</p>;
 
@@ -274,6 +274,29 @@ export default function Timeline({ events, onResume }: { events: MissionEvent[];
                 <Verdict verdict={i.verdict} />
               </li>
             ))}
+          </ul>
+        </section>
+      )}
+
+      {model.verify.length > 0 && (
+        <section className="phase">
+          <h4>Source check</h4>
+          <ul className="steps">
+            {model.verify.map((v) => {
+              const label = v.status === "running"
+                ? "checking sources…"
+                : v.rate === null
+                  ? (v.ok ? "sources counted (unverified)" : "sources below minimum")
+                  : v.ok
+                    ? `sources verified (${Math.round(v.rate * 100)}%)`
+                    : "sources below minimum";
+              return (
+                <li key={v.iteration} className={`step ${v.status === "running" ? "active" : "done"}`}>
+                  <span className="step-dot" /> iteration {v.iteration}
+                  <span className="step-state">{label}</span>
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}
