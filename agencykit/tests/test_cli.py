@@ -429,9 +429,12 @@ def test_cli_verification_flags_forward_to_runner_bridge(monkeypatch, tmp_path):
     assert cli.main(["run", "goal", "--min-sources", "0", "--resolve-sources"]) == 0
     assert cli.main(["resume", "m1", "--min-sources", "5", "--resolve-sources"]) == 0
 
+    # The opt-out is forwarded EXPLICITLY as min_sources=0 — never as None, which
+    # runner_bridge._resolve_verification would resolve back to the default config
+    # and silently re-enable the gate the operator just disabled.
     assert captured == [
         ("run", {"min_sources": 3, "resolve": False}),
-        ("run", None),
+        ("run", {"min_sources": 0, "resolve": False}),
         ("run", {"min_sources": 0, "resolve": True}),
         ("resume", {"min_sources": 5, "resolve": True}),
     ]

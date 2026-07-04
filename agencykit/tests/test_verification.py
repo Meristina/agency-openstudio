@@ -2,6 +2,17 @@ import pytest
 
 from agency_cli import verification
 
+# Captured at import time, before the autouse patch below, so the one test that
+# exercises real DNS-guard behaviour can reach the genuine implementation.
+_ORIG_DNS_REFUSAL = verification._dns_refusal
+
+
+@pytest.fixture(autouse=True)
+def _no_dns(monkeypatch):
+    """The hostname policy guard resolves DNS on the (opt-in) probe path; the suite is
+    offline, so neutralize it everywhere and test it explicitly where needed."""
+    monkeypatch.setattr(verification, "_dns_refusal", lambda host: None)
+
 
 def test_config_defaults_validation_and_dict_coercion():
     assert verification.VerificationConfig() == verification.VerificationConfig(min_sources=3, resolve=False)
@@ -35,6 +46,7 @@ def test_extract_sources_attributes_depts_and_dedups_first_seen():
         ("https://localhost/x", 0),
         ("https://127.0.0.1/x", 0),
         ("https://10.0.0.1/x", 0),
+        ("https://100.64.0.1/x", 0),   # shared address space — caught by not is_global
     ],
 )
 def test_policy_refusals_never_call_probe(monkeypatch, url, calls):
@@ -61,6 +73,31 @@ def test_redirect_hops_are_policy_checked_and_stay_head():
     follow = handler.redirect_request(req, None, 302, "Found", {}, "https://example.org/y")
     assert follow.get_method() == "HEAD"
     assert follow.full_url == "https://example.org/y"
+
+
+def test_hostname_resolving_non_global_is_refused(monkeypatch):
+    def fake_getaddrinfo(host, *a, **k):
+        if host == "internal.example":
+            return [(2, 1, 6, "", ("10.0.0.5", 443))]
+        if host == "public.example":
+            return [(2, 1, 6, "", ("93.184.216.34", 443))]
+        raise OSError("no dns")
+
+    monkeypatch.setattr(verification.socket, "getaddrinfo", fake_getaddrinfo)
+    # Restore the genuine guard (the autouse fixture neutralizes it suite-wide).
+    monkeypatch.setattr(verification, "_dns_refusal", _ORIG_DNS_REFUSAL)
+
+    assert verification._dns_refusal("internal.example") == "resolves-non-global"
+    assert verification._dns_refusal("public.example") is None
+    assert verification._dns_refusal("unresolvable.example") is None  # probe classifies it
+
+    # End-to-end: a hostname URL whose DNS answer is private never reaches the probe.
+    seen = []
+    monkeypatch.setattr(verification, "_head_probe", lambda u: seen.append(u) or (200, "HTTP 200"))
+    status, detail, kind = verification.probe_url("https://internal.example/x")
+    assert (status, kind) == ("unresolved", "policy")
+    assert "resolves-non-global" in detail
+    assert seen == []
 
 
 def test_policy_refused_redirect_classifies_unresolved(monkeypatch):

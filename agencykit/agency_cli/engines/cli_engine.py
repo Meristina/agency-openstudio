@@ -720,7 +720,14 @@ def _validate_resume_state(state: dict) -> dict:
     if iteration > 0 and not (state.get("delivered") or "").strip():
         raise ValueError("resume_state.delivered must be non-empty once a cycle has run")
     if verdicts and verdicts[-1].get("verdict") not in _RETRY_VERDICTS:
-        raise ValueError("resume_state is already complete (last verdict is not a retry verdict)")
+        # Mirror the loop's exit condition (token not retryable AND verification ok):
+        # a cycle can end PASS with a FAILED source verification — that mission is
+        # still in flight (the failure feeds the next synthesis), so its checkpoint
+        # must stay resumable rather than be mis-rejected as complete.
+        last = verifications[-1] if verifications else None
+        verification_failed = isinstance(last, dict) and not last.get("ok", True)
+        if not verification_failed:
+            raise ValueError("resume_state is already complete (last verdict is not a retry verdict)")
     state = dict(state)
     state["escalation"] = escalation
     if verifications:

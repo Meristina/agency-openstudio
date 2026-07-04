@@ -67,6 +67,12 @@ def test_mission_request_forwards_verification_default_valid_and_junk(monkeypatc
             {"goal": "field junk", "verification": {"min_sources": "bad", "resolve": "yes"}},
             # bool is an int subclass: true must not silently lower the threshold to 1
             {"goal": "bool junk", "verification": {"min_sources": True, "resolve": False}},
+            # min_sources=0 is the documented opt-out — preserved, not "corrected"
+            {"goal": "opt-out", "verification": {"min_sources": 0, "resolve": False}},
+            # negative is corrected back to the default threshold
+            {"goal": "negative", "verification": {"min_sources": -2, "resolve": True}},
+            # json.loads parses Infinity → float('inf'); int() would raise OverflowError
+            {"goal": "infinity", "verification": {"min_sources": float("inf"), "resolve": False}},
         ):
             conn = http.client.HTTPConnection(host, port)
             conn.request("POST", "/api/mission", body=json.dumps(body), headers={"Content-Type": "application/json"})
@@ -79,6 +85,9 @@ def test_mission_request_forwards_verification_default_valid_and_junk(monkeypatc
         {"min_sources": 5, "resolve": True},
         {"min_sources": 3, "resolve": False},
         {"min_sources": 3, "resolve": False},
+        {"min_sources": 3, "resolve": False},
+        {"min_sources": 0, "resolve": False},
+        {"min_sources": 3, "resolve": True},
         {"min_sources": 3, "resolve": False},
     ]
 

@@ -24,7 +24,9 @@ the operator opts in for that mission (`--resolve-sources` / GUI "Verify sources
 When enabled, probes are bounded and low-trust by design:
 
 - HTTPS-only URL policy before any socket work.
-- Literal private, loopback, link-local, reserved IPs and `localhost` are refused before fetch.
+- Literal non-global IPs (private, loopback, link-local, reserved, shared) and `localhost`
+  are refused before fetch; hostnames are pre-resolved and refused when any DNS answer is
+  non-global (a public name pointing at a private/metadata address never gets probed).
 - HEAD only, 5 s per URL, no body read, no credentials, cookies, API keys, or request fields.
 - Every redirect hop is re-checked against the same policy (https-only, no private/loopback
   targets) and stays a HEAD — a chain that leaves the secure public web is refused and the
@@ -32,9 +34,10 @@ When enabled, probes are bounded and low-trust by design:
 - At most 50 unique URLs per cycle, with a small worker pool and a cycle wall-time clamp.
 - Total network outage degrades to "unverified" instead of pretending URLs are dead.
 
-Accepted residual: no DNS-rebinding pinning. The probe sends no secrets and reads no body;
-literal private/loopback targets are blocked pre-socket, so full DNS pinning is deferred until
-there is evidence it is needed.
+Accepted residual: the probe's connection re-resolves the hostname after the policy check
+(no IP pinning), so a rebind between check and connect remains possible. The probe sends no
+secrets and reads no body; connection-IP pinning is deferred until there is evidence it is
+needed.
 
 ## Regression test (from Wave 0)
 

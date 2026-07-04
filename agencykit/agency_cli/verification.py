@@ -19,6 +19,10 @@ from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_ope
 
 
 MAX_URLS_PER_CYCLE = 50
+# THE default minimum counted sources per deployed department (clarified Q2). Single
+# source of truth — the dataclass default, dict coercion, and the CLI flag defaults
+# all read this constant so the compliance-critical value can never drift.
+DEFAULT_MIN_SOURCES = 3
 _MAX_WORKERS = 8
 _PROBE_TIMEOUT = 5
 _CYCLE_TIMEOUT = 60
@@ -33,7 +37,7 @@ _SOURCE_URL_RE = SOURCE_URL_RE  # internal alias
 
 @dataclass(frozen=True)
 class VerificationConfig:
-    min_sources: int = 3
+    min_sources: int = DEFAULT_MIN_SOURCES
     resolve: bool = False
 
     def __post_init__(self) -> None:
@@ -46,11 +50,15 @@ def coerce_config(value) -> VerificationConfig:
         return value
     if not isinstance(value, dict):
         return VerificationConfig()
-    raw_min = value.get("min_sources", 3)
+    raw_min = value.get("min_sources", DEFAULT_MIN_SOURCES)
     if isinstance(raw_min, bool):   # bool is an int subclass: True would silently become 1
-        raw_min = 3
+        raw_min = DEFAULT_MIN_SOURCES
+    try:
+        min_sources = int(raw_min)
+    except OverflowError:           # json.loads parses Infinity into float('inf')
+        min_sources = DEFAULT_MIN_SOURCES
     return VerificationConfig(
-        min_sources=int(raw_min),
+        min_sources=min_sources,
         resolve=bool(value.get("resolve", False)),
     )
 
@@ -87,14 +95,38 @@ def _policy_refusal(url: str) -> Optional[str]:
     if parsed.scheme != "https":
         return "non-https"
     host = (parsed.hostname or "").lower().rstrip(".")
+    if not host:
+        return "no-host"
     if host == "localhost" or host.endswith(".localhost"):
         return "localhost"
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
+        return _dns_refusal(host)   # hostname: its DNS answers must all be global
+    if not ip.is_global:            # covers private/loopback/link-local/reserved/shared/…
+        return "non-global-address"
+    return None
+
+
+def _dns_refusal(host: str) -> Optional[str]:
+    """Refuse a hostname whose DNS answers include a non-global address — a public
+    name pointing at loopback / RFC1918 / cloud-metadata is the classic SSRF dodge
+    that a literal-IP check alone misses. Runs only on the opt-in resolve path (and
+    on every redirect hop via ``_policy_refusal``); monkeypatched offline. An
+    unresolvable name is NOT refused here — the probe classifies it (nxdomain →
+    ``unresolved``). The later connection re-resolves (no IP pinning): the narrowed
+    rebind-between-check-and-connect residual is documented in docs/SECURITY.md."""
+    try:
+        infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+    except OSError:
         return None
-    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-        return "private-address"
+    for info in infos:
+        addr = str(info[4][0]).split("%", 1)[0]
+        try:
+            if not ipaddress.ip_address(addr).is_global:
+                return "resolves-non-global"
+        except ValueError:
+            continue
     return None
 
 
@@ -311,6 +343,7 @@ def _per_dept(route: list[str], dept_outputs: dict, sources: list[dict], minimum
 
 
 __all__ = [
+    "DEFAULT_MIN_SOURCES",
     "MAX_URLS_PER_CYCLE",
     "SOURCE_URL_RE",
     "VerificationConfig",

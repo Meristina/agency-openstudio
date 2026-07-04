@@ -511,12 +511,27 @@ def test_resume_always_inspects_before_delivery(monkeypatch):
      "verdicts": [{"verdict": "VETO", "iteration": 1}]},                            # empty delivered w/ cycle
     {"route": ["product"], "dept_outputs": {}, "iteration": 1, "delivered": "d",
      "verdicts": [{"verdict": "PASS", "iteration": 1}]},                            # already complete
+    {"route": ["product"], "dept_outputs": {}, "iteration": 1, "delivered": "d",
+     "verdicts": [{"verdict": "PASS", "iteration": 1}],
+     "verifications": [{"iteration": 1, "ok": True}]},                              # complete: PASS + verification ok
 ])
 def test_malformed_or_completed_resume_state_raises_valueerror(monkeypatch, bad):
     monkeypatch.setattr(cli_engine.shutil, "which", lambda b: "/usr/local/bin/" + b)
     monkeypatch.setattr(cli_engine, "_call", lambda *a, **k: pytest.fail("must not run"))
     with pytest.raises(ValueError):
         cli_engine.run_mission_cli("goal", engine="claude-code", resume_state=bad)
+
+
+def test_resume_state_pass_verdict_with_failed_verification_is_resumable():
+    # Mirrors the loop's exit condition: PASS + verification FAIL is an in-flight
+    # mission (the failure feeds the next synthesis), NOT a completed one — the
+    # validator must accept its checkpoint instead of mis-rejecting it as complete.
+    state = {"route": ["product"], "dept_outputs": {"product": "x"}, "iteration": 1,
+             "delivered": "draft", "fixes": "Source verification failed; fix every item",
+             "verdicts": [{"engine": "claude-code", "verdict": "PASS", "detail": "d", "iteration": 1}],
+             "verifications": [{"iteration": 1, "ok": False}]}
+    validated = cli_engine._validate_resume_state(state)
+    assert validated["verifications"][-1]["ok"] is False
 
 
 class _FakePopen:

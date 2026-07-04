@@ -60,7 +60,7 @@ def _resolve_verification(value):
         return None if value.min_sources == 0 and not value.resolve else value
     try:
         config = coerce_config(value)
-    except Exception:
+    except (TypeError, ValueError):   # only parse/validation failures fall back
         config = VerificationConfig()
     return None if config.min_sources == 0 and not config.resolve else config
 

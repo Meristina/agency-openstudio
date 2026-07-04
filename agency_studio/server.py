@@ -1211,7 +1211,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             raw_min = 3
         try:
             min_sources = int(raw_min)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):   # json.loads parses Infinity → float('inf')
             min_sources = 3
         if min_sources < 0:
             min_sources = 3
@@ -1416,6 +1416,12 @@ class StudioHandler(BaseHTTPRequestHandler):
                     run_kwargs["escalation"] = escalation
                 if verification is not None and "verification" in run_params:
                     run_kwargs["verification"] = verification
+                elif verification is not None:
+                    # Same operator-visibility discipline as the persona/MCP hooks: a
+                    # version-mismatched agency-kit must not silently drop the
+                    # source-verification gate (the Principle III enforcement).
+                    print("[studio] installed agency-kit lacks the verification hook; "
+                          "running without the source-verification gate")
                 result_box["result"] = runner_bridge.run(**run_kwargs)
             except MissionCancelled:
                 # Stopped before any persistence. Recorded so that — when the client

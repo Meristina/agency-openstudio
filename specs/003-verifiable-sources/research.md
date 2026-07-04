@@ -74,9 +74,13 @@ the spec's Assumptions and the clarify session's "deferred to planning" list.
   The deliverable text is model-produced from web research, so cited URLs are
   low-trust input — the private-address refusal closes the "cite
   `https://192.168.1.1/admin`" hole without DNS-resolution pinning complexity.
-- **Alternatives considered**: full DNS-rebinding defense (resolve host, pin IP) —
-  rejected as over-engineering for a HEAD probe that sends no secrets and reads no
-  body; documented as a known accepted residual.
+- **Alternatives considered**: full DNS-rebinding defense (resolve host, pin the
+  connection to the checked IP) — rejected as over-engineering for a HEAD probe that
+  sends no secrets and reads no body. *(Amended at review, 2026-07-04)*: hostnames are
+  now pre-resolved and refused when any DNS answer is non-global (closes the
+  public-name-pointing-at-private-IP dodge), and literal IPs use the broader
+  `not is_global` test; the remaining accepted residual is only a rebind between the
+  check and the connect.
 
 ## D5 — Bounds
 

@@ -316,8 +316,8 @@ is. Run a default mission (no opt-in) and assert zero real network activity occu
 
 - **Liveness check shape**: The "lightweight liveness check" is assumed to be a
   minimal reachability probe (e.g. an HTTP HEAD-style request with a short timeout and
-  a tolerant fallback for sites that refuse the method). The exact probe, timeout, and
-  retry/fallback rules are planning details; the spec-level guarantee is bounded,
+  tolerant *classification* for sites that refuse the method — no fallback request is
+  made). The exact probe and timeout rules are planning details; the spec-level guarantee is bounded,
   secure, tolerant classification.
 - **Gate semantics without network**: Since URL resolution is itself opt-in and the
   suite is offline, the minimum-count gate falls back to counting extracted (cited)

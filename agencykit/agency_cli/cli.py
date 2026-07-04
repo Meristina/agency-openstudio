@@ -7,6 +7,8 @@ import argparse
 import inspect
 import sys
 
+from .verification import DEFAULT_MIN_SOURCES
+
 # Flush stdout immediately so `agency run` output is visible in real time when
 # stdout is redirected (e.g. piped to a file or captured by a test runner).
 sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
@@ -55,11 +57,14 @@ def _nonnegative_int(value: str) -> int:
 
 
 def _args_verification(args):
-    min_sources = getattr(args, "min_sources", 3)
-    resolve = bool(getattr(args, "resolve_sources", False))
-    if min_sources == 0 and not resolve:
-        return None
-    return {"min_sources": min_sources, "resolve": resolve}
+    # Always forward the explicit payload — returning None for the opt-out would make
+    # runner_bridge._resolve_verification recreate the DEFAULT config and silently
+    # re-enable the gate the operator just disabled. The min_sources=0 → disabled
+    # mapping is the bridge's job, not this parser's.
+    return {
+        "min_sources": getattr(args, "min_sources", DEFAULT_MIN_SOURCES),
+        "resolve": bool(getattr(args, "resolve_sources", False)),
+    }
 
 
 def _call_supported(fn, *args, **kwargs):
@@ -239,7 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="run each department through the legacy doctrine-only path")
     pr.add_argument("--escalation-budget", type=int, metavar="N",
                     help="max escalation calls per department (0 disables escalation)")
-    pr.add_argument("--min-sources", type=_nonnegative_int, default=3, metavar="N",
+    pr.add_argument("--min-sources", type=_nonnegative_int, default=DEFAULT_MIN_SOURCES, metavar="N",
                     help="minimum counted sources per department (0 disables the blocking gate; report-only when combined with --resolve-sources)")
     pr.add_argument("--resolve-sources", action="store_true",
                     help="probe cited URLs online with HTTPS HEAD requests")
@@ -258,7 +263,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="run each department through the legacy doctrine-only path")
     pre.add_argument("--escalation-budget", type=int, metavar="N",
                      help="max escalation calls per department (0 disables escalation)")
-    pre.add_argument("--min-sources", type=_nonnegative_int, default=3, metavar="N",
+    pre.add_argument("--min-sources", type=_nonnegative_int, default=DEFAULT_MIN_SOURCES, metavar="N",
                      help="minimum counted sources per department (0 disables the blocking gate; report-only when combined with --resolve-sources)")
     pre.add_argument("--resolve-sources", action="store_true",
                      help="probe cited URLs online with HTTPS HEAD requests")
@@ -304,7 +309,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="run each department through the legacy doctrine-only path")
     pbr.add_argument("--escalation-budget", type=int, metavar="N",
                      help="max escalation calls per department (0 disables escalation)")
-    pbr.add_argument("--min-sources", type=_nonnegative_int, default=3, metavar="N",
+    pbr.add_argument("--min-sources", type=_nonnegative_int, default=DEFAULT_MIN_SOURCES, metavar="N",
                      help="minimum counted sources per department (0 disables the blocking gate; report-only when combined with --resolve-sources)")
     pbr.add_argument("--resolve-sources", action="store_true",
                      help="probe cited URLs online with HTTPS HEAD requests")
