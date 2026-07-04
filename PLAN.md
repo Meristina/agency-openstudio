@@ -44,7 +44,7 @@ soldier (JTBD, STP, Pareto, PERT…), selected by the department's router. Event
 **Done when**: a marketing mission actually invokes ≥1 officer + ≥1 soldier, traced in
 the dossier; the per-department token cost stays bounded and measured.
 
-## Brick 3 — Verifiable internet (from soft guarantee to postcondition)
+## Brick 3 — Verifiable internet (from soft guarantee to postcondition) *(done — `ab7f796`, #5)*
 
 The "no invented information" mandate is prompt-only today. Harden it: extract
 citations from the deliverable, resolve URLs (HEAD, offline-stubbed in tests), enforce
