@@ -688,7 +688,10 @@ def _validate_resume_state(state: dict) -> dict:
     ``0..MAX_ITERS`` equal to ``len(verdicts)``; a non-empty ``delivered`` once any cycle ran; and,
     when a cycle ran, a last verdict still in ``_RETRY_VERDICTS`` (a PASS — or any non-retry
     verdict — means the mission had already finished, so its checkpoint should have been deleted;
-    resuming it is a stale-state error). A checkpoint at ``iteration == MAX_ITERS`` is a VALID
+    resuming it is a stale-state error, UNLESS the last recorded verification failed — a PASS
+    with a failed source verification is still in flight, mirroring the loop's exit condition
+    ``token not in _RETRY_VERDICTS and verification_ok``, so its checkpoint stays resumable).
+    A checkpoint at ``iteration == MAX_ITERS`` is a VALID
     resume target (it finalises instantly with the standard residual_risk, zero engine calls).
     Returns the state unchanged so callers can use it inline."""
     if not isinstance(state, dict):
