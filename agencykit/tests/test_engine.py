@@ -11,6 +11,7 @@ import pytest
 
 from agency_cli.engines import cli_engine
 from agency_cli.escalation import EscalationConfig
+from agency_cli.verification import VerificationConfig
 
 
 def test_engines_registry_has_three_web_search_engines():
@@ -240,6 +241,115 @@ def test_active_escalation_attaches_department_trace(monkeypatch):
     assert trace["consumed"] == 4
 
 
+def test_verification_none_is_call_and_dossier_identical(monkeypatch):
+    def run(verification_marker):
+        monkeypatch.setattr(cli_engine.shutil, "which", lambda b: "/usr/local/bin/" + b)
+        calls = []
+        verdicts = iter(["VERDICT: PASS"])
+
+        def _call(cmd, prompt, timeout=900, should_cancel=None):
+            calls.append((list(cmd), prompt))
+            low = prompt.lower()
+            if "json array" in low:
+                return '["marketing"]'
+            if "issue a verdict" in low:
+                return next(verdicts)
+            return "OUTPUT"
+
+        monkeypatch.setattr(cli_engine, "_call", _call)
+        kwargs = {} if verification_marker == "omitted" else {"verification": None}
+        return calls, cli_engine.run_mission_cli("launch", engine="claude-code", **kwargs)
+
+    base_calls, base = run("omitted")
+    none_calls, none = run(None)
+    assert none_calls == base_calls
+    assert none == base
+    assert "verification" not in base
+
+
+def test_verification_failure_retries_after_pass_and_records_separate_signal(monkeypatch):
+    monkeypatch.setattr(cli_engine.shutil, "which", lambda b: "/usr/local/bin/" + b)
+    synths = iter(["draft without sources", "draft with https://source.test/a"])
+    inspectors = iter(["VERDICT: PASS\nUNSOURCED CLAIMS:\n- Claim lacks a citation", "VERDICT: PASS"])
+    synth_prompts = []
+
+    def _call(cmd, prompt, timeout=900, should_cancel=None):
+        low = prompt.lower()
+        if "json array" in low:
+            return '["marketing"]'
+        if "issue a verdict" in low:
+            return next(inspectors)
+        if "synthesise all department outputs" in low:
+            synth_prompts.append(prompt)
+            return next(synths)
+        return "department has https://dept.test/a"
+
+    monkeypatch.setattr(cli_engine, "_call", _call)
+    dossier = cli_engine.run_mission_cli(
+        "launch", engine="claude-code", verification=VerificationConfig(min_sources=1)
+    )
+
+    assert [v["verdict"] for v in dossier["verdicts"]] == ["PASS", "PASS"]
+    assert [v["ok"] for v in dossier["verification"]["cycles"]] == [False, True]
+    assert dossier["verification"]["cycles"][0]["missing"] == ["Claim lacks a citation"]
+    assert "Source verification failed" in synth_prompts[1]
+
+
+def test_verification_cap_failure_lands_in_residual_risk(monkeypatch):
+    monkeypatch.setattr(cli_engine.shutil, "which", lambda b: "/usr/local/bin/" + b)
+
+    def _call(cmd, prompt, timeout=900, should_cancel=None):
+        low = prompt.lower()
+        if "json array" in low:
+            return '["marketing"]'
+        if "issue a verdict" in low:
+            return "VERDICT: PASS"
+        return "OUTPUT"
+
+    monkeypatch.setattr(cli_engine, "_call", _call)
+    dossier = cli_engine.run_mission_cli(
+        "launch", engine="claude-code", verification={"min_sources": 1, "resolve": False}
+    )
+
+    assert dossier["iteration"] == cli_engine.MAX_ITERS
+    assert dossier["verification"]["final"]["ok"] is False
+    assert "Source verification failed" in dossier["residual_risk"]
+
+
+def test_verification_events_and_checkpoint_resume_shape(monkeypatch):
+    monkeypatch.setattr(cli_engine.shutil, "which", lambda b: "/usr/local/bin/" + b)
+
+    def _call(cmd, prompt, timeout=900, should_cancel=None):
+        low = prompt.lower()
+        if "json array" in low:
+            return '["marketing"]'
+        if "issue a verdict" in low:
+            return "VERDICT: PASS"
+        return "OUTPUT https://dept.test/a"
+
+    monkeypatch.setattr(cli_engine, "_call", _call)
+    events = []
+    snaps = []
+    cli_engine.run_mission_cli(
+        "launch",
+        engine="claude-code",
+        verification=VerificationConfig(min_sources=1),
+        on_event=events.append,
+        on_checkpoint=snaps.append,
+    )
+
+    verify_events = [e for e in events if e.get("phase") == "verify"]
+    assert verify_events == [
+        {"phase": "verify", "iteration": 1, "status": "start"},
+        {"phase": "verify", "iteration": 1, "status": "done", "ok": True, "rate": None, "checked": 1},
+    ]
+    assert len(snaps[-1]["verifications"]) == len(snaps[-1]["verdicts"]) == 1
+    old_state = dict(snaps[-1])
+    old_state.pop("verifications")
+    old_state["verdicts"][0]["verdict"] = "VETO"
+    cli_engine._validate_resume_state(old_state)
+
+
 def test_active_escalation_checkpoint_and_old_resume_default(monkeypatch):
     monkeypatch.setattr(cli_engine.shutil, "which", lambda b: "/usr/local/bin/" + b)
     snaps = []
@@ -401,12 +511,27 @@ def test_resume_always_inspects_before_delivery(monkeypatch):
      "verdicts": [{"verdict": "VETO", "iteration": 1}]},                            # empty delivered w/ cycle
     {"route": ["product"], "dept_outputs": {}, "iteration": 1, "delivered": "d",
      "verdicts": [{"verdict": "PASS", "iteration": 1}]},                            # already complete
+    {"route": ["product"], "dept_outputs": {}, "iteration": 1, "delivered": "d",
+     "verdicts": [{"verdict": "PASS", "iteration": 1}],
+     "verifications": [{"iteration": 1, "ok": True}]},                              # complete: PASS + verification ok
 ])
 def test_malformed_or_completed_resume_state_raises_valueerror(monkeypatch, bad):
     monkeypatch.setattr(cli_engine.shutil, "which", lambda b: "/usr/local/bin/" + b)
     monkeypatch.setattr(cli_engine, "_call", lambda *a, **k: pytest.fail("must not run"))
     with pytest.raises(ValueError):
         cli_engine.run_mission_cli("goal", engine="claude-code", resume_state=bad)
+
+
+def test_resume_state_pass_verdict_with_failed_verification_is_resumable():
+    # Mirrors the loop's exit condition: PASS + verification FAIL is an in-flight
+    # mission (the failure feeds the next synthesis), NOT a completed one — the
+    # validator must accept its checkpoint instead of mis-rejecting it as complete.
+    state = {"route": ["product"], "dept_outputs": {"product": "x"}, "iteration": 1,
+             "delivered": "draft", "fixes": "Source verification failed; fix every item",
+             "verdicts": [{"engine": "claude-code", "verdict": "PASS", "detail": "d", "iteration": 1}],
+             "verifications": [{"iteration": 1, "ok": False}]}
+    validated = cli_engine._validate_resume_state(state)
+    assert validated["verifications"][-1]["ok"] is False
 
 
 class _FakePopen:
@@ -561,6 +686,17 @@ def test_extract_sources_pulls_urls_deduped_in_order():
 def test_extract_sources_empty_when_no_urls():
     assert cli_engine._extract_sources("no links here") == []
     assert cli_engine._extract_sources("") == []
+
+
+def test_parse_unsourced_claims_filters_all_clear_lines():
+    # An explicit all-clear under the heading must never read as a claim (it would
+    # spuriously fail the cycle's verification signal on a clean deliverable).
+    for all_clear in ("None", "none.", "N/A", "No unsourced claims", "No unsourced claims found."):
+        assert cli_engine._parse_unsourced_claims(f"VERDICT: PASS\nUNSOURCED CLAIMS:\n- {all_clear}") == []
+    assert cli_engine._parse_unsourced_claims(
+        "UNSOURCED CLAIMS:\n- Market grows 12% CAGR\n\ntrailing prose"
+    ) == ["Market grows 12% CAGR"]
+    assert cli_engine._parse_unsourced_claims("VERDICT: PASS") == []
 
 
 def test_run_mission_cli_populates_sources_from_deliverable(monkeypatch):

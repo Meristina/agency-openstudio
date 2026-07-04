@@ -31,10 +31,11 @@ agency check
 agency init [path] [--agent claude|codex|cursor|copilot|gemini|opencode]
 agency run "goal" [--dry-run] [--engine claude-code]   # codex/gemini refused until validated
 agency run "goal" [--no-escalation] [--escalation-budget N]
+agency run "goal" [--min-sources N] [--resolve-sources]
 agency missions
-agency resume <mission_id> [--engine ...] [--no-escalation] [--escalation-budget N]
+agency resume <mission_id> [--engine ...] [--no-escalation] [--escalation-budget N] [--min-sources N] [--resolve-sources]
 agency sync [--strict]
-agency batch add "goal" / run [--engine ...] [--no-escalation] [--escalation-budget N] / status / clear
+agency batch add "goal" / run [--engine ...] [--no-escalation] [--escalation-budget N] [--min-sources N] [--resolve-sources] / status / clear
 agency export <mission_id>      # requires pip install -e ".[pdf]"
 agency tui                      # requires pip install -e ".[tui]"
 ```
@@ -53,6 +54,8 @@ run_mission_cli(goal, engine)
                inside a per-department call budget; trace is stored in dossier["escalation"]
   SYNTHESIZE → _call(engine, commander-agency.md + all dept outputs)
   INSPECT    → _call(engine, inspector-agency.md + deliverable) → verdict text
+  VERIFY     → optional source gate: extract cited URLs, count per-department sources,
+               optionally resolve URLs, retry synthesis if the source postcondition fails
   → returns a dossier dict (goal, route, dept_outputs, delivered, verdicts)
 ```
 
@@ -75,6 +78,7 @@ Carried as a JSON block through every brief:
   "open_to_verify": list,
   "direction_check": dict | None,
   "verdicts": list,
+  "verification": dict,      # optional: source gate cycles + final report
   "iteration": int,
 }
 ```
@@ -124,6 +128,7 @@ All source files under `agents/` are mirrored to `payload/agents/`. The drift gu
 |---|---|
 | `agency_cli/engines/cli_engine.py` | `run_mission_cli()` + `ENGINE_SPECS` — the whole route→execute→synthesize→inspect loop via subprocess |
 | `agency_cli/escalation.py` | Budget-controlled specialist escalation: roster parsing, selection, commander/officer/soldier calls, trace assembly |
+| `agency_cli/verification.py` | Source verification: config, URL extraction, policy-guarded HEAD probe, per-cycle gate/report |
 | `agency_cli/runner_bridge.py` | `run()` / `resume()` — drive the engine, save to store + serialize `missions/<id>/` |
 | `agency_cli/cli.py` | All CLI subcommands + the `--engine` flag |
 | `agency_cli/batch_runner.py` | `agency batch` queue — runs each goal through the engine |

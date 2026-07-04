@@ -34,6 +34,7 @@ export default function App() {
   const [missions, setMissions] = useState<MissionSummary[]>([]);
   const [goal, setGoal] = useState("");
   const [webSearch, setWebSearch] = useState(false);
+  const [verifyOnline, setVerifyOnline] = useState(false);
   const [useMcp, setUseMcp] = useState(false);
   const [useMcpTools, setUseMcpTools] = useState(false);
   const [mcpCount, setMcpCount] = useState<number | null>(null);
@@ -183,7 +184,7 @@ export default function App() {
           if (e.phase === "done" && e.mission_id) completedId = e.mission_id;
           if (e.phase === "cancelled") cancelled = true;
         },
-        { signal: ctrl.signal, webSearch, mcp: useMcp, knowledge: useKnowledge, mcpTools: useMcpTools, personas: usePersonas, visual: useVisual, video: useVideo, resumeFrom },
+        { signal: ctrl.signal, webSearch, mcp: useMcp, knowledge: useKnowledge, mcpTools: useMcpTools, personas: usePersonas, visual: useVisual, video: useVideo, ...(verifyOnline ? { verification: { resolve: true } } : {}), resumeFrom },
       );
       // The stream ended on a terminal frame. Always refresh first so a mission that
       // won the cancel race (finished before the stop landed) still shows in History.
@@ -218,7 +219,7 @@ export default function App() {
       // mutually-exclusive rule), so refresh the warm-model chip when it ends.
       void refreshModelStatus();
     }
-  }, [goal, webSearch, useMcp, useKnowledge, useMcpTools, usePersonas, useVisual, useVideo, running, refreshMissions, openMission, refreshModelStatus]);
+  }, [goal, webSearch, verifyOnline, useMcp, useKnowledge, useMcpTools, usePersonas, useVisual, useVideo, running, refreshMissions, openMission, refreshModelStatus]);
 
   // The Run button / keyboard shortcut launch a fresh mission (no positional arg — an onClick
   // MouseEvent must never leak in as a resume id). The Timeline's "Reprendre la mission" button
@@ -337,6 +338,15 @@ export default function App() {
                 disabled={running}
               />
               Search the web
+            </label>
+            <label className="toggle" title="Probe cited URLs online with HTTPS HEAD requests. Default missions still count cited sources without network probes.">
+              <input
+                type="checkbox"
+                checked={verifyOnline}
+                onChange={(ev) => setVerifyOnline(ev.target.checked)}
+                disabled={running}
+              />
+              Verify sources online
             </label>
             <label
               className="toggle"

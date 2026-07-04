@@ -407,6 +407,45 @@ def test_resume_forwards_on_checkpoint_but_never_resume_state(tmp_path, monkeypa
     assert captured["resume_state"] is None
 
 
+def test_cli_verification_flags_forward_to_runner_bridge(monkeypatch, tmp_path):
+    from agency_cli import cli
+
+    captured = []
+    result = type("R", (), {"path": tmp_path, "dossier": {"verdicts": [], "mission_id": "m"}})()
+
+    def _run(goal, **kwargs):
+        captured.append(("run", kwargs.get("verification")))
+        return result
+
+    def _resume(mid, **kwargs):
+        captured.append(("resume", kwargs.get("verification")))
+        return result
+
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _run)
+    monkeypatch.setattr("agency_cli.runner_bridge.resume", _resume)
+
+    assert cli.main(["run", "goal"]) == 0
+    assert cli.main(["run", "goal", "--min-sources", "0"]) == 0
+    assert cli.main(["run", "goal", "--min-sources", "0", "--resolve-sources"]) == 0
+    assert cli.main(["resume", "m1", "--min-sources", "5", "--resolve-sources"]) == 0
+
+    # The opt-out is forwarded EXPLICITLY as min_sources=0 — never as None, which
+    # runner_bridge._resolve_verification would resolve back to the default config
+    # and silently re-enable the gate the operator just disabled.
+    assert captured == [
+        ("run", {"min_sources": 3, "resolve": False}),
+        ("run", {"min_sources": 0, "resolve": False}),
+        ("run", {"min_sources": 0, "resolve": True}),
+        ("resume", {"min_sources": 5, "resolve": True}),
+    ]
+
+
+def test_cli_min_sources_negative_is_argparse_error():
+    from agency_cli import cli
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["run", "goal", "--min-sources", "-1"])
+
+
 def test_dossier_md_assets_section_only_when_present():
     from agency_cli.runner_bridge import _dossier_md
     base = {

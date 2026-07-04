@@ -19,6 +19,14 @@ export interface InspectStep {
   verdict: string | null;
 }
 
+export interface VerifyStep {
+  iteration: number;
+  status: "running" | "done";
+  ok: boolean | null;
+  rate: number | null;
+  checked: number | null;
+}
+
 export interface AssetStep {
   kind: "image" | "tts" | "video";
   status: "running" | "ok" | "failed" | "skipped";
@@ -90,6 +98,7 @@ export interface TimelineModel {
   depts: DeptStep[];
   synth: SynthStep[];
   inspect: InspectStep[];
+  verify: VerifyStep[];
   assets: AssetStep[];
   terminal: Terminal | null;
 }
@@ -109,7 +118,7 @@ function foldStep<S>(
 
 /** Fold the events received so far into a stable, render-ready model. */
 export function groupTimeline(events: MissionEvent[]): TimelineModel {
-  const model: TimelineModel = { retrieval: null, visual: null, websearch: null, mcp: null, mcpTools: null, graph: null, persona: null, route: null, depts: [], synth: [], inspect: [], assets: [], terminal: null };
+  const model: TimelineModel = { retrieval: null, visual: null, websearch: null, mcp: null, mcpTools: null, graph: null, persona: null, route: null, depts: [], synth: [], inspect: [], verify: [], assets: [], terminal: null };
 
   for (const e of events) {
     switch (e.phase) {
@@ -165,6 +174,19 @@ export function groupTimeline(events: MissionEvent[]): TimelineModel {
         const step = model.inspect.find((i) => i.iteration === e.iteration);
         if (step) step.verdict = e.verdict ?? step.verdict;
         else model.inspect.push({ iteration: e.iteration, verdict: e.verdict ?? null });
+        break;
+      }
+      case "verify": {
+        const step = model.verify.find((v) => v.iteration === e.iteration);
+        const next = {
+          iteration: e.iteration,
+          status: e.status === "done" ? "done" as const : "running" as const,
+          ok: e.status === "done" ? e.ok ?? false : null,
+          rate: e.status === "done" ? e.rate ?? null : null,
+          checked: e.status === "done" ? e.checked ?? 0 : null,
+        };
+        if (step) Object.assign(step, next);
+        else model.verify.push(next);
         break;
       }
       case "asset": {

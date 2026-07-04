@@ -161,4 +161,17 @@ describe("<Timeline>", () => {
     expect(text).toContain("VETO");
     expect(text).toContain("PASS");
   });
+
+  it("renders verify phase frames", () => {
+    const events: MissionEvent[] = [
+      { phase: "route", status: "done", route: ["marketing"] },
+      { phase: "verify", iteration: 1, status: "start" },
+      { phase: "verify", iteration: 1, status: "done", ok: false, rate: null, checked: 2 },
+      { phase: "verify", iteration: 2, status: "done", ok: true, rate: 0.87, checked: 5 },
+    ];
+    const text = render(<Timeline events={events} />).container.textContent ?? "";
+    expect(text).toContain("Source check");
+    expect(text).toContain("sources below minimum");
+    expect(text).toContain("sources verified (87%)");
+  });
 });

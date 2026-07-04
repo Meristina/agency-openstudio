@@ -413,12 +413,6 @@ def _short_verdict(text: str) -> str:
     return "DELIVERED"
 
 
-# A cited source URL. Bounded so it stops at whitespace and the markdown delimiters
-# that wrap a link — ( ) [ ] < > " ' | — so the URL is captured cleanly whether the
-# synthesis emits it in a Sources table cell, a list, or an inline [text](url) link.
-_SOURCE_URL_RE = re.compile(r"https?://[^\s<>()\[\]\"'|]+")
-
-
 def _extract_sources(text: str) -> list:
     """Surface the source URLs cited in a deliverable, de-duplicated in first-seen
     order, for the dossier's structured ``sources`` field.
@@ -426,17 +420,17 @@ def _extract_sources(text: str) -> list:
     The synthesis prompt asks for "all sources cited with URLs and dates", so the
     URLs live in the delivered markdown (typically a "Sources cited" table). Pulling
     them by URL shape is format-agnostic — it works for tables, lists, or inline
-    links — and additive: text with no URL yields ``[]``, exactly the prior
-    behaviour. ``decisions`` / ``open_to_verify`` are deliberately NOT auto-extracted:
-    their layout (prose vs table vs list) is model-dependent, so a heuristic parser
-    would risk injecting markdown noise rather than reliable items.
+    links — and additive: text with no URL yields ``[]``. Delegates to THE canonical
+    matcher in ``agency_cli.verification`` (Brick 3) so this list and the source-
+    verification gate can never extract different URL sets — see the Complexity
+    Tracking entry in specs/003-verifiable-sources/plan.md for the justified
+    edge-case delta vs the pre-Brick-3 pattern (markdown-backtick artifacts are no
+    longer captured). ``decisions`` / ``open_to_verify`` are deliberately NOT
+    auto-extracted: their layout (prose vs table vs list) is model-dependent, so a
+    heuristic parser would risk injecting markdown noise rather than reliable items.
     """
-    seen: dict = {}
-    for raw in _SOURCE_URL_RE.findall(text or ""):
-        url = raw.rstrip(".,;:!?")  # drop trailing sentence punctuation
-        if url:
-            seen.setdefault(url, None)
-    return list(seen)
+    from agency_cli.verification import extract_urls
+    return extract_urls(text)
 
 
 def _fmt_dept_outputs(dept_outputs: dict, limit: Optional[int] = _MAX_DEPT_CHARS) -> str:
@@ -509,16 +503,75 @@ def _synth_prompt(
     )
 
 
-def _inspect_prompt(goal: str, delivered: str) -> str:
+def _inspect_prompt(goal: str, delivered: str, verification_report: Optional[dict] = None) -> str:
     inspector_doc = _load("inspector-agency")
+    verification_block = ""
+    if verification_report:
+        verification_block = (
+            "\n\nSOURCE VERIFICATION REPORT:\n"
+            f"{_format_verification_report(verification_report)}\n\n"
+            "If any factual claims in the deliverable lack a cited source, list them under "
+            "`UNSOURCED CLAIMS:` as bullet points. If none are clear, omit that section."
+        )
     return (
         (f"{inspector_doc}\n\n" if inspector_doc else "")
         + f"MISSION GOAL:\n{goal}\n\n"
         f"DELIVERABLE:\n{delivered}\n\n"
-        "Use WebSearch to spot-check at least 3 sources cited. "
+        + (f"{verification_block}\n\n" if verification_block else "")
+        + "Use WebSearch to spot-check at least 3 sources cited. "
         "Issue a verdict: PASS, PASS-WITH-FIXES, or VETO. "
         "Flag any invented data, outdated figures, or unverifiable claims."
     )
+
+
+def _format_verification_report(report: dict) -> str:
+    rows = []
+    for dept, item in sorted((report.get("per_dept") or {}).items()):
+        rows.append(f"- {dept}: {item.get('counted', 0)}/{item.get('min', 0)} counted")
+    bad = [
+        f"- {s.get('url')} ({s.get('detail')})"
+        for s in report.get("sources", [])
+        if s.get("status") in {"unresolved", "unverifiable"}
+    ]
+    if bad:
+        rows.append("Unresolved/unverifiable sources:\n" + "\n".join(bad))
+    return "\n".join(rows) if rows else "(no cited URLs found)"
+
+
+# "No unsourced claims" phrasings a model may emit under the UNSOURCED CLAIMS heading
+# despite the omit-if-none instruction. Filtered so an all-clear never reads as a
+# claim and spuriously fails the cycle's verification signal.
+_NON_CLAIMS = frozenset({"none", "n/a", "no unsourced claims", "no unsourced claims found"})
+
+
+def _parse_unsourced_claims(verdict_text: str) -> list[str]:
+    claims = []
+    capture = False
+    for line in (verdict_text or "").splitlines():
+        stripped = line.strip()
+        if stripped.upper().startswith("UNSOURCED CLAIMS"):
+            capture = True
+            continue
+        if capture and not stripped:
+            break
+        if capture:
+            claims.append(stripped.lstrip("-* ").strip())
+    return [c for c in claims if c and c.lower().rstrip(".") not in _NON_CLAIMS]
+
+
+def _verification_fix_block(report: dict) -> str:
+    bad = [
+        f"{dept}: {item.get('counted', 0)}/{item.get('min', 0)} counted"
+        for dept, item in (report.get("per_dept") or {}).items()
+        if not item.get("ok")
+    ]
+    missing = [f"- {m}" for m in report.get("missing", [])]
+    parts = ["Source verification failed; fix every item before re-presenting."]
+    if bad:
+        parts.append("Departments below source minimum:\n" + "\n".join(f"- {b}" for b in bad))
+    if missing:
+        parts.append("Unsourced claims named by inspector:\n" + "\n".join(missing))
+    return "\n\n".join(parts)
 
 
 # ── main entry point ──────────────────────────────────────────────────────────
@@ -576,6 +629,7 @@ def _checkpoint(
     escalation: Optional[dict] = None,
     delivered: str = "",
     verdicts: tuple = (),
+    verifications: tuple = (),
     iteration: int = 0,
     fixes: Optional[str] = None,
 ) -> None:
@@ -610,6 +664,8 @@ def _checkpoint(
             "iteration": iteration,
             "fixes": fixes,
         }
+        if verifications:
+            snapshot["verifications"] = [dict(v) for v in verifications]
         # Guarded exactly like the dossier's `escalation` key: only present when at least
         # one department escalated, so an escalation-off / pre-feature checkpoint envelope
         # stays byte-identical to before (Principle X).
@@ -632,7 +688,10 @@ def _validate_resume_state(state: dict) -> dict:
     ``0..MAX_ITERS`` equal to ``len(verdicts)``; a non-empty ``delivered`` once any cycle ran; and,
     when a cycle ran, a last verdict still in ``_RETRY_VERDICTS`` (a PASS — or any non-retry
     verdict — means the mission had already finished, so its checkpoint should have been deleted;
-    resuming it is a stale-state error). A checkpoint at ``iteration == MAX_ITERS`` is a VALID
+    resuming it is a stale-state error, UNLESS the last recorded verification failed — a PASS
+    with a failed source verification is still in flight, mirroring the loop's exit condition
+    ``token not in _RETRY_VERDICTS and verification_ok``, so its checkpoint stays resumable).
+    A checkpoint at ``iteration == MAX_ITERS`` is a VALID
     resume target (it finalises instantly with the standard residual_risk, zero engine calls).
     Returns the state unchanged so callers can use it inline."""
     if not isinstance(state, dict):
@@ -649,17 +708,33 @@ def _validate_resume_state(state: dict) -> dict:
     verdicts = state.get("verdicts") or []
     if not isinstance(verdicts, list):
         raise ValueError("resume_state.verdicts must be a list")
+    verifications = state.get("verifications", [])
+    if verifications is None:
+        verifications = []
+    if verifications and not isinstance(verifications, list):
+        raise ValueError("resume_state.verifications must be a list")
     iteration = state.get("iteration")
     if not isinstance(iteration, int) or isinstance(iteration, bool) or not (0 <= iteration <= MAX_ITERS):
         raise ValueError(f"resume_state.iteration must be an int in 0..{MAX_ITERS}")
     if iteration != len(verdicts):
         raise ValueError("resume_state.iteration must equal len(verdicts)")
+    if verifications and len(verifications) != len(verdicts):
+        raise ValueError("resume_state.verifications must equal len(verdicts)")
     if iteration > 0 and not (state.get("delivered") or "").strip():
         raise ValueError("resume_state.delivered must be non-empty once a cycle has run")
     if verdicts and verdicts[-1].get("verdict") not in _RETRY_VERDICTS:
-        raise ValueError("resume_state is already complete (last verdict is not a retry verdict)")
+        # Mirror the loop's exit condition (token not retryable AND verification ok):
+        # a cycle can end PASS with a FAILED source verification — that mission is
+        # still in flight (the failure feeds the next synthesis), so its checkpoint
+        # must stay resumable rather than be mis-rejected as complete.
+        last = verifications[-1] if verifications else None
+        verification_failed = isinstance(last, dict) and not last.get("ok", True)
+        if not verification_failed:
+            raise ValueError("resume_state is already complete (last verdict is not a retry verdict)")
     state = dict(state)
     state["escalation"] = escalation
+    if verifications:
+        state["verifications"] = verifications
     return state
 
 
@@ -676,6 +751,7 @@ def run_mission_cli(
     on_checkpoint: Optional[Callable[[dict], None]] = None,
     resume_state: Optional[dict] = None,
     escalation: Optional[object] = None,
+    verification: Optional[object] = None,
 ) -> dict:
     """Run a full mission via a local agent CLI tool: route → execute → synthesize → inspect.
 
@@ -769,6 +845,9 @@ def run_mission_cli(
             enabled=bool(escalation.get("enabled", True)),
             budget=int(escalation.get("budget", 6)),
         )
+    if isinstance(verification, dict):
+        from agency_cli.verification import coerce_config
+        verification = coerce_config(verification)
     escalation_active = bool(
         escalation is not None
         and getattr(escalation, "enabled", False)
@@ -860,6 +939,7 @@ def run_mission_cli(
     # (iteration N doesn't appear from nowhere on a resume).
     if resume_state:
         verdicts = [dict(v) for v in resume_state["verdicts"]]
+        verifications = [dict(v) for v in resume_state.get("verifications", [])]
         delivered = resume_state["delivered"]
         fixes = resume_state.get("fixes")
         iteration = resume_state["iteration"]
@@ -868,9 +948,11 @@ def run_mission_cli(
             _emit(on_event, {"phase": "inspect", "iteration": v["iteration"], "verdict": v["verdict"], "resumed": True})
     else:
         verdicts = []
+        verifications = []
         delivered = ""
         fixes = None
         iteration = 0
+    probe_cache = {}
     while iteration < MAX_ITERS:
         _check_cancel(should_cancel)   # CP3: between complete synth→inspect cycles, never within one
         iteration += 1
@@ -888,25 +970,56 @@ def run_mission_cli(
         print("done", flush=True)
         _emit(on_event, {"phase": "synth", "iteration": iteration, "status": "done"})
 
+        verification_report = None
+        if verification is not None:
+            from agency_cli.verification import verify_cycle
+            _check_cancel(should_cancel)
+            _emit(on_event, {"phase": "verify", "iteration": iteration, "status": "start"})
+            verification_report = verify_cycle(
+                iteration, route, dept_outputs, delivered, verification, cache=probe_cache
+            )
+            _check_cancel(should_cancel)
+
         print(f"[{engine}] inspecting...", end=" ", flush=True)
         _emit(on_event, {"phase": "inspect", "iteration": iteration, "status": "start"})
         verdict_text = _call(
-            cmd, _inspect_prompt(goal, delivered), timeout=spec.run_timeout, should_cancel=should_cancel
+            cmd, _inspect_prompt(goal, delivered, verification_report), timeout=spec.run_timeout, should_cancel=should_cancel
         )
         token = _short_verdict(verdict_text)
         print(token, flush=True)
         _emit(on_event, {"phase": "inspect", "iteration": iteration, "verdict": token})
 
         verdicts.append({"engine": engine, "verdict": token, "detail": verdict_text, "iteration": iteration})
+        verification_ok = True
+        if verification_report is not None:
+            verification_report = dict(verification_report)
+            verification_report["missing"] = _parse_unsourced_claims(verdict_text)
+            if verification_report["missing"]:
+                verification_report["ok"] = False
+            verifications.append(verification_report)
+            verification_ok = bool(verification_report["ok"])
+            _emit(on_event, {
+                "phase": "verify",
+                "iteration": iteration,
+                "status": "done",
+                "ok": verification_ok,
+                "rate": verification_report.get("rate"),
+                "checked": len(verification_report.get("sources") or []),
+            })
         # Checkpoint the completed (inspected) cycle before deciding whether to loop — so a crash in
         # the NEXT synthesis rolls back to here, and resume re-runs that synthesis + its inspection.
+        next_fixes = None
+        if token in _RETRY_VERDICTS:
+            next_fixes = verdict_text
+        if not verification_ok and verification_report is not None:
+            next_fixes = "\n\n".join(p for p in (next_fixes, _verification_fix_block(verification_report)) if p)
         _checkpoint(on_checkpoint, "cycle", goal, engine, route, dept_outputs,
                     escalation=escalation_traces,
                     delivered=delivered, verdicts=verdicts, iteration=iteration,
-                    fixes=verdict_text if token in _RETRY_VERDICTS else None)
-        if token not in _RETRY_VERDICTS:   # PASS, or no actionable verdict — stop
+                    verifications=verifications, fixes=next_fixes)
+        if token not in _RETRY_VERDICTS and verification_ok:   # PASS, or no actionable verdict — stop
             break
-        fixes = verdict_text               # feed the inspector's findings into the next synthesis
+        fixes = next_fixes                 # feed findings into the next synthesis
 
     dossier = {
         "goal": goal,
@@ -923,9 +1036,22 @@ def run_mission_cli(
     }
     if escalation_traces:
         dossier["escalation"] = escalation_traces
-    if verdicts[-1]["verdict"] in _RETRY_VERDICTS:   # cap reached without a clean PASS
+    if verification is not None:
+        dossier["verification"] = {
+            "min_sources": getattr(verification, "min_sources", 3),
+            "resolve": getattr(verification, "resolve", False),
+            "cycles": verifications,
+            "final": verifications[-1] if verifications else None,
+        }
+    verification_failed = bool(verifications and not verifications[-1].get("ok"))
+    if verdicts[-1]["verdict"] in _RETRY_VERDICTS or verification_failed:   # cap reached without a clean PASS
+        reason = (
+            "Source verification failed"
+            if verification_failed and verdicts[-1]["verdict"] not in _RETRY_VERDICTS
+            else f"Inspector did not PASS after {iteration} iteration(s)"
+        )
         dossier["residual_risk"] = (
-            f"Inspector did not PASS after {iteration} iteration(s); delivered the best "
+            f"{reason}; delivered the best "
             f"available result. Last verdict: {verdicts[-1]['verdict']}."
         )
     return dossier

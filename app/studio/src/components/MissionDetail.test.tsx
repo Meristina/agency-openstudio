@@ -73,4 +73,77 @@ describe("<MissionDetail>", () => {
     const { container } = render(<MissionDetail dossier={dossier} />);
     expect(container.textContent).not.toContain("Generated assets");
   });
+
+  it("renders source verification details when present", () => {
+    const dossier: Dossier = {
+      mission_id: "m6",
+      goal: "demo",
+      delivered: "body",
+      verification: {
+        min_sources: 3,
+        resolve: true,
+        cycles: [],
+        final: {
+          iteration: 1,
+          ok: false,
+          resolve: true,
+          rate: 0.4,
+          truncated: 1,
+          per_dept: { marketing: { counted: 2, min: 3, ok: false } },
+          sources: [{ url: "https://dead.test/a", status: "unresolved", detail: "HTTP 404", depts: ["marketing"] }],
+          missing: ["Claim lacks a source"],
+        },
+      },
+    };
+    const text = render(<MissionDetail dossier={dossier} />).container.textContent ?? "";
+    expect(text).toContain("Source verification");
+    expect(text).toContain("40%");
+    expect(text).toContain("marketing");
+    expect(text).toContain("https://dead.test/a");
+    expect(text).toContain("Claim lacks a source");
+    expect(text).toContain("1 source not checked");
+  });
+
+  it("renders null verification rate as unverified and omits absent verification", () => {
+    const offline: Dossier = {
+      mission_id: "m7",
+      delivered: "body",
+      verification: {
+        min_sources: 1,
+        resolve: false,
+        cycles: [],
+        final: {
+          iteration: 1,
+          ok: true,
+          resolve: false,
+          rate: null,
+          truncated: 0,
+          per_dept: {},
+          sources: [],
+          missing: [],
+        },
+      },
+    };
+    expect(render(<MissionDetail dossier={offline} />).container.textContent).toContain(
+      "unverified — resolution not enabled",
+    );
+    cleanup();
+    // Resolution WAS enabled but the cycle degraded (outage / nothing checkable):
+    // the copy must not claim the toggle was off. The two resolve fields deliberately
+    // DISAGREE here to pin final.resolve (the cycle that produced the rate) as the
+    // driver — a regression reading the mission-level field would fail this case.
+    const degraded: Dossier = {
+      ...offline,
+      verification: {
+        ...offline.verification!,
+        resolve: false,
+        final: { ...offline.verification!.final, resolve: true },
+      },
+    };
+    expect(render(<MissionDetail dossier={degraded} />).container.textContent).toContain(
+      "unverified — network unavailable or no checkable sources",
+    );
+    cleanup();
+    expect(render(<MissionDetail dossier={{ delivered: "body" }} />).container.textContent).not.toContain("Source verification");
+  });
 });

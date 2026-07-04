@@ -985,7 +985,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         if request is None:
             return  # a 400 was already sent
         (goal, engine, web_search, use_mcp, use_knowledge, use_mcp_tools,
-         use_personas, use_visual, use_video, resume_from, escalation) = request
+         use_personas, use_visual, use_video, resume_from, escalation, verification) = request
         # Resume: resolve the checkpoint BEFORE _begin_sse so any failure is a clean JSON error
         # (a broken SSE stream would be far worse UX). The envelope pins goal/engine/flags, so a
         # resumed run reconstructs the exact mission — the body's flags are ignored on resume.
@@ -1006,6 +1006,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             use_mcp_tools, use_personas = bool(f.get("mcp_tools")), bool(f.get("personas"))
             use_visual, use_video = bool(f.get("visual")), bool(f.get("video"))
             escalation = f.get("escalation")
+            verification = f.get("verification", verification)
         engine = engine or "claude-code"  # apply the default now that resume-vs-explicit is resolved
         # Refuse an unknown/unvalidated engine BEFORE opening the SSE stream, so it surfaces as a
         # clean JSON 4xx (consistent with the resume-path errors above) rather than a mid-stream
@@ -1044,7 +1045,8 @@ class StudioHandler(BaseHTTPRequestHandler):
                                               use_visual, use_video, run_id=run_id,
                                               explicit_cancel=explicit_cancel,
                                               resume_envelope=resume_envelope,
-                                              escalation=escalation)
+                                              escalation=escalation,
+                                              verification=verification)
         finally:
             # Deregister the instant the run is over — BEFORE writing the terminal
             # frame — so a cancel arriving during that (socket-write) window gets a
@@ -1155,10 +1157,10 @@ class StudioHandler(BaseHTTPRequestHandler):
         entry["cancel"].set()
         self._send_json({"status": "cancelling", "run_id": run_id}, status=202)
 
-    def _parse_mission_request(self) -> "tuple[str, str | None, bool, bool, bool, bool, bool, bool, bool, str, dict | None] | None":
+    def _parse_mission_request(self) -> "tuple[str, str | None, bool, bool, bool, bool, bool, bool, bool, str, dict | None, dict] | None":
         """Read + validate the JSON body. Returns ``(goal, engine, web_search, use_mcp,
         use_knowledge, use_mcp_tools, use_personas, use_visual, use_video, resume_from,
-        escalation)``, or
+        escalation, verification)``, or
         ``None`` after sending the matching error: a 400 for bad JSON / a non-object body / a
         missing goal (unless ``resume_from`` is present — a resume reconstructs the goal from the
         pinned checkpoint), or the error ``_read_body`` already sent (400/408/411/413) for a
@@ -1190,6 +1192,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         escalation = None if resume_from else self._parse_escalation(payload.get("escalation"))
         if escalation is False:
             return None
+        verification = self._parse_verification(None if resume_from else payload.get("verification"))
         # Engine may be None here (caller left it unset) — the default is applied in
         # _handle_run_mission so a resume can tell "unset" (reuse the pinned engine) apart
         # from an explicit choice (override the pinned engine — the escape hatch when the
@@ -1198,7 +1201,22 @@ class StudioHandler(BaseHTTPRequestHandler):
                 bool(payload.get("web_search")), bool(payload.get("mcp")),
                 bool(payload.get("knowledge")), bool(payload.get("mcp_tools")),
                 bool(payload.get("personas")), bool(payload.get("visual")),
-                bool(payload.get("video")), resume_from, escalation)
+                bool(payload.get("video")), resume_from, escalation, verification)
+
+    def _parse_verification(self, value):
+        if not isinstance(value, dict):
+            return {"min_sources": 3, "resolve": False}
+        raw_min = value.get("min_sources", 3)
+        if isinstance(raw_min, bool):   # bool is an int subclass: true would silently become 1
+            raw_min = 3
+        try:
+            min_sources = int(raw_min)
+        except (TypeError, ValueError, OverflowError):   # json.loads parses Infinity → float('inf')
+            min_sources = 3
+        if min_sources < 0:
+            min_sources = 3
+        resolve = value.get("resolve", False)
+        return {"min_sources": min_sources, "resolve": resolve if isinstance(resolve, bool) else False}
 
     def _parse_escalation(self, value):
         if value is None:
@@ -1244,6 +1262,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         explicit_cancel: "threading.Event | None" = None,
         resume_envelope: "dict | None" = None,
         escalation: "dict | None" = None,
+        verification: "dict | None" = None,
     ) -> "dict | None":
         """Run the mission on a worker thread and stream its progress events.
 
@@ -1279,6 +1298,8 @@ class StudioHandler(BaseHTTPRequestHandler):
         }
         if escalation is not None:
             checkpoint_flags["escalation"] = escalation
+        if verification is not None:
+            checkpoint_flags["verification"] = verification
         checkpoint_created = (resume_envelope or {}).get("created") or datetime.now(timezone.utc).isoformat()
         # Wave 6 — persona doctrine: the curated persona store lives under docs_root (never
         # web-served), beside the RAG/KG stores. Captured here (a str path) so the worker closes
@@ -1393,6 +1414,14 @@ class StudioHandler(BaseHTTPRequestHandler):
                     run_kwargs["resume_state"] = resume_envelope.get("state")
                 if escalation is not None and "escalation" in run_params:
                     run_kwargs["escalation"] = escalation
+                if verification is not None and "verification" in run_params:
+                    run_kwargs["verification"] = verification
+                elif verification is not None:
+                    # Same operator-visibility discipline as the persona/MCP hooks: a
+                    # version-mismatched agency-kit must not silently drop the
+                    # source-verification gate (the Principle III enforcement).
+                    print("[studio] installed agency-kit lacks the verification hook; "
+                          "running without the source-verification gate")
                 result_box["result"] = runner_bridge.run(**run_kwargs)
             except MissionCancelled:
                 # Stopped before any persistence. Recorded so that — when the client

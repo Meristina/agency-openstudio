@@ -36,6 +36,15 @@ export interface InspectEvent {
   verdict?: string;
 }
 
+export interface VerifyEvent {
+  phase: "verify";
+  iteration: number;
+  status: "start" | "done";
+  ok?: boolean;
+  rate?: number | null;
+  checked?: number;
+}
+
 /**
  * Wave 3 — one multimodal asset render, streamed from `assets.render` after a clean
  * PASS (cli_engine emits these inside the worker scope, before the `done` sentinel).
@@ -212,6 +221,7 @@ export type MissionEvent =
   | DeptEvent
   | SynthEvent
   | InspectEvent
+  | VerifyEvent
   | AssetEvent
   | RetrievalEvent
   | VisualEvent
@@ -324,9 +334,35 @@ export interface Dossier {
   decisions?: string[];
   open_to_verify?: string[];
   residual_risk?: string;
+  verification?: MissionVerification;
   /** Wave 3: the multimodal render manifest, present only on asset-bearing missions. */
   assets?: AssetManifestItem[];
   [k: string]: unknown;
+}
+
+export interface SourceRecord {
+  url: string;
+  status: "resolved" | "ambiguous" | "unresolved" | "unverified" | "unverifiable";
+  detail: string;
+  depts: string[];
+}
+
+export interface CycleVerification {
+  iteration: number;
+  ok: boolean;
+  resolve: boolean;
+  rate: number | null;
+  truncated: number;
+  per_dept: Record<string, { counted: number; min: number; ok: boolean }>;
+  sources: SourceRecord[];
+  missing: string[];
+}
+
+export interface MissionVerification {
+  min_sources: number;
+  resolve: boolean;
+  cycles: CycleVerification[];
+  final: CycleVerification;
 }
 
 /** The Inspector's final verdict token for a dossier, or null if none recorded. */

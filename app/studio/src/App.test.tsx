@@ -17,6 +17,7 @@ vi.mock("./api", () => ({
 }));
 
 import App from "./App";
+import { runMission } from "./api";
 
 describe("App tabs", () => {
   it("keeps every tabpanel mounted, toggling visibility via the hidden attribute", () => {
@@ -43,5 +44,20 @@ describe("App tabs", () => {
     render(<App />);
     expect(screen.getByRole("tab", { name: "Image" }).getAttribute("aria-controls")).toBe("panel-image");
     expect(document.getElementById("panel-image")?.getAttribute("role")).toBe("tabpanel");
+  });
+
+  it("sends verification only when the online source toggle is checked", async () => {
+    render(<App />);
+    const goal = screen.getByPlaceholderText("Describe the mission goal…");
+    fireEvent.change(goal, { target: { value: "launch" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run mission" }));
+    expect(vi.mocked(runMission).mock.calls.at(-1)?.[2]).not.toHaveProperty("verification");
+
+    cleanup();
+    render(<App />);
+    fireEvent.change(screen.getByPlaceholderText("Describe the mission goal…"), { target: { value: "launch" } });
+    fireEvent.click(screen.getByLabelText("Verify sources online"));
+    fireEvent.click(screen.getByRole("button", { name: "Run mission" }));
+    expect(vi.mocked(runMission).mock.calls.at(-1)?.[2]).toMatchObject({ verification: { resolve: true } });
   });
 });
