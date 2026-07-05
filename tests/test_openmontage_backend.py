@@ -165,22 +165,32 @@ def test_run_local_cancel_before_spawn(monkeypatch, tmp_path):
                       out_path=tmp_path / "c.mp4", should_cancel=lambda: True)
 
 
-# ── the real subprocess primitive (no Node needed — plain /bin/sh children) ──────
-def test_spawn_render_nonzero_exit_raises_with_stderr_tail():
+# ── the real subprocess primitive (no Node needed — plain Python children, so the
+# same tests run on Windows CI where /bin/sh does not exist) ─────────────────────
+def test_spawn_render_nonzero_exit_raises_with_stderr_tail(tmp_path):
+    import sys
     with pytest.raises(RuntimeError, match="exploded"):
-        om._spawn_render(["/bin/sh", "-c", "echo exploded >&2; exit 3"], cwd="/tmp")
+        om._spawn_render(
+            [sys.executable, "-c", "import sys; print('exploded', file=sys.stderr); sys.exit(3)"],
+            cwd=str(tmp_path))
 
 
-def test_spawn_render_success_returns():
-    om._spawn_render(["/bin/sh", "-c", "exit 0"], cwd="/tmp")
+def test_spawn_render_success_returns(tmp_path):
+    import sys
+    om._spawn_render([sys.executable, "-c", "raise SystemExit(0)"], cwd=str(tmp_path))
 
 
-def test_spawn_render_cancel_kills_promptly():
+@pytest.mark.skipif(__import__("sys").platform == "win32",
+                    reason="cancel kill uses POSIX process groups (os.killpg) — the "
+                           "openmontage local renderer is POSIX-only; on Windows the "
+                           "video family runs through the cloud backend (Brick 5 scope)")
+def test_spawn_render_cancel_kills_promptly(tmp_path):
+    import sys
     import time
     started = time.monotonic()
     with pytest.raises(RuntimeError, match="cancelled"):
-        om._spawn_render(["/bin/sh", "-c", "sleep 30"], cwd="/tmp",
-                         should_cancel=lambda: True)
+        om._spawn_render([sys.executable, "-c", "import time; time.sleep(30)"],
+                         cwd=str(tmp_path), should_cancel=lambda: True)
     assert time.monotonic() - started < 10   # killed at the first poll, not after 30 s
 
 

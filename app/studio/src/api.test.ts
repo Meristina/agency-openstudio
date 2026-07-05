@@ -78,12 +78,12 @@ describe("runMission SSE parsing", () => {
 
     await runMission("g", () => {});
     expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toMatchObject({
-      goal: "g", web_search: false, mcp: false, knowledge: false, mcp_tools: false, personas: false, visual: false, video: false,
+      goal: "g", web_search: false, mcp: false, knowledge: false, mcp_tools: false, personas: false, visual: false, video: false, assets: true,
     });
 
     await runMission("g", () => {}, { webSearch: true, mcp: true, knowledge: true, mcpTools: true, personas: true, visual: true, video: true });
     expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toMatchObject({
-      web_search: true, mcp: true, knowledge: true, mcp_tools: true, personas: true, visual: true, video: true,
+      web_search: true, mcp: true, knowledge: true, mcp_tools: true, personas: true, visual: true, video: true, assets: true,
     });
   });
 

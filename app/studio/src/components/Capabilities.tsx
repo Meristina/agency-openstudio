@@ -6,6 +6,13 @@ function badge(text: string, tone = "") {
   return <span className={`badge ${tone}`}>{text}</span>;
 }
 
+const reasonLabels: Record<string, string> = {
+  missing_binary: "Missing binary",
+  missing_model_files: "Missing model files",
+  model_files_mismatch: "Model file mismatch",
+  gateway_down: "Gateway down",
+};
+
 export default function Capabilities() {
   const [inventory, setInventory] = useState<CapabilityInventory | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +108,7 @@ export default function Capabilities() {
                 {entry.note && <p className="hint">{entry.note}</p>}
                 {entry.availability === "unavailable" && (
                   <p className="error">
-                    {entry.reason}: {entry.enablement}
+                    {reasonLabels[entry.reason ?? ""] ?? entry.reason}: {entry.enablement}
                   </p>
                 )}
               </article>

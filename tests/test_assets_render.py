@@ -79,6 +79,22 @@ def test_manifest_records_url_and_metadata():
     assert tts["seconds"] == 2.0
 
 
+def test_default_image_marker_uses_resolved_capability(monkeypatch):
+    from agency_studio import capabilities
+
+    seen = {}
+
+    class Mgr(_FakeManager):
+        def generate_image(self, prompt, *, model, width, height, out_dir):
+            seen["model"] = model
+            return super().generate_image(prompt, model=model, width=width, height=height, out_dir=out_dir)
+
+    monkeypatch.setattr(capabilities, "resolve", lambda family: "stable-diffusion-cpp")
+    manifest = assets.render(Mgr(), [IMG], out_dir="/m", to_url=_to_url)
+    assert seen["model"] == "stable-diffusion-cpp"
+    assert manifest[0]["model"] == "stable-diffusion-cpp"
+
+
 # ── render: cloud video (seedance, Wave 6) ────────────────────────────────────
 
 def test_video_renders_last_after_local_models():

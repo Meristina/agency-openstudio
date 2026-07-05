@@ -21,10 +21,18 @@ import type {
  * (e.g. a 501's "pip install 'agency-studio[media]'" hint), else just the status. */
 async function errorText(res: Response, label: string): Promise<string> {
   try {
-    const data = (await res.json()) as { error?: string; reason?: string; enablement?: string };
+    const data = (await res.json()) as {
+      error?: string;
+      reason?: string;
+      enablement?: string;
+      blockers?: Array<{ family?: string; reason?: string; enablement?: string }>;
+    };
     if (data.error) {
       const detail = [data.reason, data.enablement].filter(Boolean).join(" — ");
-      return `${label} → ${res.status}: ${data.error}${detail ? ` (${detail})` : ""}`;
+      const blockers = (data.blockers ?? [])
+        .map((b) => `${b.family ?? "capability"}: ${b.enablement ?? b.reason ?? "unavailable"}`)
+        .join("\n");
+      return `${label} → ${res.status}: ${data.error}${detail ? ` (${detail})` : ""}${blockers ? `\n${blockers}\nOpen the Capabilities tab to fix this.` : ""}`;
     }
   } catch {
     /* body was not JSON — fall through to the bare status */
@@ -153,6 +161,7 @@ export async function runMission(
       personas: opts.personas ?? false,
       visual: opts.visual ?? false,
       video: opts.video ?? false,
+      assets: true,
       ...(opts.verification ? { verification: opts.verification } : {}),
       ...(opts.resumeFrom ? { resume_from: opts.resumeFrom } : {}),
     }),

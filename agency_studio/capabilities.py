@@ -22,6 +22,7 @@ from typing import Callable
 
 from . import mcp_client, rag
 from .engines import models
+from .engines import portable
 
 Family = str
 CostClass = str
@@ -127,6 +128,13 @@ def _first_unavailable(*checks: tuple[Availability, UnavailableReason | None, st
 
 def _local_entry(family: Family, entry: object, probe_module: str, *, note: str = "",
                  extra_probes: tuple[str, ...] = ()) -> CapabilityEntry:
+    if not probe_module:
+        availability, reason, enablement = _runtime_supported(entry)
+        return CapabilityEntry(
+            id=getattr(entry, "id"), label=getattr(entry, "label"), family=family,
+            cost="free", availability=availability, reason=reason, enablement=enablement,
+            note=note or getattr(entry, "note", ""), default=bool(getattr(entry, "default", False)),
+        )
     availability, reason, enablement = _first_unavailable(
         _runtime_supported(entry),
         _extra_available(probe_module),
@@ -164,9 +172,35 @@ def _paid_entry(family: Family, entry: object, key_env: str) -> CapabilityEntry:
 def image_entries() -> list[CapabilityEntry]:
     out = []
     for entry in models.IMAGE_MODELS.values():
+        if entry.backend == "sdcpp":
+            out.append(_binary_model_entry("image", entry))
+            continue
         probe = "boogu_image_mlx" if entry.backend == "boogu" else "mflux"
         out.append(_local_entry("image", entry, probe))
     return out
+
+
+def _binary_model_entry(family: Family, entry: object) -> CapabilityEntry:
+    binary = getattr(entry, "binary", "")
+    model_file = getattr(entry, "model_file", None)
+    if not portable.find_binary(binary):
+        availability, reason, enablement = "unavailable", "missing_binary", f"install {binary} and put it on PATH"
+    elif model_file is None:
+        # A binary-only row is a registry misconfiguration for this builder; report it
+        # as a structured unavailable entry, never an AttributeError (the whole point
+        # of the inventory is honest states, not crashes).
+        availability, reason, enablement = "unavailable", "missing_model_files", f"no model file configured for {binary}"
+    else:
+        try:
+            portable.verify_model_file(model_file)
+            availability, reason, enablement = "available", None, None
+        except portable.PortableUnavailable as exc:
+            availability, reason, enablement = "unavailable", exc.reason, exc.enablement
+    return CapabilityEntry(
+        id=getattr(entry, "id"), label=getattr(entry, "label"), family=family, cost="free",
+        availability=availability, reason=reason, enablement=enablement,
+        note=getattr(entry, "note", ""), default=bool(getattr(entry, "default", False)),
+    )
 
 
 def video_entries() -> list[CapabilityEntry]:
@@ -197,7 +231,28 @@ def visual_entries() -> list[CapabilityEntry]:
 
 def embedding_entries() -> list[CapabilityEntry]:
     note = "Switching affects new stores; re-ingest existing stores with different dimensions."
-    return [_local_entry("embedding", e, "mlx_embedding_models", note=f"{e.note}. {note}") for e in models.EMBED_MODELS.values()]
+    out = []
+    for e in models.EMBED_MODELS.values():
+        if e.backend == "llamacpp-gateway":
+            out.append(_gateway_entry(e, note=f"{e.note}. {note}"))
+        else:
+            out.append(_local_entry("embedding", e, "mlx_embedding_models", note=f"{e.note}. {note}"))
+    return out
+
+
+def _gateway_entry(entry: models.EmbedModel, *, note: str) -> CapabilityEntry:
+    try:
+        url = portable.require_loopback(os.environ.get(entry.gateway_env) or entry.gateway_default)
+        portable.get_json(portable.join_url(url, "/health"), timeout=0.5)
+        availability, reason, enablement = "available", None, None
+    except Exception:
+        availability, reason = "unavailable", "gateway_down"
+        enablement = f"start llama.cpp embedding server on {entry.gateway_default} or set {entry.gateway_env}"
+    return CapabilityEntry(
+        id=entry.id, label=entry.label, family="embedding", cost="free",
+        availability=availability, reason=reason, enablement=enablement,
+        note=note, default=entry.default,
+    )
 
 
 def kg_entries() -> list[CapabilityEntry]:
@@ -221,7 +276,10 @@ def kg_entries() -> list[CapabilityEntry]:
 
 
 def stt_entries() -> list[CapabilityEntry]:
-    return [_local_entry("stt", e, e.probe_module) for e in models.STT_MODELS.values()]
+    out = []
+    for e in models.STT_MODELS.values():
+        out.append(_binary_model_entry("stt", e) if e.backend == "whispercpp" else _local_entry("stt", e, e.probe_module))
+    return out
 
 
 def tts_entries() -> list[CapabilityEntry]:
@@ -385,7 +443,38 @@ def _entries_for(family: Family, refresh: bool = False) -> list[CapabilityEntry]
 
 
 def _default(entries: list[CapabilityEntry]) -> str:
+    default = next((e for e in entries if e.default), None)
+    if default and default.availability == "available":
+        return default.id
+    available = next((e for e in entries if e.availability == "available"), None)
+    if available:
+        return available.id
+    return default.id if default else (entries[0].id if entries else "")
+
+
+def _builtin_default(entries: list[CapabilityEntry]) -> str:
     return next((e.id for e in entries if e.default), entries[0].id if entries else "")
+
+
+@dataclass(frozen=True)
+class Blocker:
+    family: Family
+    entry: str
+    reason: UnavailableReason | None
+    enablement: str | None
+
+
+def preflight(families: "list[Family] | tuple[Family, ...] | set[Family]") -> list[Blocker]:
+    blockers: list[Blocker] = []
+    for family in families:
+        if family not in SELECTABLE_FAMILIES:
+            continue
+        entries = _entries_for(family)   # probe each family ONCE for lookup + blocker check
+        active = _resolve_from_entries(family, entries)
+        entry = next((e for e in entries if e.id == active), None)
+        if entry is not None and entry.availability != "available":
+            blockers.append(Blocker(family, entry.id, entry.reason, entry.enablement))
+    return blockers
 
 
 def _selection_state(family: Family, entries: list[CapabilityEntry], selections: dict[str, str]):
@@ -397,10 +486,10 @@ def _selection_state(family: Family, entries: list[CapabilityEntry], selections:
     return selected, entry is None or entry.availability != "available"
 
 
-def resolve(family: Family, *, store: SelectionStore | None = None) -> str:
-    if family not in SELECTABLE_FAMILIES:
-        raise ValueError(f"family {family!r} is inventory-only")
-    entries = _entries_for(family)
+def _resolve_from_entries(family: Family, entries: "list[CapabilityEntry]",
+                          store: SelectionStore | None = None) -> str:
+    """Resolution core (env > selection > default) against an already-built entry
+    list, so callers that need the entries too (preflight) probe each family once."""
     by_id = {e.id: e for e in entries}
     env_name = ENV_VARS[family]
     env_value = (os.environ.get(env_name) or "").strip()
@@ -411,7 +500,13 @@ def resolve(family: Family, *, store: SelectionStore | None = None) -> str:
     selected = (store or SelectionStore()).load().get(family)
     if selected and by_id.get(selected) and by_id[selected].availability == "available":
         return selected
-    return _default(entries)
+    return _builtin_default(entries) if family == "video" else _default(entries)
+
+
+def resolve(family: Family, *, store: SelectionStore | None = None) -> str:
+    if family not in SELECTABLE_FAMILIES:
+        raise ValueError(f"family {family!r} is inventory-only")
+    return _resolve_from_entries(family, _entries_for(family), store)
 
 
 def inventory(refresh: bool = False, *, store: SelectionStore | None = None) -> dict:

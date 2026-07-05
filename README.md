@@ -40,12 +40,27 @@ Optional extras (lazily imported; absent ⇒ clean 501 + install hint):
 ## Model defaults
 
 Use the Studio **Capabilities** tab to see available/free/paid models and pick defaults.
-Resolution order: **env var → persisted GUI selection → built-in default** — a power-user
-env var overrides the saved selection; without either, the built-in default applies:
+Resolution order: **env var → persisted GUI selection → platform-aware default** — a power-user
+env var overrides the saved selection; without either, the built-in default is used when
+available, otherwise the first available sibling is used:
 
 `AGENCY_STUDIO_IMAGE_MODEL`, `AGENCY_STUDIO_VIDEO_BACKEND`,
 `AGENCY_STUDIO_VISUAL_BACKEND`, `AGENCY_STUDIO_EMBED_MODEL`,
 `AGENCY_STUDIO_KG_BACKEND`, `AGENCY_STUDIO_STT_MODEL`, `AGENCY_STUDIO_TTS_MODEL`.
+
+## Cross-platform local backends
+
+`pip install 'agency-studio[media]'` works on macOS, Linux, and Windows. MLX packages are
+Darwin-only; off-Mac the extra installs the portable TTS subset (`kokoro-onnx`,
+`soundfile`). Image/STT/embeddings use user-installed binaries instead:
+
+- Image: `stable-diffusion.cpp` (`sd`) plus the pinned GGUF model file in the studio
+  models directory.
+- STT: `whisper.cpp` (`whisper-cli`) plus the pinned Whisper model file.
+- Embeddings: a local `llama.cpp` embedding server on `http://127.0.0.1:8080`, or
+  `AGENCY_STUDIO_EMBED_GATEWAY_URL` pointing to loopback.
+
+The Capabilities tab shows the exact missing binary/model/gateway hint.
 
 ## Roadmap
 

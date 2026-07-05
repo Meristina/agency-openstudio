@@ -49,6 +49,22 @@ are downloaded at runtime into the OS cache, never bundled or committed.
 | **Kokoro-82M** weights (ONNX + voices) | TTS model | Apache-2.0 | ✅ Pinned by URL + SHA-256 (see `engines/models.py`) |
 | **ffmpeg** | Audio decode for STT (system tool) | LGPL/GPL (build-dependent) | ⚠️ **System dependency, not bundled or linked** — invoked as a separate process by `mlx-whisper` (`brew install ffmpeg`). No distribution, so its license does not affect Agency Studio's. |
 
+## Brick 5 portable backend components — user-installed binaries
+
+| Component | Role | License | Notes |
+|---|---|---|---|
+| **stable-diffusion.cpp** (`leejet/stable-diffusion.cpp`) | Portable CPU image generation (`sd`) | MIT | ✅ User-installed binary, subprocess boundary, pinned release hint in `engines/models.py` |
+| **whisper.cpp** (`ggerganov/whisper.cpp`) | Portable CPU speech-to-text (`whisper-cli`) | MIT | ✅ User-installed binary, subprocess boundary, pinned model-file manifest |
+| **llama.cpp** (`ggml-org/llama.cpp`) | Portable embedding loopback gateway | MIT | ✅ User-run local server, loopback-only HTTP client |
+
+Model weights the portable backends load (user-acquired per the install hints,
+sha256-pinned in `engines/models.py`):
+
+| Weights | Backend | License | Notes |
+|---|---|---|---|
+| **Stable Diffusion v1.5 Q4_0 GGUF** (`second-state/stable-diffusion-v1-5-GGUF`) | stable-diffusion.cpp | CreativeML OpenRAIL-M | ✅ Commercial use permitted with the license's use-based restrictions. SDXL-Turbo was **rejected**: SAI non-commercial license is unusable for agency deliverables. |
+| **Whisper large-v3-turbo ggml** (`ggerganov/whisper.cpp`) | whisper.cpp | MIT (OpenAI Whisper weights) | ✅ Same weights family as the MLX default. |
+
 ### Experimental image backend — the `[boogu]` extra
 
 Isolated behind its own backend + extra; an unvetted, work-in-progress **community** port

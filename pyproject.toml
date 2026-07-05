@@ -40,8 +40,8 @@ agency-openstudio = "agency_studio.cli:main"
 # The image model is a non-gated pre-quantized FLUX.1-schnell (see engines/models.py
 # IMAGE_MODEL_REPO); the official BFL repo is gated, this avoids any HF login.
 media = [
-    "mflux",         # MIT — FLUX.1 (schnell) image generation, MLX-native
-    "mlx-whisper",   # MIT — Whisper speech-to-text, MLX-native
+    "mflux; sys_platform == 'darwin'",         # MIT — FLUX.1 (schnell) image generation, MLX-native
+    "mlx-whisper; sys_platform == 'darwin'",   # MIT — Whisper speech-to-text, MLX-native
     "kokoro-onnx",   # MIT — Kokoro-82M text-to-speech (ONNX, no torch/spacy)
     "soundfile",     # BSD — write the synthesized audio to a WAV file
 ]
@@ -64,9 +64,9 @@ boogu = [
 # exclusive with the [media] models via the shared ModelManager.
 studio = [
     "markitdown",              # MIT — document (PDF/docx/pptx/…) → markdown ingestion
-    "mlx-embedding-models",    # MIT — MLX-native text embeddings (nomic-embed / bge-m3)
+    "mlx-embedding-models; sys_platform == 'darwin'",    # MIT — MLX-native text embeddings (nomic-embed / bge-m3)
     "sqlite-vec",              # Apache-2.0/MIT — loadable SQLite vector search extension
-    "einops",                  # MIT — required by the nomic-embed remote modeling code (not a
+    "einops; sys_platform == 'darwin'",                  # MIT — required by the nomic-embed remote modeling code (not a
                                # transitive dep of mlx-embedding-models; #38)
 ]
 # Wave 5 — local web search (see docs/WAVE5-PLAN.md). Pure-Python, cross-platform (no
