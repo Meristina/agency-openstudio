@@ -6,6 +6,8 @@ afterEach(cleanup); // no auto-cleanup (globals off) — unmount between tests
 // Mock the API so App mounts without any network. Every export App imports is stubbed.
 vi.mock("./api", () => ({
   listMissions: vi.fn().mockResolvedValue([]),
+  fetchTaxonomy: vi.fn().mockResolvedValue({ clients: [] }),
+  assignMission: vi.fn().mockResolvedValue({ client: "Acme", project: "Rebrand", campaign: null }),
   getMission: vi.fn(),
   getModelsStatus: vi.fn().mockResolvedValue({ resident: null, image_models: [], models: {} }),
   listMcpServers: vi.fn().mockResolvedValue([]),
@@ -59,5 +61,15 @@ describe("App tabs", () => {
     fireEvent.click(screen.getByLabelText("Verify sources online"));
     fireEvent.click(screen.getByRole("button", { name: "Run mission" }));
     expect(vi.mocked(runMission).mock.calls.at(-1)?.[2]).toMatchObject({ verification: { resolve: true } });
+  });
+
+  it("renders taxonomy fields and sends non-empty values", async () => {
+    render(<App />);
+    fireEvent.change(screen.getByPlaceholderText("Describe the mission goal…"), { target: { value: "launch" } });
+    fireEvent.change(screen.getByLabelText("Client"), { target: { value: "Acme" } });
+    fireEvent.change(screen.getByLabelText("Project"), { target: { value: "Rebrand" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run mission" }));
+    expect(vi.mocked(runMission).mock.calls.at(-1)?.[2]).toMatchObject({ client: "Acme", project: "Rebrand" });
+    expect(vi.mocked(runMission).mock.calls.at(-1)?.[2]?.campaign).toBeUndefined();
   });
 });

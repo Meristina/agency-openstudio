@@ -14,8 +14,10 @@ Security (non-negotiable, from Wave 0 — see docs/SECURITY.md):
 
 Endpoints:
   POST /api/mission           run (or resume, via body {"resume_from": id}) a mission, stream SSE
-  GET  /api/missions          list saved missions (JSON)
+  GET  /api/missions          list saved missions (JSON), optionally filtered by taxonomy
+  GET  /api/taxonomy          client/project/campaign tree for the current workspace
   GET  /api/mission/{id}      load one saved dossier (JSON)
+  POST /api/mission/{id}/assign set/clear a taxonomy override
   GET  /api/mission/{id}/pdf  export the deliverable as PDF ([pdf] extra)
   GET  /api/checkpoints       list resumable mission checkpoints (crash-recovery)
   DELETE /api/checkpoints/{id} discard a checkpoint
@@ -845,6 +847,8 @@ class StudioHandler(BaseHTTPRequestHandler):
     def _route_get(self, path: str) -> None:
         if path == "/api/missions":
             return self._handle_list_missions()
+        if path == "/api/taxonomy":
+            return self._handle_taxonomy()
         if path == "/api/models":
             return self._handle_models_status()
         if path == "/api/capabilities":
@@ -895,6 +899,9 @@ class StudioHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/mission/") and path.endswith("/cancel"):
             run_id = path[len("/api/mission/"):-len("/cancel")]
             return self._handle_cancel_mission(run_id)
+        if path.startswith("/api/mission/") and path.endswith("/assign"):
+            mission_id = path[len("/api/mission/"):-len("/assign")]
+            return self._handle_assign_mission(mission_id)
         # Unknown POST: the body is never read, so close to avoid a keep-alive desync.
         self._reject(404, "not found")
 
@@ -930,7 +937,53 @@ class StudioHandler(BaseHTTPRequestHandler):
         # Scope history to THIS project (the server's --path), not the global store —
         # so the GUI doesn't list every mission ever run on the machine.
         project_root = self.server.project_root  # type: ignore[attr-defined]
-        self._send_json({"missions": store.list_missions(project_root=project_root)})
+        query = parse_qs(urlparse(self.path).query)
+        allowed = {"client", "project", "campaign"}
+        if not any(k in query for k in allowed):
+            # Byte-identical compatibility path.
+            return self._send_json({"missions": store.list_missions(project_root=project_root)})
+        from agency_studio import taxonomy
+        try:
+            filters = {k: taxonomy.clean_name((query.get(k) or [""])[0]) for k in allowed}
+        except ValueError as exc:
+            return self._send_error_json(400, str(exc))
+        reg = taxonomy.load_registry()
+        rows = taxonomy.filter_rows(taxonomy.scan_dossiers(project_root, reg), reg, **filters)
+        self._send_json({"missions": list(rows)})
+
+    def _handle_taxonomy(self) -> None:
+        from agency_studio import taxonomy
+        project_root = self.server.project_root  # type: ignore[attr-defined]
+        reg = taxonomy.load_registry()
+        self._send_json(taxonomy.build_tree(taxonomy.scan_dossiers(project_root, reg), reg))
+
+    def _handle_assign_mission(self, mission_id: str) -> None:
+        mission_id = _safe_mission_id(mission_id)
+        if mission_id is None:
+            return self._send_error_json(404, "mission not found")
+        payload = self._read_json_body()
+        if payload is None:
+            return
+        dossier = self._load_scoped_dossier(mission_id)
+        if dossier is None:
+            return
+        from agency_studio import taxonomy
+        reg = taxonomy.load_registry()
+        if payload.get("clear") is True:
+            reg.clear_override(mission_id)
+        else:
+            raw = {k: payload.get(k) for k in ("client", "project", "campaign")}
+            try:
+                fields = taxonomy.validate_fields(raw)
+            except ValueError as exc:
+                return self._send_error_json(400, str(exc))
+            if all(v is None for v in fields.values()):
+                return self._send_error_json(400, "assignment requires taxonomy fields or clear")
+            current = taxonomy.resolve(dossier, reg)
+            current.update({k: v for k, v in fields.items() if v is not None})
+            reg.set_override(mission_id, current)
+        taxonomy.save_registry(reg)
+        self._send_json({"ok": True, "attribution": taxonomy.resolve(dossier, reg)})
 
     def _load_scoped_dossier(self, mission_id: str) -> "dict | None":
         """Load a saved dossier and confirm it belongs to THIS project (the server's
@@ -999,7 +1052,8 @@ class StudioHandler(BaseHTTPRequestHandler):
         if request is None:
             return  # a 400 was already sent
         (goal, engine, web_search, use_mcp, use_knowledge, use_mcp_tools,
-         use_personas, use_visual, use_video, resume_from, escalation, verification, use_assets) = request
+         use_personas, use_visual, use_video, resume_from, escalation, verification, use_assets,
+         taxonomy_fields) = request
         # Resume: resolve the checkpoint BEFORE _begin_sse so any failure is a clean JSON error
         # (a broken SSE stream would be far worse UX). The envelope pins goal/engine/flags, so a
         # resumed run reconstructs the exact mission — the body's flags are ignored on resume.
@@ -1022,6 +1076,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             use_assets = bool(f.get("assets"))
             escalation = f.get("escalation")
             verification = f.get("verification", verification)
+            taxonomy_fields = resume_envelope.get("taxonomy") or {}
         engine = engine or "claude-code"  # apply the default now that resume-vs-explicit is resolved
         # Refuse an unknown/unvalidated engine BEFORE opening the SSE stream, so it surfaces as a
         # clean JSON 4xx (consistent with the resume-path errors above) rather than a mid-stream
@@ -1067,7 +1122,8 @@ class StudioHandler(BaseHTTPRequestHandler):
                                               explicit_cancel=explicit_cancel,
                                               resume_envelope=resume_envelope,
                                               escalation=escalation,
-                                              verification=verification)
+                                              verification=verification,
+                                              taxonomy_fields=taxonomy_fields)
         finally:
             # Deregister the instant the run is over — BEFORE writing the terminal
             # frame — so a cancel arriving during that (socket-write) window gets a
@@ -1178,7 +1234,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         entry["cancel"].set()
         self._send_json({"status": "cancelling", "run_id": run_id}, status=202)
 
-    def _parse_mission_request(self) -> "tuple[str, str | None, bool, bool, bool, bool, bool, bool, bool, str, dict | None, dict, bool] | None":
+    def _parse_mission_request(self) -> "tuple[str, str | None, bool, bool, bool, bool, bool, bool, bool, str, dict | None, dict, bool, dict] | None":
         """Read + validate the JSON body. Returns ``(goal, engine, web_search, use_mcp,
         use_knowledge, use_mcp_tools, use_personas, use_visual, use_video, resume_from,
         escalation, verification)``, or
@@ -1214,6 +1270,12 @@ class StudioHandler(BaseHTTPRequestHandler):
         if escalation is False:
             return None
         verification = self._parse_verification(None if resume_from else payload.get("verification"))
+        from agency_studio import taxonomy
+        try:
+            taxonomy_fields = taxonomy.validate_fields(payload)
+        except ValueError as exc:
+            self._send_error_json(400, str(exc))
+            return None
         # Engine may be None here (caller left it unset) — the default is applied in
         # _handle_run_mission so a resume can tell "unset" (reuse the pinned engine) apart
         # from an explicit choice (override the pinned engine — the escape hatch when the
@@ -1223,7 +1285,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                 bool(payload.get("knowledge")), bool(payload.get("mcp_tools")),
                 bool(payload.get("personas")), bool(payload.get("visual")),
                 bool(payload.get("video")), resume_from, escalation, verification,
-                bool(payload.get("assets")))
+                bool(payload.get("assets")), taxonomy_fields)
 
     def _mission_blockers(self, *, use_assets: bool, use_video: bool):
         from agency_studio import capabilities
@@ -1294,6 +1356,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         resume_envelope: "dict | None" = None,
         escalation: "dict | None" = None,
         verification: "dict | None" = None,
+        taxonomy_fields: "dict | None" = None,
     ) -> "dict | None":
         """Run the mission on a worker thread and stream its progress events.
 
@@ -1331,6 +1394,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             checkpoint_flags["escalation"] = escalation
         if verification is not None:
             checkpoint_flags["verification"] = verification
+        taxonomy_fields = taxonomy_fields or {}
         checkpoint_created = (resume_envelope or {}).get("created") or datetime.now(timezone.utc).isoformat()
         # Wave 6 — persona doctrine: the curated persona store lives under docs_root (never
         # web-served), beside the RAG/KG stores. Captured here (a str path) so the worker closes
@@ -1361,6 +1425,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             _write_checkpoint(docs_root, {
                 "id": checkpoint_id, "created": checkpoint_created,
                 "goal": goal, "engine": engine, "flags": checkpoint_flags,
+                "taxonomy": taxonomy_fields,
                 "state": snapshot,
             })
 
@@ -1453,7 +1518,12 @@ class StudioHandler(BaseHTTPRequestHandler):
                     # source-verification gate (the Principle III enforcement).
                     print("[studio] installed agency-kit lacks the verification hook; "
                           "running without the source-verification gate")
-                result_box["result"] = runner_bridge.run(**run_kwargs)
+                result = runner_bridge.run(**run_kwargs)
+                if any(taxonomy_fields.values()):
+                    from agency_kit import store
+                    result.dossier.update({k: v for k, v in taxonomy_fields.items() if v is not None})
+                    store.save(result.dossier)
+                result_box["result"] = result
             except MissionCancelled:
                 # Stopped before any persistence. Recorded so that — when the client
                 # is still connected (an explicit endpoint cancel) — the drain loop
@@ -1550,6 +1620,8 @@ class StudioHandler(BaseHTTPRequestHandler):
         if result is None:
             return
         dossier = result.dossier
+        from agency_studio import taxonomy
+        attribution = taxonomy.resolve(dossier, taxonomy.load_registry())
         verdicts = dossier.get("verdicts") or []
         manifest = dossier.get("assets") or []
         rendered = sum(1 for a in manifest if isinstance(a, dict) and a.get("status") == "ok")
@@ -1563,6 +1635,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             "assets": manifest,
             "assets_rendered": rendered,
             "assets_total": len(manifest),
+            "attribution": attribution,
         })
 
     def _write_sse(self, event: dict) -> bool:

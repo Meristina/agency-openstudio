@@ -147,6 +147,25 @@ input[type="file"] { color: var(--muted); font: inherit; font-size: 0.85rem; }
   font: inherit;
 }
 
+.taxonomy-inputs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.taxonomy-inputs input {
+  min-width: 0;
+  background: #0c0e12;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem;
+  font: inherit;
+}
+@media (max-width: 800px) {
+  .taxonomy-inputs { grid-template-columns: 1fr; }
+}
+
 .row { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.6rem; }
 .row.between { justify-content: space-between; }
 
@@ -267,6 +286,49 @@ button.resume { padding: 0.35rem 0.7rem; font-size: 0.85rem; margin-top: 0.4rem;
 .mission-item:hover { border-color: var(--accent); }
 .mission-item-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .goal-text { color: var(--muted); font-size: 0.82rem; }
+.taxonomy-tree { display: flex; flex-direction: column; gap: 0.45rem; margin-bottom: 0.65rem; }
+.taxonomy-tree summary { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+.taxonomy-project {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.25rem 0.4rem;
+  margin: 0.25rem 0 0.35rem 0.8rem;
+}
+.link-button {
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  padding: 0;
+  text-align: left;
+}
+.taxonomy-campaign {
+  grid-column: 1 / -1;
+  background: #0c0e12;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.25rem 0.45rem;
+  text-align: left;
+}
+.taxonomy-campaign span { float: right; }
+.assign-box {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto auto;
+  gap: 0.4rem;
+  margin-top: 0.65rem;
+}
+.assign-box input {
+  min-width: 0;
+  background: #0c0e12;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem;
+  font: inherit;
+}
+@media (max-width: 800px) {
+  .assign-box { grid-template-columns: 1fr; }
+}
 
 /* Docs tab: an ingested-document row is info (not a button) + a Delete action beside it. */
 .missions li:has(> .doc-item) { display: flex; align-items: stretch; gap: 0.4rem; }

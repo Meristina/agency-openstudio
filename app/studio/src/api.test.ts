@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cancelMission, getMission, getPersonaStats, listMissions, runMission } from "./api";
+import { assignMission, cancelMission, fetchTaxonomy, getMission, getPersonaStats, listMissions, runMission } from "./api";
 import type { MissionEvent } from "./types";
 
 const realFetch = global.fetch;
@@ -101,6 +101,18 @@ describe("runMission SSE parsing", () => {
       goal: "g", resume_from: "c".repeat(32),
     });
   });
+
+  it("sends taxonomy fields when supplied and omits empty fields", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve({ ok: true, status: 200, body: sseStream([]) }),
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await runMission("g", () => {}, { client: "Acme", project: "", campaign: "Spring" });
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body).toMatchObject({ client: "Acme", campaign: "Spring" });
+    expect(body).not.toHaveProperty("project");
+  });
 });
 
 describe("getPersonaStats", () => {
@@ -129,6 +141,29 @@ describe("listMissions / getMission", () => {
   it("getMission throws on a non-ok response", async () => {
     stubFetch({ ok: false, status: 404 });
     await expect(getMission("nope")).rejects.toThrow(/404/);
+  });
+
+  it("listMissions sends filters as query params", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ missions: [] }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    await listMissions({ client: "Acme", project: "Rebrand" });
+    expect(fetchMock).toHaveBeenCalledWith("/api/missions?client=Acme&project=Rebrand");
+  });
+
+  it("fetchTaxonomy returns the tree", async () => {
+    stubFetch({ ok: true, status: 200, json: async () => ({ clients: [{ name: "Acme", missions: 1, projects: [] }] }) });
+    expect(await fetchTaxonomy()).toEqual({ clients: [{ name: "Acme", missions: 1, projects: [] }] });
+  });
+
+  it("assignMission posts the override and returns attribution", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ attribution: { client: "Acme", project: "Rebrand", campaign: null } }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    expect(await assignMission("m1", { client: "Acme" })).toEqual({ client: "Acme", project: "Rebrand", campaign: null });
+    expect(fetchMock).toHaveBeenCalledWith("/api/mission/m1/assign", expect.objectContaining({ method: "POST" }));
   });
 });
 

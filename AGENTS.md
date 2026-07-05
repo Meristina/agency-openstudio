@@ -85,7 +85,7 @@ archived in `docs/legacy/`. The OpenMontage fusion decision record is
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/005-cross-platform-backends/plan.md` (feature branch
-`005-cross-platform-backends`, supporting artifacts in
-`specs/005-cross-platform-backends/`).
+`specs/006-clients-projects/plan.md` (feature branch
+`006-clients-projects`, supporting artifacts in
+`specs/006-clients-projects/`).
 <!-- SPECKIT END -->

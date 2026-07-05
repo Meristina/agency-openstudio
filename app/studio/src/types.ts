@@ -193,6 +193,7 @@ export interface DoneEvent {
   verdict: string | null;
   path: string;
   residual_risk?: string | null;
+  attribution?: Attribution;
   /** Wave 3: the render manifest + partial-render summary (empty for non-asset runs). */
   assets?: AssetManifestItem[];
   assets_rendered?: number;
@@ -364,6 +365,33 @@ export interface MissionSummary {
   verdict?: string;
   delivered?: boolean;
   [k: string]: unknown;
+}
+
+export interface Attribution {
+  client: string;
+  project: string;
+  campaign: string | null;
+}
+
+export interface CampaignNode {
+  name: string;
+  missions: number;
+}
+
+export interface ProjectNode {
+  name: string;
+  missions: number;
+  campaigns: CampaignNode[];
+}
+
+export interface ClientNode {
+  name: string;
+  missions: number;
+  projects: ProjectNode[];
+}
+
+export interface TaxonomyTree {
+  clients: ClientNode[];
 }
 
 /** A full saved dossier as returned by `GET /api/mission/{id}` (store.load). */

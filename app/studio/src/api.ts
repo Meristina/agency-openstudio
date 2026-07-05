@@ -13,6 +13,8 @@ import type {
   MissionSummary,
   ModelsStatus,
   SpeechResult,
+  Attribution,
+  TaxonomyTree,
   VisualMeta,
   TranscriptResult,
 } from "./types";
@@ -40,11 +42,32 @@ async function errorText(res: Response, label: string): Promise<string> {
   return `${label} → ${res.status}`;
 }
 
-export async function listMissions(): Promise<MissionSummary[]> {
-  const res = await fetch("/api/missions");
+export async function listMissions(filters: { client?: string; project?: string; campaign?: string } = {}): Promise<MissionSummary[]> {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(filters)) {
+    if (v) qs.set(k, v);
+  }
+  const res = await fetch(`/api/missions${qs.toString() ? `?${qs}` : ""}`);
   if (!res.ok) throw new Error(`GET /api/missions → ${res.status}`);
   const data = (await res.json()) as { missions: MissionSummary[] };
   return data.missions ?? [];
+}
+
+export async function fetchTaxonomy(): Promise<TaxonomyTree> {
+  const res = await fetch("/api/taxonomy");
+  if (!res.ok) throw new Error(`GET /api/taxonomy → ${res.status}`);
+  return (await res.json()) as TaxonomyTree;
+}
+
+export async function assignMission(id: string, body: Partial<Attribution> | { clear: true }): Promise<Attribution> {
+  const res = await fetch(`/api/mission/${encodeURIComponent(id)}/assign`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await errorText(res, "POST /api/mission/assign"));
+  const data = (await res.json()) as { attribution: Attribution };
+  return data.attribution;
 }
 
 /** A configured MCP server, as read from mcp.json by the server (GET /api/mcp). */
@@ -141,7 +164,7 @@ export async function cancelMission(runId: string): Promise<boolean> {
 export async function runMission(
   goal: string,
   onEvent: (event: MissionEvent) => void,
-  opts: { engine?: string; signal?: AbortSignal; webSearch?: boolean; mcp?: boolean; knowledge?: boolean; mcpTools?: boolean; personas?: boolean; visual?: boolean; video?: boolean; verification?: { resolve: boolean }; resumeFrom?: string } = {},
+  opts: { engine?: string; signal?: AbortSignal; webSearch?: boolean; mcp?: boolean; knowledge?: boolean; mcpTools?: boolean; personas?: boolean; visual?: boolean; video?: boolean; verification?: { resolve: boolean }; resumeFrom?: string; client?: string; project?: string; campaign?: string } = {},
 ): Promise<void> {
   const res = await fetch("/api/mission", {
     method: "POST",
@@ -164,6 +187,9 @@ export async function runMission(
       assets: true,
       ...(opts.verification ? { verification: opts.verification } : {}),
       ...(opts.resumeFrom ? { resume_from: opts.resumeFrom } : {}),
+      ...(opts.client ? { client: opts.client } : {}),
+      ...(opts.project ? { project: opts.project } : {}),
+      ...(opts.campaign ? { campaign: opts.campaign } : {}),
     }),
     signal: opts.signal,
   });

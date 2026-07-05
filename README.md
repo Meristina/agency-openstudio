@@ -48,6 +48,19 @@ available, otherwise the first available sibling is used:
 `AGENCY_STUDIO_VISUAL_BACKEND`, `AGENCY_STUDIO_EMBED_MODEL`,
 `AGENCY_STUDIO_KG_BACKEND`, `AGENCY_STUDIO_STT_MODEL`, `AGENCY_STUDIO_TTS_MODEL`.
 
+## Clients, projects, and campaigns
+
+The mission form accepts optional **Client**, **Project**, and **Campaign** fields.
+New tagged missions store those fields in their own dossier; old missions are not
+rewritten. Attribution resolves in this order: side-band override, dossier fields,
+then defaults (`Studio` plus the workspace directory name, or `Unassigned` when no
+workspace stamp exists).
+
+The local server exposes `GET /api/taxonomy`, filtered `GET /api/missions?client=...`,
+and `POST /api/mission/{id}/assign` for reassignment. Overrides and first-typed
+display names live in `~/.agency/taxonomy.json`, written atomically; reassignment
+only changes that registry file.
+
 ## Cross-platform local backends
 
 `pip install 'agency-studio[media]'` works on macOS, Linux, and Windows. MLX packages are
