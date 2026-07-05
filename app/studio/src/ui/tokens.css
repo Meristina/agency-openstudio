@@ -1,0 +1,22 @@
+:root {
+  /* AA pairs: --studio-text on --studio-bg/panel, --studio-accent on --studio-bg. */
+  --studio-bg: #101114;
+  --studio-panel: #f7f3ea;
+  --studio-panel-2: #ffffff;
+  --studio-border: #c9c2b5;
+  --studio-text: #161719;
+  --studio-muted: #5d6470;
+  --studio-inverse: #f7f3ea;
+  --studio-accent: #0f766e;
+  --studio-accent-strong: #115e59;
+  --studio-warn: #9a3412;
+  --studio-error: #b91c1c;
+  --studio-ok: #166534;
+  --studio-focus: 0 0 0 3px rgba(15, 118, 110, 0.35);
+  --studio-radius: 8px;
+  --studio-gap: 1rem;
+  --studio-font-sm: 0.875rem;
+  --studio-font-md: 1rem;
+  --studio-font-lg: 1.25rem;
+  --studio-font-xl: 1.75rem;
+}
