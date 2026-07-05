@@ -49,6 +49,7 @@ studio_assets/
 # ── Partial downloads & archives ──────────────────────────────────────────
 *.part
 *.tmp
+*.swp
 *.zip
 *.tar.gz
 *.tar.xz
