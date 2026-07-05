@@ -13,10 +13,11 @@
 
 ## Requirement Completeness
 
-- [x] No [NEEDS CLARIFICATION] markers remain — **2 markers intentionally deferred
-      to `/speckit-clarify` at the feature author's explicit request** (FR-005
-      availability semantics for paid entries; FR-007 persistence location/format
-      and exact precedence rules)
+- [x] No [NEEDS CLARIFICATION] markers remain — **2 markers were intentionally
+      deferred to `/speckit-clarify` at the feature author's explicit request**
+      (FR-005 availability semantics for paid entries; FR-007 persistence
+      location/format and exact precedence rules) — **both resolved in the
+      2026-07-05 clarification session** (see spec.md → Clarifications)
 - [x] Requirements are testable and unambiguous (outside the 2 deferred markers)
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)

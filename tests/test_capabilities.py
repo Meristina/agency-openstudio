@@ -71,7 +71,7 @@ def test_extra_hints_name_the_extra_that_provides_the_module(monkeypatch):
     assert capabilities._extra_available("mlx_embedding_models")[2] == "pip install 'agency-studio[studio]'"
     assert capabilities._extra_available("mlx_vlm")[2] == "pip install 'agency-studio[visual]'"
     assert capabilities._extra_available("mcp")[2] == "pip install 'agency-studio[mcp]'"
-    assert capabilities._extra_available("gliner")[2] == "pip install 'agency-studio[kg]'"
+    assert capabilities._extra_available("gliner2")[2] == "pip install 'agency-studio[kg]'"
     # Unmapped module: still a concrete step, never a wrong extra.
     assert "unknown_module" in capabilities._extra_available("unknown_module")[2]
 

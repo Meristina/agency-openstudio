@@ -130,7 +130,8 @@ VIDEO_MODELS: "dict[str, VideoModel]" = {
 def default_video_model() -> str:
     """The registry id a model-less render resolves to: ``$AGENCY_STUDIO_VIDEO_BACKEND`` when
     set (fail-loud on an unknown name — a typo must not silently fall back to a cloud call),
-    else ``DEFAULT_VIDEO_MODEL``. The env is read at call time, like the API key."""
+    else ``capabilities.resolve("video")`` — the persisted selection when one is available,
+    falling back to ``DEFAULT_VIDEO_MODEL``. The env is read at call time, like the API key."""
     name = (os.environ.get(VIDEO_BACKEND_ENV) or "").strip()
     if not name:
         from . import capabilities

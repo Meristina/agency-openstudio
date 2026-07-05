@@ -807,7 +807,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             return
         self.send_response(204)
         self._cors()
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -1585,8 +1585,9 @@ class StudioHandler(BaseHTTPRequestHandler):
     def _retriever(self):
         """Lazily build + cache the one local-docs retriever for this server. Created on
         the first /api/docs request (or the first mission retrieval), so the [studio] extra
-        is only needed when RAG is actually used. Bound to the default embed model; its
-        SQLite store lives under docs_root (outside assets_root — never web-served)."""
+        is only needed when RAG is actually used. Bound to the resolved embedding capability
+        (env → selection → default) at build time; its SQLite store lives under docs_root
+        (outside assets_root — never web-served)."""
         server = self.server  # type: ignore[attr-defined]
         with server.retriever_lock:  # type: ignore[attr-defined]
             if server.retriever is None:  # type: ignore[attr-defined]

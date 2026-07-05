@@ -698,7 +698,7 @@ def make_extractor(name: "Optional[str]" = None) -> "Extractor":
     ``gliner2``. Resolves ``name`` → ``$AGENCY_STUDIO_KG_BACKEND`` → ``"claude"``. Constructing an
     extractor never loads a model / touches the CLI (both lazy), so this is safe even when the
     chosen backend's dependency is absent — only a build surfaces ``KnowledgeUnavailable``."""
-    if name is None and not os.environ.get(KG_BACKEND_ENV):
+    if name is None and not (os.environ.get(KG_BACKEND_ENV) or "").strip():
         from . import capabilities
         name = capabilities.resolve("kg-extraction")
     name = (name or os.environ.get(KG_BACKEND_ENV) or "claude").strip().lower()

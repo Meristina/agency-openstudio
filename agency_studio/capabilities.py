@@ -91,7 +91,7 @@ _EXTRA_FOR_PROBE = {
     "mlx_embedding_models": "studio",
     "mlx_vlm": "visual",
     "mcp": "mcp",
-    "gliner": "kg",
+    "gliner2": "kg",
 }
 
 
@@ -208,7 +208,7 @@ def kg_entries() -> list[CapabilityEntry]:
         enablement=None if shutil.which("claude") else "install and authenticate Claude Code",
         note="subscription CLI brain", default=True,
     )
-    gliner_avail = _extra_available("gliner")
+    gliner_avail = _extra_available("gliner2")  # the [kg] extra ships the `gliner2` module
     return [
         claude,
         CapabilityEntry(
@@ -284,6 +284,9 @@ def _production_tool_entries_locked(refresh: bool) -> list[CapabilityEntry]:
             ))
         _CATALOG_CACHE = entries
     except Exception as exc:
+        # DELIBERATE: failures are cached too. An uncached failure would re-pay the
+        # (up to 20 s) failing subprocess on EVERY inventory read, hanging the view;
+        # the GUI's Refresh button (?refresh=1) is the explicit re-probe path.
         _CATALOG_CACHE = [CapabilityEntry(
             id="openmontage-catalog", label="OpenMontage catalog",
             family="production-tools", cost="free_paid", availability="unavailable",

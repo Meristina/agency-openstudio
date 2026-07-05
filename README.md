@@ -40,7 +40,8 @@ Optional extras (lazily imported; absent ⇒ clean 501 + install hint):
 ## Model defaults
 
 Use the Studio **Capabilities** tab to see available/free/paid models and pick defaults.
-Power-user env vars still override the GUI, then the built-in default is used:
+Resolution order: **env var → persisted GUI selection → built-in default** — a power-user
+env var overrides the saved selection; without either, the built-in default applies:
 
 `AGENCY_STUDIO_IMAGE_MODEL`, `AGENCY_STUDIO_VIDEO_BACKEND`,
 `AGENCY_STUDIO_VISUAL_BACKEND`, `AGENCY_STUDIO_EMBED_MODEL`,
