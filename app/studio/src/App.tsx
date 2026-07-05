@@ -11,11 +11,12 @@ import ImagePanel from "./components/ImagePanel";
 import VoicePanel from "./components/VoicePanel";
 import DocsPanel from "./components/DocsPanel";
 import VisualDocsPanel from "./components/VisualDocsPanel";
+import Capabilities from "./components/Capabilities";
 import Gallery from "./components/Gallery";
 import { summaryVerdictClass } from "./types";
 import type { Dossier, GalleryItem, MissionEvent, MissionSummary, ModelsStatus } from "./types";
 
-type Tab = "mission" | "image" | "voice" | "docs" | "visual";
+type Tab = "mission" | "image" | "voice" | "docs" | "visual" | "capabilities";
 
 const TABS: Array<[Tab, string]> = [
   ["mission", "Mission"],
@@ -23,6 +24,7 @@ const TABS: Array<[Tab, string]> = [
   ["voice", "Voice"],
   ["docs", "Docs"],
   ["visual", "Visual"],
+  ["capabilities", "Capabilities"],
 ];
 
 // Single source for the clean-cancel message (a `cancelled` terminal frame means the
@@ -536,6 +538,16 @@ export default function App() {
         hidden={tab !== "visual"}
       >
         <VisualDocsPanel />
+      </main>
+
+      <main
+        className="studio-layout"
+        id="panel-capabilities"
+        role="tabpanel"
+        aria-labelledby="tab-capabilities"
+        hidden={tab !== "capabilities"}
+      >
+        <Capabilities />
       </main>
     </div>
   );

@@ -348,6 +348,9 @@ class LocalRetriever:
     def __init__(self, manager: ModelManager, *, model: str = models.DEFAULT_EMBED_MODEL,
                  db_path: "Path | None" = None):
         self._manager = manager
+        # ``model`` is taken literally (the server resolves env/selection ONCE and passes
+        # the result together with a matching db_path — a second resolve here could race a
+        # concurrent selection write and bind model B's dims to model A's store file).
         self._entry = models.embed_model(model)   # ValueError on unknown id
         self._db_path = db_path or (data_dir() / f"localdocs-{self._entry.id}.db")
         self._store = _VectorStore(self._db_path, self._entry.ndim)

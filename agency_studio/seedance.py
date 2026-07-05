@@ -133,7 +133,8 @@ def default_video_model() -> str:
     else ``DEFAULT_VIDEO_MODEL``. The env is read at call time, like the API key."""
     name = (os.environ.get(VIDEO_BACKEND_ENV) or "").strip()
     if not name:
-        return DEFAULT_VIDEO_MODEL
+        from . import capabilities
+        return capabilities.resolve("video")
     if name not in VIDEO_MODELS:
         raise ValueError(
             f"unknown {VIDEO_BACKEND_ENV}={name!r} — available: {', '.join(VIDEO_MODELS)}"

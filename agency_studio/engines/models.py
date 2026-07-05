@@ -295,6 +295,85 @@ def embed_models_payload() -> "list[dict]":
     ]
 
 
+# ── selectable speech registries ─────────────────────────────────────────────
+@dataclass(frozen=True)
+class SttModel:
+    id: str
+    label: str
+    note: str
+    repo: str
+    revision: str
+    probe_module: str
+    default: bool = False
+
+
+@dataclass(frozen=True)
+class TtsModel:
+    id: str
+    label: str
+    note: str
+    repo: str
+    revision: str
+    probe_module: str
+    default: bool = False
+
+
+DEFAULT_STT_MODEL = "whisper-large-v3-turbo"
+DEFAULT_TTS_MODEL = "kokoro-v1.0"
+
+STT_MODELS: "dict[str, SttModel]" = {
+    DEFAULT_STT_MODEL: SttModel(
+        id=DEFAULT_STT_MODEL,
+        label="Whisper large-v3 turbo",
+        note="Local speech-to-text · MLX",
+        repo=STT_HF_REPO,
+        revision=STT_HF_REVISION,
+        probe_module="mlx_whisper",
+        default=True,
+    ),
+}
+
+TTS_MODELS: "dict[str, TtsModel]" = {
+    DEFAULT_TTS_MODEL: TtsModel(
+        id=DEFAULT_TTS_MODEL,
+        label="Kokoro v1.0",
+        note="Local text-to-speech · ONNX",
+        repo="kokoro-v1.0",
+        revision="",
+        probe_module="kokoro_onnx",
+        default=True,
+    ),
+}
+
+
+def stt_model(model_id: str) -> SttModel:
+    try:
+        return STT_MODELS[model_id]
+    except KeyError:
+        raise ValueError(f"unknown STT model {model_id!r} (known: {sorted(STT_MODELS)})") from None
+
+
+def tts_model(model_id: str) -> TtsModel:
+    try:
+        return TTS_MODELS[model_id]
+    except KeyError:
+        raise ValueError(f"unknown TTS model {model_id!r} (known: {sorted(TTS_MODELS)})") from None
+
+
+def stt_models_payload() -> "list[dict]":
+    return [
+        {"id": m.id, "label": m.label, "note": m.note, "default": m.default}
+        for m in STT_MODELS.values()
+    ]
+
+
+def tts_models_payload() -> "list[dict]":
+    return [
+        {"id": m.id, "label": m.label, "note": m.note, "default": m.default}
+        for m in TTS_MODELS.values()
+    ]
+
+
 # Kokoro-82M v1.0 en-us voices. ``local_media._run_tts_backend`` forces lang="en-us",
 # so only the American/British English voices are offered; the default is af_heart.
 # /api/tts validates a client-supplied voice against this set (an unknown voice is a

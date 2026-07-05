@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import gc
 import importlib
+import inspect
 import random
 import threading
 import time
@@ -229,14 +230,15 @@ def _run_image_backend(entry: "models.ImageModel", model, *, prompt, steps, seed
                              width=width, height=height, out_path=out_path)
 
 
-def _probe_stt() -> None:
+def _probe_stt(entry: "models.SttModel | None" = None) -> None:
+    entry = entry or models.stt_model(models.DEFAULT_STT_MODEL)
     try:
-        import mlx_whisper  # noqa: F401
+        importlib.import_module(entry.probe_module)
     except ImportError as exc:
         raise MediaUnavailable(f"speech-to-text needs mlx-whisper — {_INSTALL_HINT}") from exc
 
 
-def _load_stt_backend():
+def _load_stt_backend(entry: "models.SttModel | None" = None):
     """STT 'model' is the ``mlx_whisper`` module itself; the turbo weights are fetched +
     cached by HF on first ``transcribe``, pinned to ``STT_HF_REVISION`` (see
     ``_run_stt_backend``) so the resolved commit can't silently move."""
@@ -244,18 +246,20 @@ def _load_stt_backend():
     return mlx_whisper
 
 
-def _run_stt_backend(mlx_whisper, *, audio_path) -> str:
-    repo = _pinned_repo(models.STT_HF_REPO, models.STT_HF_REVISION)  # pin the turbo weights
+def _run_stt_backend(mlx_whisper, entry: "models.SttModel | None" = None, *, audio_path) -> str:
+    entry = entry or models.stt_model(models.DEFAULT_STT_MODEL)
+    repo = _pinned_repo(entry.repo, entry.revision)  # pin the turbo weights
     result = mlx_whisper.transcribe(str(audio_path), path_or_hf_repo=repo)
     return (result.get("text") or "").strip()
 
 
-def _probe_tts() -> None:
+def _probe_tts(entry: "models.TtsModel | None" = None) -> None:
+    entry = entry or models.tts_model(models.DEFAULT_TTS_MODEL)
     # Gate BOTH the TTS dependencies up front (one altitude): if either is missing,
     # fail before any weight download or model load — never leave a warm-but-useless
     # Kokoro that can load yet can't write its output.
     try:
-        import kokoro_onnx  # noqa: F401
+        importlib.import_module(entry.probe_module)
     except ImportError as exc:
         raise MediaUnavailable(f"text-to-speech needs kokoro-onnx — {_INSTALL_HINT}") from exc
     try:
@@ -264,7 +268,7 @@ def _probe_tts() -> None:
         raise MediaUnavailable(f"text-to-speech needs soundfile — {_INSTALL_HINT}") from exc
 
 
-def _load_tts_backend():
+def _load_tts_backend(entry: "models.TtsModel | None" = None):
     from kokoro_onnx import Kokoro
     model_path, voices_path = models.ensure_kokoro_files()
     return Kokoro(str(model_path), str(voices_path))
@@ -274,6 +278,33 @@ def _run_tts_backend(kokoro, *, text, voice, out_path) -> None:
     import soundfile as sf
     samples, sample_rate = kokoro.create(text, voice=voice, speed=1.0, lang="en-us")
     sf.write(str(out_path), samples, sample_rate)
+
+
+def _seam_arity(fn: Callable) -> int:
+    """Positional-parameter count of a monkeypatchable seam. The STT/TTS seams grew an
+    optional registry-entry parameter; monkeypatched fakes may still use the pre-entry
+    signatures, so dispatch inspects the actual callable instead of trying a call and
+    catching TypeError (which would mask a genuine TypeError inside the seam)."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return 0
+    return sum(1 for p in params.values()
+               if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD))
+
+
+def _probe_entry(fn: Callable, entry: object) -> None:
+    fn(entry) if _seam_arity(fn) >= 1 else fn()
+
+
+def _load_entry(fn: Callable, entry: object):
+    return fn(entry) if _seam_arity(fn) >= 1 else fn()
+
+
+def _run_stt_entry(fn: Callable, backend: object, entry: "models.SttModel", audio_path: Path) -> str:
+    if _seam_arity(fn) >= 2:
+        return fn(backend, entry, audio_path=audio_path)
+    return fn(backend, audio_path=audio_path)
 
 
 def _free_stt_weights() -> None:
@@ -453,13 +484,23 @@ class ModelManager:
 
     def transcribe(self, audio_path: "str | Path") -> TranscriptResult:
         """Transcribe an existing audio file to text (speech-to-text)."""
+        from .. import capabilities
         audio_path = Path(audio_path)
         if not audio_path.is_file():
             raise FileNotFoundError(f"audio file not found: {audio_path}")
+        entry = models.stt_model(capabilities.resolve("stt"))
         started = time.monotonic()
         text = self._run_on_worker(
-            lambda: _run_stt_backend(
-                self._ensure("stt", _probe_stt, _load_stt_backend), audio_path=audio_path)
+            lambda: _run_stt_entry(
+                _run_stt_backend,
+                self._ensure(
+                    "stt",
+                    lambda: _probe_entry(_probe_stt, entry),
+                    lambda: _load_entry(_load_stt_backend, entry),
+                ),
+                entry,
+                audio_path,
+            )
         )
         return TranscriptResult(text=text, seconds=round(time.monotonic() - started, 2))
 
@@ -478,11 +519,17 @@ class ModelManager:
             raise ValueError("text must not be empty")
         if voice not in models.ALLOWED_VOICES:
             raise ValueError(f"unknown voice {voice!r} (allowed: {sorted(models.ALLOWED_VOICES)})")
+        from .. import capabilities
+        entry = models.tts_model(capabilities.resolve("tts"))
         out = self._asset_path("audio", "wav", out_dir)
         started = time.monotonic()
         self._run_on_worker(
             lambda: _run_tts_backend(
-                self._ensure("tts", _probe_tts, _load_tts_backend),
+                self._ensure(
+                    "tts",
+                    lambda: _probe_entry(_probe_tts, entry),
+                    lambda: _load_entry(_load_tts_backend, entry),
+                ),
                 text=text, voice=voice, out_path=out)
         )
         return SpeechResult(path=out, voice=voice, seconds=round(time.monotonic() - started, 2))
@@ -506,6 +553,9 @@ class ModelManager:
         # importing it at module load would be circular. Deferring to call time also keeps
         # the [studio] extra fully optional (the import only runs when an embed is requested).
         from . import embeddings
+        # ``model`` is authoritative: retrievers freeze their entry (and store dims) at
+        # construction, so re-resolving the selection here could embed with a different
+        # model than the store was built for. Resolution happens at construction sites.
         entry = models.embed_model(model)  # ValueError on unknown id (re-validated here)
 
         def _do() -> "list[list[float]]":
@@ -532,7 +582,8 @@ class ModelManager:
         if not images:
             return []
         from .. import visual  # lazy: keeps [visual] optional + avoids a load-time cycle
-        chosen = model or ("qwen3-vl-cloud" if cloud else visual.DEFAULT_VISUAL_MODEL)
+        from .. import capabilities
+        chosen = model or ("qwen3-vl-cloud" if cloud else capabilities.resolve("visual"))
         entry = visual.visual_model(chosen)   # ValueError on unknown id (re-validated here)
         probe, load, run = visual._backend(entry)
 
