@@ -53,7 +53,7 @@ verification report. Reference pattern: gpt-researcher (Apache-2.0).
 **Done when**: a deliverable without resolvable sources is blocked by the inspector
 with an actionable report; the verified-source rate shows in the dossier and the GUI.
 
-## Brick 4 — Capabilities & model choice (the end of env-only)
+## Brick 4 — Capabilities & model choice (the end of env-only) *(done — `6e71879`, #6)*
 
 `GET /api/capabilities` aggregates every registry (IMAGE_MODELS, VIDEO_MODELS,
 VISUAL_MODELS, EMBED_MODELS, KG extractors, STT/TTS to be promoted into registries)
