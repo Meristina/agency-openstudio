@@ -72,7 +72,7 @@ STT (whisper.cpp / faster-whisper), TTS (Piper / Kokoro-onnx CPU), embeddings
 **Done when**: the same mission with assets runs on a Linux/Windows box without MLX,
 with the offline suite green everywhere.
 
-## Brick 6 — Clients & projects
+## Brick 6 — Clients & projects *(done — `c8abe89`, #9)*
 
 A client / project / campaign taxonomy above the store (the existing `project_root`
 stamp is the hook): dossier fields, grouping endpoints, soft migration of existing
