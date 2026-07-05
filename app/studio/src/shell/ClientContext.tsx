@@ -19,11 +19,16 @@ const Context = createContext<ClientContextValue | null>(null);
 const emptyTaxonomy: TaxonomyTree = { clients: [] };
 
 export function ClientContextProvider({ children }: { children: ReactNode }) {
-  const prefs = readPrefs().clientContext ?? {};
+  // One-shot lazy read: prefs only seed the initial selection.
+  const [initialPrefs] = useState(() => readPrefs().clientContext ?? {});
   const [taxonomy, setTaxonomy] = useState<TaxonomyTree>(emptyTaxonomy);
-  const [client, setClientState] = useState<string | null>(prefs.client ?? null);
-  const [project, setProjectState] = useState<string | null>(prefs.project ?? null);
-  const [campaign, setCampaignState] = useState<string | null>(prefs.campaign ?? null);
+  // Validation and persistence stay gated until the first successful taxonomy load:
+  // running them against the initial empty taxonomy would wipe a valid persisted
+  // selection (and save the nulls back) before fetchTaxonomy() resolves.
+  const [loaded, setLoaded] = useState(false);
+  const [client, setClientState] = useState<string | null>(initialPrefs.client ?? null);
+  const [project, setProjectState] = useState<string | null>(initialPrefs.project ?? null);
+  const [campaign, setCampaignState] = useState<string | null>(initialPrefs.campaign ?? null);
 
   const persist = useCallback((next: { client: string | null; project: string | null; campaign: string | null }) => {
     writePrefs({ clientContext: { client: next.client ?? undefined, project: next.project ?? undefined, campaign: next.campaign ?? undefined } });
@@ -32,15 +37,17 @@ export function ClientContextProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     const next = await fetchTaxonomy();
     setTaxonomy(next);
-    setClientState((current) => next.clients.some((item) => item.name === current) ? current : null);
+    setLoaded(true);
   }, []);
 
   useEffect(() => {
     void refresh().catch(() => {});
   }, [refresh]);
 
+  // Single place that drops whatever the loaded taxonomy no longer contains,
+  // clearing the whole hierarchy below the first stale level.
   useEffect(() => {
-    if (!client) return;
+    if (!loaded || !client) return;
     const selectedClient = taxonomy.clients.find((item) => item.name === client);
     if (!selectedClient) {
       setClientState(null);
@@ -56,11 +63,12 @@ export function ClientContextProvider({ children }: { children: ReactNode }) {
       return;
     }
     if (campaign && !selectedProject.campaigns.some((item) => item.name === campaign)) setCampaignState(null);
-  }, [taxonomy, client, project, campaign]);
+  }, [loaded, taxonomy, client, project, campaign]);
 
   useEffect(() => {
+    if (!loaded) return;
     persist({ client, project, campaign });
-  }, [client, project, campaign, persist]);
+  }, [loaded, client, project, campaign, persist]);
 
   const value = useMemo<ClientContextValue>(() => ({
     client,

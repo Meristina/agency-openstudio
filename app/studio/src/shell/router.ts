@@ -37,8 +37,11 @@ export function parseHash(hash = window.location.hash): RouteMatch {
 }
 
 export function navigate(hash: string): void {
+  const changed = window.location.hash !== hash;
   window.location.hash = hash;
-  window.dispatchEvent(new Event("hashchange"));
+  // A real change fires the native hashchange; only same-hash re-navigation
+  // needs a synthetic one (so useRoute still resyncs) without double-firing.
+  if (!changed) window.dispatchEvent(new Event("hashchange"));
 }
 
 export function useRoute(): RouteMatch {
