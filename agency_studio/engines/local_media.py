@@ -235,7 +235,7 @@ def _probe_stt(entry: "models.SttModel | None" = None) -> None:
     try:
         importlib.import_module(entry.probe_module)
     except ImportError as exc:
-        raise MediaUnavailable(f"speech-to-text needs mlx-whisper — {_INSTALL_HINT}") from exc
+        raise MediaUnavailable(f"speech-to-text needs {entry.probe_module} — {_INSTALL_HINT}") from exc
 
 
 def _load_stt_backend(entry: "models.SttModel | None" = None):
@@ -261,7 +261,7 @@ def _probe_tts(entry: "models.TtsModel | None" = None) -> None:
     try:
         importlib.import_module(entry.probe_module)
     except ImportError as exc:
-        raise MediaUnavailable(f"text-to-speech needs kokoro-onnx — {_INSTALL_HINT}") from exc
+        raise MediaUnavailable(f"text-to-speech needs {entry.probe_module} — {_INSTALL_HINT}") from exc
     try:
         import soundfile  # noqa: F401
     except ImportError as exc:

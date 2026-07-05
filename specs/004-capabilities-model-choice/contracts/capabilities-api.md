@@ -125,7 +125,7 @@ Persist one family default (FR-006, FR-008).
 
 | status | body | when |
 |---|---|---|
-| 200 | the updated `CapabilityFamilyView` for that family | entry valid + available; store written atomically; takes effect for the next operation (no restart) |
+| 200 | the updated `CapabilityFamilyView` for that family | entry valid + available; store written atomically; becomes the persisted fallback for the next operation with no restart (active immediately only when no env override shadows it — FR-009/FR-010) |
 | 400 | `{"error": "unknown family 'x'"}` | family not recognized |
 | 400 | `{"error": "family 'production-tools' is inventory-only"}` | non-selectable family (clarifications) |
 | 400 | `{"error": "unknown entry 'x' for family 'image'"}` | id not in that family's registry |

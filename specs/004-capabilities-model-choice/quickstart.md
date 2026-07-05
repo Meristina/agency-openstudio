@@ -48,7 +48,7 @@ Key test seams: `AGENCY_STUDIO_DATA_DIR` (tmp selection store),
 
 ## Resolution order (the one rule to remember)
 
-```
+```text
 env var  →  persisted selection (if available)  →  built-in default
 ```
 

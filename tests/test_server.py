@@ -733,7 +733,7 @@ def test_options_preflight_grants_loopback_cors(tmp_path):
         resp.read()
         assert resp.status == 204
         assert resp.getheader("Access-Control-Allow-Origin") == "http://127.0.0.1:5173"
-        assert resp.getheader("Access-Control-Allow-Methods") == "GET, POST, DELETE, OPTIONS"
+        assert resp.getheader("Access-Control-Allow-Methods") == "GET, POST, PUT, DELETE, OPTIONS"
         assert resp.getheader("Access-Control-Allow-Headers") == "Content-Type"
     finally:
         httpd.shutdown()
