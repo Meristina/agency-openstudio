@@ -7,11 +7,25 @@ import pytest
 from agency_studio import taxonomy
 
 
+def _isolate_home(monkeypatch, tmp_path):
+    """Point the ~/.agency store at tmp_path on every platform.
+
+    ``Path.home()`` reads HOME on POSIX but USERPROFILE on Windows (ntpath
+    ignores HOME since Python 3.8), so both must be set for the store and the
+    taxonomy registry to land in the isolated tmp dir.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+
 def test_normalize_and_validate_names():
     assert taxonomy.clean_name("  Acme  ") == "Acme"
     assert taxonomy.name_key("  İSTANBUL  ") == "i̇stanbul"
     assert taxonomy.clean_name("  ") is None
     assert taxonomy.project_key("Acme", "Launch") != taxonomy.project_key("Other", "Launch")
+    # Separator escaping: a "/" inside a name must not merge distinct nodes.
+    assert taxonomy.project_key("a/b", "c") != taxonomy.project_key("a", "b/c")
+    assert taxonomy.campaign_key("a", "b/c", "d") != taxonomy.campaign_key("a", "b", "c/d")
 
     with pytest.raises(ValueError):
         taxonomy.clean_name("x" * 121)
@@ -20,7 +34,7 @@ def test_normalize_and_validate_names():
 
 
 def test_registry_preserves_first_typed_names_and_overrides(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _isolate_home(monkeypatch, tmp_path)
     reg = taxonomy.Registry()
     reg.remember("Acme", "Rebrand", "Spring")
     reg.remember("acme", "rebrand", "spring")
@@ -41,6 +55,14 @@ def test_registry_preserves_first_typed_names_and_overrides(tmp_path, monkeypatc
 
     path.write_text("{", encoding="utf-8")
     assert taxonomy.load_registry() == taxonomy.Registry()
+
+    # Tampered registry values degrade to absent instead of raising.
+    path.write_text(
+        json.dumps({"overrides": {"m9": {"client": "x" * 200, "project": "ok", "campaign": "bad\nname"}}}),
+        encoding="utf-8",
+    )
+    tampered = taxonomy.load_registry()
+    assert tampered.overrides["m9"] == {"client": None, "project": "ok", "campaign": None}
 
 
 def test_resolve_attribution_order_and_defaults(tmp_path):
@@ -69,6 +91,11 @@ def test_resolve_attribution_order_and_defaults(tmp_path):
         "project": "Unassigned",
         "campaign": None,
     }
+    # Read-path tolerance: malformed stored values (hand-edited dossier) fall
+    # back to defaults instead of raising — the mission never vanishes.
+    assert taxonomy.resolve(
+        {"mission_id": "m5", "client": "x" * 200, "campaign": "bad\nname"}, taxonomy.Registry()
+    ) == {"client": "Studio", "project": "Unassigned", "campaign": None}
 
 
 def _write_dossier(root: Path, mid: str, dossier: dict):
@@ -78,7 +105,7 @@ def _write_dossier(root: Path, mid: str, dossier: dict):
 
 
 def test_scan_skips_corrupt_scopes_workspace_and_is_read_only(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _isolate_home(monkeypatch, tmp_path)
     missions = tmp_path / ".agency" / "missions"
     workspace = tmp_path / "workspace"
     other = tmp_path / "other"
@@ -99,7 +126,7 @@ def test_scan_skips_corrupt_scopes_workspace_and_is_read_only(tmp_path, monkeypa
 
 
 def test_tree_and_filters(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _isolate_home(monkeypatch, tmp_path)
     missions = tmp_path / ".agency" / "missions"
     workspace = tmp_path / "workspace"
     workspace.mkdir()

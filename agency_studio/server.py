@@ -968,9 +968,9 @@ class StudioHandler(BaseHTTPRequestHandler):
         if dossier is None:
             return
         from agency_studio import taxonomy
-        reg = taxonomy.load_registry()
         if payload.get("clear") is True:
-            reg.clear_override(mission_id)
+            def mutate(reg: "taxonomy.Registry") -> None:
+                reg.clear_override(mission_id)
         else:
             raw = {k: payload.get(k) for k in ("client", "project", "campaign")}
             try:
@@ -979,10 +979,14 @@ class StudioHandler(BaseHTTPRequestHandler):
                 return self._send_error_json(400, str(exc))
             if all(v is None for v in fields.values()):
                 return self._send_error_json(400, "assignment requires taxonomy fields or clear")
-            current = taxonomy.resolve(dossier, reg)
-            current.update({k: v for k, v in fields.items() if v is not None})
-            reg.set_override(mission_id, current)
-        taxonomy.save_registry(reg)
+
+            def mutate(reg: "taxonomy.Registry") -> None:
+                current = taxonomy.resolve(dossier, reg)
+                current.update({k: v for k, v in fields.items() if v is not None})
+                reg.set_override(mission_id, current)
+        # Read-modify-save under the registry lock: the threaded server may see
+        # concurrent /assign requests, which must not drop each other's override.
+        reg = taxonomy.update_registry(mutate)
         self._send_json({"ok": True, "attribution": taxonomy.resolve(dossier, reg)})
 
     def _load_scoped_dossier(self, mission_id: str) -> "dict | None":

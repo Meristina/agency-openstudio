@@ -7,6 +7,17 @@ from pathlib import Path
 from agency_studio import server
 
 
+def _isolate_home(monkeypatch, tmp_path):
+    """Point the ~/.agency store at tmp_path on every platform.
+
+    ``Path.home()`` reads HOME on POSIX but USERPROFILE on Windows (ntpath
+    ignores HOME since Python 3.8), so both must be set for the store and the
+    taxonomy registry to land in the isolated tmp dir.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+
 def _start(project_root):
     httpd = server.make_server(host="127.0.0.1", port=0, project_root=str(project_root))
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -51,7 +62,7 @@ def _save(mid, root, **extra):
 
 
 def test_post_mission_validates_and_persists_tags(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _isolate_home(monkeypatch, tmp_path)
     from agency_cli import runner_bridge
 
     calls = {"n": 0}
@@ -66,7 +77,7 @@ def test_post_mission_validates_and_persists_tags(monkeypatch, tmp_path):
     monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
     httpd, host, port = _start(tmp_path)
     try:
-        status, body = _request(host, port, "POST", "/api/mission", {"goal": "x", "client": "bad\nname"})
+        status, _body = _request(host, port, "POST", "/api/mission", {"goal": "x", "client": "bad\nname"})
         assert status == 400
         assert calls["n"] == 0
 
@@ -93,7 +104,7 @@ def test_post_mission_validates_and_persists_tags(monkeypatch, tmp_path):
 
 
 def test_taxonomy_tree_and_filtered_missions_are_workspace_scoped(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _isolate_home(monkeypatch, tmp_path)
     workspace = tmp_path / "workspace"
     other = tmp_path / "other"
     workspace.mkdir()
@@ -130,7 +141,7 @@ def test_taxonomy_tree_and_filtered_missions_are_workspace_scoped(monkeypatch, t
 
 
 def test_assign_writes_only_registry_and_clear_round_trips(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _isolate_home(monkeypatch, tmp_path)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     dossier_path = _save("m1", workspace)

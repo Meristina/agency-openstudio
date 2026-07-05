@@ -4,6 +4,11 @@ Manual acceptance walkthrough once the brick is implemented. The offline suite
 (`pytest` at repo root + `npm test` in `app/studio/`) is the merge gate; this
 walkthrough is the human-eye check of the spec's done-when.
 
+> **Shell note**: the commands below assume a POSIX shell (macOS / Linux / WSL
+> or Git Bash on Windows). On native PowerShell, substitute the hash steps with
+> `Get-ChildItem -Recurse -File ~/.agency/missions | Get-FileHash -Algorithm SHA256`
+> and `curl` with `curl.exe`.
+
 ## 0. Prereqs
 
 - Built GUI: `cd app/studio && npm install && npm run build`

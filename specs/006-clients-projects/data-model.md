@@ -80,12 +80,16 @@ attribution (FR-002, SC-002); corrupt dossiers are skipped like
 
 ### Client / Project / Campaign (aggregates)
 
-Identity = normalized name key, namespaced down the hierarchy (research D5):
+Identity = normalized name key, namespaced down the hierarchy (research D5).
+Each segment is percent-escaped before joining (`%` → `%25`, `/` → `%2F`) so a
+name containing the `/` separator cannot collide across levels (`a/b` + `c`
+stays distinct from `a` + `b/c`); names remain unrestricted beyond the
+validation rules above.
 
-- Client key: `casefold(trim(name))`
-- Project key: `<client key>/<casefold(trim(name))>` — same-named projects
+- Client key: `esc(casefold(trim(name)))`
+- Project key: `<client key>/<esc(casefold(trim(name)))>` — same-named projects
   under different clients stay distinct (spec edge case).
-- Campaign key: `<project key>/<casefold(trim(name))>`
+- Campaign key: `<project key>/<esc(casefold(trim(name)))>`
 
 Display name = `names[key]` when present, else the first-observed raw value
 during the scan. Mission count = number of missions resolving to the node

@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 MAX_NAME = 120
 DEFAULT_CLIENT = "Studio"
 DEFAULT_PROJECT = "Unassigned"
+
+# Serializes read-modify-save cycles on the shared registry file: the studio
+# server is a ThreadingHTTPServer, so two concurrent /assign requests would
+# otherwise silently drop each other's override.
+_REGISTRY_LOCK = threading.Lock()
 
 
 def clean_name(value: object) -> str | None:
@@ -31,20 +37,40 @@ def name_key(value: object) -> str | None:
     return name.casefold() if name is not None else None
 
 
+def _seg(value: object) -> str:
+    """One escaped key segment: names may contain the ``/`` separator, so it is
+    percent-escaped (``%`` first) to keep ``a/b + c`` distinct from ``a + b/c``."""
+    key = name_key(value)
+    return "" if key is None else key.replace("%", "%25").replace("/", "%2F")
+
+
 def client_key(client: object) -> str:
-    return f"client:{name_key(client)}"
+    return f"client:{_seg(client)}"
 
 
 def project_key(client: object, project: object) -> str:
-    return f"project:{name_key(client)}/{name_key(project)}"
+    return f"project:{_seg(client)}/{_seg(project)}"
 
 
 def campaign_key(client: object, project: object, campaign: object) -> str:
-    return f"campaign:{name_key(client)}/{name_key(project)}/{name_key(campaign)}"
+    return f"campaign:{_seg(client)}/{_seg(project)}/{_seg(campaign)}"
 
 
 def validate_fields(data: dict) -> dict[str, str | None]:
     return {k: clean_name(data.get(k)) for k in ("client", "project", "campaign")}
+
+
+def _safe_clean(value: object) -> str | None:
+    """Read-path variant of clean_name: invalid stored values (tampered registry,
+    hand-edited dossier) degrade to absent instead of raising."""
+    try:
+        return clean_name(value)
+    except ValueError:
+        return None
+
+
+def _safe_fields(data: dict) -> dict[str, str | None]:
+    return {k: _safe_clean(data.get(k)) for k in ("client", "project", "campaign")}
 
 
 @dataclass
@@ -97,7 +123,7 @@ def load_registry() -> Registry:
     overrides = data.get("overrides") if isinstance(data.get("overrides"), dict) else {}
     names = data.get("names") if isinstance(data.get("names"), dict) else {}
     clean_overrides = {
-        str(mid): {k: clean_name((attr or {}).get(k)) for k in ("client", "project", "campaign")}
+        str(mid): _safe_fields(attr or {})
         for mid, attr in overrides.items()
         if isinstance(attr, dict)
     }
@@ -108,12 +134,26 @@ def load_registry() -> Registry:
 def save_registry(registry: Registry) -> None:
     path = _registry_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(
         json.dumps({"version": 1, "overrides": registry.overrides, "names": registry.names}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     os.replace(tmp, path)
+
+
+def update_registry(mutate: "Callable[[Registry], None]") -> Registry:
+    """Atomic read-modify-save on the shared registry file.
+
+    The whole cycle runs under the module lock so concurrent mutators (two
+    /assign requests on the threaded server) can never drop each other's
+    changes. Returns the registry as saved.
+    """
+    with _REGISTRY_LOCK:
+        registry = load_registry()
+        mutate(registry)
+        save_registry(registry)
+        return registry
 
 
 def _default_project(dossier: dict) -> str:
@@ -124,15 +164,22 @@ def _default_project(dossier: dict) -> str:
 
 
 def resolve(dossier: dict, registry: Registry) -> dict[str, str | None]:
+    """Resolve attribution: override > dossier fields > derived default.
+
+    Read-path: never raises. Invalid stored values (a hand-edited legacy
+    dossier, a tampered registry) degrade to absent and fall through to the
+    defaults, so a malformed record can neither abort a scan nor vanish from
+    the taxonomy. Write-path validation stays strict in validate_fields().
+    """
     mid = str(dossier.get("mission_id") or "")
     if mid in registry.overrides:
-        override = registry.overrides[mid]
+        override = _safe_fields(registry.overrides[mid])
         return {
-            "client": clean_name(override.get("client")) or DEFAULT_CLIENT,
-            "project": clean_name(override.get("project")) or _default_project(dossier),
-            "campaign": clean_name(override.get("campaign")),
+            "client": override["client"] or DEFAULT_CLIENT,
+            "project": override["project"] or _default_project(dossier),
+            "campaign": override["campaign"],
         }
-    fields = validate_fields(dossier)
+    fields = _safe_fields(dossier)
     return {
         "client": fields["client"] or DEFAULT_CLIENT,
         "project": fields["project"] or _default_project(dossier),
