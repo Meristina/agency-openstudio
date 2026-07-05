@@ -39,7 +39,11 @@ Optional extras (lazily imported; absent ⇒ clean 501 + install hint):
 
 ## Model defaults
 
-Use the Studio **Capabilities** tab to see available/free/paid models and pick defaults.
+The GUI opens on the magic box home: describe what you want to produce, then start a
+brief. The old developer console remains available at `#/console`; the shell also
+provides persistent navigation, an EN/FR language switcher, and client context.
+
+Use the Studio **Models** screen to see available/free/paid models and pick defaults.
 Resolution order: **env var → persisted GUI selection → platform-aware default** — a power-user
 env var overrides the saved selection; without either, the built-in default is used when
 available, otherwise the first available sibling is used:

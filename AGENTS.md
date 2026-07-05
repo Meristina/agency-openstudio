@@ -85,7 +85,7 @@ archived in `docs/legacy/`. The OpenMontage fusion decision record is
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/006-clients-projects/plan.md` (feature branch
-`006-clients-projects`, supporting artifacts in
-`specs/006-clients-projects/`).
+`specs/007-magic-box/plan.md` (feature branch
+`007-magic-box`, supporting artifacts in
+`specs/007-magic-box/`).
 <!-- SPECKIT END -->

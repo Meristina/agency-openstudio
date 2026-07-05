@@ -1,3 +1,5 @@
+@import "./ui/tokens.css";
+
 :root {
   color-scheme: dark light;
   --bg: #0f1115;
@@ -21,8 +23,166 @@
 
 body {
   margin: 0;
-  background: var(--bg);
+  background: var(--studio-panel);
   color: var(--text);
+}
+
+.shell {
+  min-height: 100vh;
+  color: var(--studio-text);
+  background: var(--studio-panel);
+}
+
+.shell-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--studio-gap);
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid var(--studio-border);
+  background: var(--studio-panel-2);
+}
+
+.shell-body {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  min-height: calc(100vh - 58px);
+}
+
+.shell-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--studio-gap);
+  padding: 1rem;
+  border-right: 1px solid var(--studio-border);
+  background: var(--studio-panel-2);
+}
+
+.shell-nav {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.shell-nav a {
+  color: var(--studio-text);
+  text-decoration: none;
+  border-radius: var(--studio-radius);
+  padding: 0.55rem 0.7rem;
+  font-weight: 650;
+}
+
+.shell-nav a:hover,
+.shell-nav a[aria-current="page"] {
+  background: rgba(15, 118, 110, 0.12);
+  color: var(--studio-accent-strong);
+}
+
+.shell-outlet {
+  min-width: 0;
+  padding: clamp(1rem, 3vw, 2rem);
+}
+
+.home-screen {
+  max-width: 760px;
+}
+
+.home-screen h1,
+.state-panel h1,
+.models-screen h1 {
+  margin: 0 0 1rem;
+  color: var(--studio-text);
+  font-size: var(--studio-font-xl);
+  letter-spacing: 0;
+}
+
+.intent-form,
+.client-context,
+.language-switch {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.intent-form label,
+.client-context label,
+.language-switch {
+  color: var(--studio-muted);
+  font-size: var(--studio-font-sm);
+  font-weight: 650;
+}
+
+.intent-form textarea,
+.client-context select,
+.language-switch select {
+  width: 100%;
+  margin-top: 0.25rem;
+  background: #fff;
+  color: var(--studio-text);
+  border: 1px solid var(--studio-border);
+  border-radius: var(--studio-radius);
+  padding: 0.55rem 0.65rem;
+  font: inherit;
+}
+
+.language-switch {
+  display: flex;
+  align-items: center;
+  grid-auto-flow: column;
+}
+
+.language-switch select {
+  width: auto;
+  margin-top: 0;
+}
+
+.client-context {
+  border-top: 1px solid var(--studio-border);
+  padding-top: 1rem;
+}
+
+.connection-banner {
+  padding: 0.7rem 1rem;
+  background: #fef2f2;
+  color: var(--studio-error);
+  border-bottom: 1px solid #fecaca;
+  font-weight: 650;
+}
+
+.scope-note {
+  color: var(--studio-muted);
+  margin: 0 0 1rem;
+}
+
+.state-panel {
+  max-width: 680px;
+  background: var(--studio-panel-2);
+  border: 1px solid var(--studio-border);
+  border-radius: var(--studio-radius);
+  padding: 1.25rem;
+}
+
+.state-panel p {
+  color: var(--studio-muted);
+  line-height: 1.5;
+}
+
+.models-screen .capabilities-panel {
+  background: var(--panel);
+  color: var(--text);
+}
+
+button:focus-visible,
+a:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+input:focus-visible {
+  outline: 0;
+  box-shadow: var(--studio-focus);
+}
+
+@media (max-width: 800px) {
+  .shell-body { grid-template-columns: 1fr; }
+  .shell-sidebar { border-right: 0; border-bottom: 1px solid var(--studio-border); }
+  .shell-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 .app { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
