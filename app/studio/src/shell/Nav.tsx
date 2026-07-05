@@ -24,6 +24,8 @@ export default function Nav({ activeId }: { activeId: RouteId | null }) {
           // the tab stop so the nav never becomes keyboard-unreachable.
           tabIndex={activeId === route.id || (activeId === null && index === 0) ? 0 : -1}
           onClick={(event) => {
+            // Respect modified clicks (new tab/window) — only plain left clicks route in-app.
+            if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
             event.preventDefault();
             navigate(route.hash);
           }}
