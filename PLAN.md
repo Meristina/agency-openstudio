@@ -63,7 +63,7 @@ env vars remain the override.
 **Done when**: the user picks their models/tools (free/paid, available/unavailable)
 from the interface without touching a terminal.
 
-## Brick 5 — Cross-platform ("any machine")
+## Brick 5 — Cross-platform ("any machine") *(done — `0744a1f`, #8)*
 
 Non-Mac backends behind the existing registries, same pattern as
 `openmontage-remotion`: image (stable-diffusion.cpp MIT, or a LocalAI MIT gateway),
