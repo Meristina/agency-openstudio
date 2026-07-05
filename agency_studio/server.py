@@ -847,6 +847,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_list_missions()
         if path == "/api/models":
             return self._handle_models_status()
+        if path == "/api/capabilities":
+            return self._handle_capabilities()
         if path == "/api/docs":
             return self._handle_list_docs()
         if path == "/api/visual":
@@ -896,6 +898,16 @@ class StudioHandler(BaseHTTPRequestHandler):
         # Unknown POST: the body is never read, so close to avoid a keep-alive desync.
         self._reject(404, "not found")
 
+    def do_PUT(self) -> None:  # noqa: N802
+        if not self._host_allowed():
+            return
+        self._safe_dispatch(self._route_put)
+
+    def _route_put(self, path: str) -> None:
+        if path == "/api/capabilities/selection":
+            return self._handle_select_capability()
+        self._reject(404, "not found")
+
     def do_DELETE(self) -> None:  # noqa: N802
         if not self._host_allowed():
             return
@@ -908,6 +920,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_delete_visual(path[len("/api/visual/"):])
         if path.startswith("/api/checkpoints/"):
             return self._handle_delete_checkpoint(path[len("/api/checkpoints/"):])
+        if path.startswith("/api/capabilities/selection/"):
+            return self._handle_clear_capability(path[len("/api/capabilities/selection/"):])
         self._reject(404, "not found")
 
     # ── API: list / get saved missions ───────────────────────────────────────
@@ -1577,9 +1591,10 @@ class StudioHandler(BaseHTTPRequestHandler):
         with server.retriever_lock:  # type: ignore[attr-defined]
             if server.retriever is None:  # type: ignore[attr-defined]
                 from agency_studio.rag import LocalRetriever
-                from agency_studio.engines import models as media_models
-                db = server.docs_root / f"localdocs-{media_models.DEFAULT_EMBED_MODEL}.db"  # type: ignore[attr-defined]
-                server.retriever = LocalRetriever(self._media_manager(), db_path=db)  # type: ignore[attr-defined]
+                from agency_studio import capabilities
+                model = capabilities.resolve("embedding")
+                db = server.docs_root / f"localdocs-{model}.db"  # type: ignore[attr-defined]
+                server.retriever = LocalRetriever(self._media_manager(), model=model, db_path=db)  # type: ignore[attr-defined]
             return server.retriever  # type: ignore[attr-defined]
 
     def _kg_retriever(self):
@@ -1615,10 +1630,51 @@ class StudioHandler(BaseHTTPRequestHandler):
         with server.visual_lock:  # type: ignore[attr-defined]
             if server.visual is None:  # type: ignore[attr-defined]
                 from agency_studio.visual import VisualRetriever
-                from agency_studio.engines import models as media_models
-                db = server.docs_root / f"visual-{media_models.DEFAULT_EMBED_MODEL}.db"  # type: ignore[attr-defined]
-                server.visual = VisualRetriever(self._media_manager(), db_path=db)  # type: ignore[attr-defined]
+                from agency_studio import capabilities
+                model = capabilities.resolve("embedding")
+                db = server.docs_root / f"visual-{model}.db"  # type: ignore[attr-defined]
+                server.visual = VisualRetriever(self._media_manager(), embed_model=model, db_path=db)  # type: ignore[attr-defined]
             return server.visual  # type: ignore[attr-defined]
+
+    def _handle_capabilities(self) -> None:
+        from agency_studio import capabilities
+        refresh = parse_qs(urlparse(self.path).query).get("refresh", ["0"])[0] in ("1", "true", "yes")
+        self._send_json(capabilities.inventory(refresh=refresh))
+
+    def _handle_select_capability(self) -> None:
+        payload = self._read_json_body()
+        if payload is None:
+            return
+        from agency_studio import capabilities
+        family = str(payload.get("family") or "")
+        result = capabilities.select(family, str(payload.get("id") or ""))
+        if isinstance(result, tuple):
+            status, body = result
+            return self._send_json(body, status=status)
+        self._invalidate_selection_consumers(family)
+        self._send_json(result)
+
+    def _handle_clear_capability(self, family: str) -> None:
+        from agency_studio import capabilities
+        result = capabilities.clear(family)
+        if isinstance(result, tuple):
+            status, body = result
+            return self._send_json(body, status=status)
+        self._invalidate_selection_consumers(family)
+        self._send_bytes(b"", "application/json; charset=utf-8", status=204)
+
+    def _invalidate_selection_consumers(self, family: str) -> None:
+        """Drop lazy singletons bound to a resolved selection so a change takes effect
+        without a restart (FR-006). Only the embedding retrievers cache their model;
+        every other family resolves per operation. In-flight operations keep the
+        retriever they started with (spec assumption)."""
+        if family != "embedding":
+            return
+        server = self.server  # type: ignore[attr-defined]
+        with server.retriever_lock:  # type: ignore[attr-defined]
+            server.retriever = None  # type: ignore[attr-defined]
+        with server.visual_lock:  # type: ignore[attr-defined]
+            server.visual = None  # type: ignore[attr-defined]
 
     def _visual_retriever_if_images(self):
         """Resolve the visual retriever and return it ONLY if it holds captioned images — a cheap
@@ -1881,7 +1937,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             # Resolve the model first (unknown id → 400) so `steps` is bounded by THAT
             # model's own ceiling — not a one-size cap that would clamp the slower,
             # higher-quality models. width/height stay globally bounded (compute guard).
-            model = payload.get("model") or media_models.DEFAULT_IMAGE_MODEL
+            from agency_studio import capabilities
+            model = payload.get("model") or capabilities.resolve("image")
             entry = media_models.image_model(model)  # raises ValueError on unknown id
             raw_steps = payload.get("steps")
             steps = _require_int_in_range(raw_steps, 1, entry.steps_max, "steps") \

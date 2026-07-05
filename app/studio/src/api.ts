@@ -4,6 +4,9 @@
 
 import type {
   DocMeta,
+  CapabilityFamilyView,
+  CapabilityInventory,
+  Family,
   Dossier,
   ImageResult,
   MissionEvent,
@@ -18,8 +21,11 @@ import type {
  * (e.g. a 501's "pip install 'agency-studio[media]'" hint), else just the status. */
 async function errorText(res: Response, label: string): Promise<string> {
   try {
-    const data = (await res.json()) as { error?: string };
-    if (data.error) return `${label} → ${res.status}: ${data.error}`;
+    const data = (await res.json()) as { error?: string; reason?: string; enablement?: string };
+    if (data.error) {
+      const detail = [data.reason, data.enablement].filter(Boolean).join(" — ");
+      return `${label} → ${res.status}: ${data.error}${detail ? ` (${detail})` : ""}`;
+    }
   } catch {
     /* body was not JSON — fall through to the bare status */
   }
@@ -229,6 +235,27 @@ export async function getModelsStatus(): Promise<ModelsStatus> {
   const res = await fetch("/api/models");
   if (!res.ok) throw new Error(await errorText(res, "GET /api/models"));
   return (await res.json()) as ModelsStatus;
+}
+
+export async function fetchCapabilities(refresh = false): Promise<CapabilityInventory> {
+  const res = await fetch(`/api/capabilities${refresh ? "?refresh=1" : ""}`);
+  if (!res.ok) throw new Error(await errorText(res, "GET /api/capabilities"));
+  return (await res.json()) as CapabilityInventory;
+}
+
+export async function selectCapability(family: Family, id: string): Promise<CapabilityFamilyView> {
+  const res = await fetch("/api/capabilities/selection", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ family, id }),
+  });
+  if (!res.ok) throw new Error(await errorText(res, "PUT /api/capabilities/selection"));
+  return (await res.json()) as CapabilityFamilyView;
+}
+
+export async function clearCapability(family: Family): Promise<void> {
+  const res = await fetch(`/api/capabilities/selection/${encodeURIComponent(family)}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 204) throw new Error(await errorText(res, "DELETE /api/capabilities/selection"));
 }
 
 // ── Wave 4 — RAG / LocalDocs ─────────────────────────────────────────────────

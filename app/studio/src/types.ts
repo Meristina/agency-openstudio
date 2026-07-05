@@ -259,6 +259,49 @@ export interface TranscriptResult {
   seconds: number;
 }
 
+export type Family =
+  | "image"
+  | "video"
+  | "visual"
+  | "embedding"
+  | "kg-extraction"
+  | "stt"
+  | "tts"
+  | "production-tools"
+  | "mcp";
+
+export type CostClass = "free" | "paid" | "free_paid";
+export type Availability = "available" | "unavailable";
+
+export interface CapabilityEntry {
+  id: string;
+  label: string;
+  family: Family;
+  cost: CostClass;
+  availability: Availability;
+  reason: string | null;
+  enablement: string | null;
+  tier: string | null;
+  note: string;
+  default: boolean;
+  key_env: string | null;
+}
+
+export interface CapabilityFamilyView {
+  family: Family;
+  selectable: boolean;
+  entries: CapabilityEntry[];
+  selected: string | null;
+  selected_stale: boolean;
+  env_override: string | null;
+  active: string;
+}
+
+export interface CapabilityInventory {
+  families: CapabilityFamilyView[];
+  generated_at: string;
+}
+
 /** One selectable image model in the registry (GET /api/models → image_models). */
 export interface ImageModelInfo {
   id: string;

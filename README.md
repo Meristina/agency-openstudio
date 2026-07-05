@@ -37,6 +37,15 @@ Optional extras (lazily imported; absent ⇒ clean 501 + install hint):
 (OpenMontage/Remotion) needs Node 18+ and a one-time `npm install` in
 `openmontage/remotion-composer/` (`AGENCY_STUDIO_VIDEO_BACKEND=openmontage-remotion`).
 
+## Model defaults
+
+Use the Studio **Capabilities** tab to see available/free/paid models and pick defaults.
+Power-user env vars still override the GUI, then the built-in default is used:
+
+`AGENCY_STUDIO_IMAGE_MODEL`, `AGENCY_STUDIO_VIDEO_BACKEND`,
+`AGENCY_STUDIO_VISUAL_BACKEND`, `AGENCY_STUDIO_EMBED_MODEL`,
+`AGENCY_STUDIO_KG_BACKEND`, `AGENCY_STUDIO_STT_MODEL`, `AGENCY_STUDIO_TTS_MODEL`.
+
 ## Roadmap
 
 Development follows **[`PLAN.md`](./PLAN.md)** — bricks 0 through 9, each a full
