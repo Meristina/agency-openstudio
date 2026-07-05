@@ -573,7 +573,13 @@ def test_veto_then_pass_streams_two_inspect_events(monkeypatch, tmp_path):
     httpd, host, port = _start(tmp_path)
     try:
         conn = http.client.HTTPConnection(host, port)
-        conn.request("POST", "/api/mission", body=json.dumps({"goal": "fix churn"}),
+        # Opt out of the Brick 3 source-verification gate (min_sources=0): this test
+        # targets the veto-loop semantics alone, and its stubbed deliverable ("OUTPUT")
+        # carries no sources — with the gate on, a PASS would still loop on
+        # verification failure (exactly what CI runs against the vendored agencykit).
+        conn.request("POST", "/api/mission",
+                     body=json.dumps({"goal": "fix churn",
+                                      "verification": {"min_sources": 0, "resolve": False}}),
                      headers={"Content-Type": "application/json"})
         events = _read_sse(conn.getresponse())
     finally:

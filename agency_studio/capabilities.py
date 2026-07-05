@@ -182,11 +182,17 @@ def image_entries() -> list[CapabilityEntry]:
 
 def _binary_model_entry(family: Family, entry: object) -> CapabilityEntry:
     binary = getattr(entry, "binary", "")
+    model_file = getattr(entry, "model_file", None)
     if not portable.find_binary(binary):
         availability, reason, enablement = "unavailable", "missing_binary", f"install {binary} and put it on PATH"
+    elif model_file is None:
+        # A binary-only row is a registry misconfiguration for this builder; report it
+        # as a structured unavailable entry, never an AttributeError (the whole point
+        # of the inventory is honest states, not crashes).
+        availability, reason, enablement = "unavailable", "missing_model_files", f"no model file configured for {binary}"
     else:
         try:
-            portable.verify_model_file(getattr(entry, "model_file"))
+            portable.verify_model_file(model_file)
             availability, reason, enablement = "available", None, None
         except portable.PortableUnavailable as exc:
             availability, reason, enablement = "unavailable", exc.reason, exc.enablement
@@ -463,8 +469,9 @@ def preflight(families: "list[Family] | tuple[Family, ...] | set[Family]") -> li
     for family in families:
         if family not in SELECTABLE_FAMILIES:
             continue
-        active = resolve(family)
-        entry = next((e for e in _entries_for(family) if e.id == active), None)
+        entries = _entries_for(family)   # probe each family ONCE for lookup + blocker check
+        active = _resolve_from_entries(family, entries)
+        entry = next((e for e in entries if e.id == active), None)
         if entry is not None and entry.availability != "available":
             blockers.append(Blocker(family, entry.id, entry.reason, entry.enablement))
     return blockers
@@ -479,10 +486,10 @@ def _selection_state(family: Family, entries: list[CapabilityEntry], selections:
     return selected, entry is None or entry.availability != "available"
 
 
-def resolve(family: Family, *, store: SelectionStore | None = None) -> str:
-    if family not in SELECTABLE_FAMILIES:
-        raise ValueError(f"family {family!r} is inventory-only")
-    entries = _entries_for(family)
+def _resolve_from_entries(family: Family, entries: "list[CapabilityEntry]",
+                          store: SelectionStore | None = None) -> str:
+    """Resolution core (env > selection > default) against an already-built entry
+    list, so callers that need the entries too (preflight) probe each family once."""
     by_id = {e.id: e for e in entries}
     env_name = ENV_VARS[family]
     env_value = (os.environ.get(env_name) or "").strip()
@@ -494,6 +501,12 @@ def resolve(family: Family, *, store: SelectionStore | None = None) -> str:
     if selected and by_id.get(selected) and by_id[selected].availability == "available":
         return selected
     return _builtin_default(entries) if family == "video" else _default(entries)
+
+
+def resolve(family: Family, *, store: SelectionStore | None = None) -> str:
+    if family not in SELECTABLE_FAMILIES:
+        raise ValueError(f"family {family!r} is inventory-only")
+    return _resolve_from_entries(family, _entries_for(family), store)
 
 
 def inventory(refresh: bool = False, *, store: SelectionStore | None = None) -> dict:

@@ -3,6 +3,7 @@ name: offline-suite
 on:
   pull_request:
   push:
+    branches: [main]   # PRs already run; unscoped push would double-run every PR branch
 
 jobs:
   pytest:
@@ -14,6 +15,8 @@ jobs:
         python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false   # PR-controlled code must not inherit the repo token
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}

@@ -100,15 +100,21 @@ STT_HF_REVISION = "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb"
 # on the target Mac in Wave 2.4.
 IMAGE_MODEL_REPO = "dhairyashil/FLUX.1-schnell-mflux-8bit"
 
+# Portable image checkpoint: SD 1.5 Q4_0 GGUF (single file, CPU-tractable,
+# CreativeML-OpenRAIL-M — recorded in docs/LICENSES.md). SDXL-Turbo was rejected:
+# its weights are SAI non-commercial, unusable for agency deliverables (FR-011).
+# URL pinned to an immutable revision; sha256 is HF's published LFS digest.
 SDCPP_MODEL = ModelFile(
-    name="sdxl-turbo-q4_k.gguf",
-    url="https://github.com/leejet/stable-diffusion.cpp/releases/tag/master-b7766",
-    sha256="0000000000000000000000000000000000000000000000000000000000000000",
+    name="stable-diffusion-v1-5-pruned-emaonly-Q4_0.gguf",
+    url="https://huggingface.co/second-state/stable-diffusion-v1-5-GGUF/resolve/031b5f5df991f511b3f5fa8fed6d99048ababb69/stable-diffusion-v1-5-pruned-emaonly-Q4_0.gguf",
+    sha256="b8944e9fe0b69b36ae1b5bb0185b3a7b8ef14347fe0fa9af6c64c4829022261f",
 )
+# Whisper large-v3-turbo ggml (same weights family as the MLX default). URL pinned
+# to an immutable revision; sha256 is HF's published LFS digest.
 WHISPERCPP_MODEL = ModelFile(
     name="ggml-large-v3-turbo.bin",
-    url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
-    sha256="0000000000000000000000000000000000000000000000000000000000000000",
+    url="https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo.bin",
+    sha256="1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
 )
 
 
@@ -211,8 +217,8 @@ IMAGE_MODELS: "dict[str, ImageModel]" = {
         backend="sdcpp",
         binary="sd",
         model_file=SDCPP_MODEL,
-        steps_default=4,
-        steps_max=16,
+        steps_default=20,   # SD 1.5 needs ~20 steps (the 4-step default was SDXL-Turbo's)
+        steps_max=50,
     ),
 }
 
