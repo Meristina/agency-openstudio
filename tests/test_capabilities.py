@@ -189,3 +189,27 @@ def test_select_refuses_unavailable_entry(monkeypatch, tmp_path):
     assert status == 409
     assert body["reason"] == "missing_extra"
     assert store.load() == {}
+
+
+def test_default_uses_first_available_when_builtin_unavailable():
+    entries = [
+        capabilities.CapabilityEntry("a", "A", "image", "free", "unavailable", default=True),
+        capabilities.CapabilityEntry("b", "B", "image", "free", "available"),
+    ]
+    assert capabilities._default(entries) == "b"
+
+
+def test_preflight_returns_all_blockers(monkeypatch):
+    monkeypatch.setattr(capabilities, "image_entries", lambda: [
+        capabilities.CapabilityEntry("img", "Image", "image", "free", "unavailable", reason="missing_binary", enablement="install sd", default=True)
+    ])
+    monkeypatch.setitem(capabilities.BUILDERS, "image", capabilities.image_entries)
+    monkeypatch.setattr(capabilities, "tts_entries", lambda: [
+        capabilities.CapabilityEntry("tts", "TTS", "tts", "free", "unavailable", reason="missing_extra", enablement="install media", default=True)
+    ])
+    monkeypatch.setitem(capabilities.BUILDERS, "tts", capabilities.tts_entries)
+    blockers = capabilities.preflight(["image", "tts"])
+    assert [(b.family, b.entry, b.reason) for b in blockers] == [
+        ("image", "img", "missing_binary"),
+        ("tts", "tts", "missing_extra"),
+    ]

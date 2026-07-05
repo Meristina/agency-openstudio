@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import models
+from . import models, portable
 
 
 class MediaUnavailable(ImportError):
@@ -205,6 +205,39 @@ _IMAGE_BACKENDS: "dict[str, tuple[Callable, Callable, Callable]]" = {
 }
 
 
+def _as_media_unavailable(exc: portable.PortableUnavailable, label: str) -> MediaUnavailable:
+    return MediaUnavailable(f"{label}: {exc.reason} — {exc.enablement}")
+
+
+def _sdcpp_probe(entry: "models.ImageModel") -> None:
+    if not portable.find_binary(entry.binary):
+        raise MediaUnavailable(f"stable-diffusion.cpp needs {entry.binary} on PATH")
+    try:
+        portable.verify_model_file(entry.model_file)
+    except portable.PortableUnavailable as exc:
+        raise _as_media_unavailable(exc, "stable-diffusion.cpp") from exc
+
+
+def _sdcpp_load(entry: "models.ImageModel"):
+    _sdcpp_probe(entry)
+    return portable.find_binary(entry.binary), portable.verify_model_file(entry.model_file)
+
+
+def _sdcpp_run(ctx, entry, *, prompt, steps, seed, width, height, out_path) -> None:
+    binary, model_path = ctx
+    try:
+        portable.run_subprocess([
+            binary, "-m", str(model_path), "-p", prompt,
+            "--seed", str(seed), "--steps", str(steps),
+            "-W", str(width), "-H", str(height), "-o", str(out_path),
+        ], timeout=900)
+    except portable.PortableUnavailable as exc:
+        raise _as_media_unavailable(exc, "stable-diffusion.cpp") from exc
+
+
+_IMAGE_BACKENDS["sdcpp"] = (_sdcpp_probe, _sdcpp_load, _sdcpp_run)
+
+
 def _image_backend(entry: "models.ImageModel") -> "tuple[Callable, Callable, Callable]":
     try:
         return _IMAGE_BACKENDS[entry.backend]
@@ -251,6 +284,42 @@ def _run_stt_backend(mlx_whisper, entry: "models.SttModel | None" = None, *, aud
     repo = _pinned_repo(entry.repo, entry.revision)  # pin the turbo weights
     result = mlx_whisper.transcribe(str(audio_path), path_or_hf_repo=repo)
     return (result.get("text") or "").strip()
+
+
+def _whispercpp_probe(entry: "models.SttModel") -> None:
+    if not portable.find_binary(entry.binary):
+        raise MediaUnavailable(f"whisper.cpp needs {entry.binary} on PATH")
+    try:
+        portable.verify_model_file(entry.model_file)
+    except portable.PortableUnavailable as exc:
+        raise _as_media_unavailable(exc, "whisper.cpp") from exc
+
+
+def _whispercpp_load(entry: "models.SttModel"):
+    _whispercpp_probe(entry)
+    return portable.find_binary(entry.binary), portable.verify_model_file(entry.model_file)
+
+
+def _whispercpp_run(ctx, entry: "models.SttModel", *, audio_path) -> str:
+    binary, model_path = ctx
+    txt = Path(audio_path).with_suffix(Path(audio_path).suffix + ".txt")
+    try:
+        proc = portable.run_subprocess([
+            binary, "-m", str(model_path), "-f", str(audio_path), "-otxt", "-of", str(txt.with_suffix("")),
+        ], timeout=900)
+    except portable.PortableUnavailable as exc:
+        raise _as_media_unavailable(exc, "whisper.cpp") from exc
+    if txt.exists():
+        return txt.read_text(encoding="utf-8").strip()
+    return (proc.stdout or "").strip()
+
+
+def _stt_backend(entry: "models.SttModel") -> "tuple[Callable, Callable, Callable]":
+    if entry.backend == "mlx":
+        return _probe_stt, _load_stt_backend, _run_stt_backend
+    if entry.backend == "whispercpp":
+        return _whispercpp_probe, _whispercpp_load, _whispercpp_run
+    raise MediaUnavailable(f"unknown STT backend {entry.backend!r} — {_INSTALL_HINT}")
 
 
 def _probe_tts(entry: "models.TtsModel | None" = None) -> None:
@@ -416,7 +485,7 @@ class ModelManager:
         # STT caches its weights on mlx_whisper's own ModelHolder, out of our reach —
         # drop that too before the Metal-cache clear, or the outgoing turbo weights
         # stay resident under the next model (breaks single-residency on the 16 GB Mac).
-        if self._resident == "stt":
+        if self._resident == "stt" or (self._resident or "").startswith("stt:"):
             _free_stt_weights()
         self._model = None
         self._resident = None
@@ -431,6 +500,8 @@ class ModelManager:
     # Back-compat alias: earlier code/tests referred to the warm slot as resident_kind.
     @property
     def resident_kind(self) -> Optional[str]:
+        if (self._resident or "").startswith("stt:"):
+            return "stt"
         return self._resident
 
     def _asset_path(self, sub: str, ext: str, out_dir: "str | Path | None" = None) -> Path:
@@ -489,14 +560,15 @@ class ModelManager:
         if not audio_path.is_file():
             raise FileNotFoundError(f"audio file not found: {audio_path}")
         entry = models.stt_model(capabilities.resolve("stt"))
+        probe, load, run = _stt_backend(entry)
         started = time.monotonic()
         text = self._run_on_worker(
             lambda: _run_stt_entry(
-                _run_stt_backend,
+                run,
                 self._ensure(
-                    "stt",
-                    lambda: _probe_entry(_probe_stt, entry),
-                    lambda: _load_entry(_load_stt_backend, entry),
+                    f"stt:{entry.id}",
+                    lambda: _probe_entry(probe, entry),
+                    lambda: _load_entry(load, entry),
                 ),
                 entry,
                 audio_path,
@@ -557,14 +629,15 @@ class ModelManager:
         # construction, so re-resolving the selection here could embed with a different
         # model than the store was built for. Resolution happens at construction sites.
         entry = models.embed_model(model)  # ValueError on unknown id (re-validated here)
+        probe, load, run = embeddings.backend(entry)
 
         def _do() -> "list[list[float]]":
             backend = self._ensure(
                 f"embed:{entry.id}",
-                embeddings._probe_embed,
-                lambda: embeddings._load_embed(entry),
+                (lambda: probe(entry)) if entry.backend != "mlx" else probe,
+                lambda: load(entry),
             )
-            return embeddings._run_embed(backend, entry, texts=texts, kind=kind)
+            return run(backend, entry, texts=texts, kind=kind)
         return self._run_on_worker(_do)
 
     def caption(

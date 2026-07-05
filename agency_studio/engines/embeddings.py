@@ -22,9 +22,10 @@ touches real MLX, real weights, or the network (mirrors the Wave 2/3 offline pat
 
 from __future__ import annotations
 
-from typing import List
+import os
+from typing import Callable, List
 
-from . import models
+from . import models, portable
 from .local_media import MediaUnavailable, _pinned_repo
 
 # The retriever installs the embedding model via the same extra as the rest of the local
@@ -90,3 +91,46 @@ def _run_embed(model, entry: "models.EmbedModel", *, texts: "List[str]", kind: s
     prepared = [f"{prefix}{t}" for t in texts] if prefix else list(texts)
     vectors = model.encode(prepared)  # numpy array, shape (len(texts), entry.ndim)
     return [[float(x) for x in row] for row in vectors]
+
+
+def _gateway_url(entry: "models.EmbedModel") -> str:
+    return portable.require_loopback(os.environ.get(entry.gateway_env) or entry.gateway_default)
+
+
+def _probe_gateway(entry: "models.EmbedModel") -> None:
+    try:
+        portable.get_json(portable.join_url(_gateway_url(entry), "/health"), timeout=0.5)
+    except Exception as exc:
+        raise MediaUnavailable(
+            f"embedding gateway unavailable — start llama.cpp on {entry.gateway_default} or set {entry.gateway_env}"
+        ) from exc
+
+
+def _load_gateway(entry: "models.EmbedModel") -> str:
+    _probe_gateway(entry)
+    return _gateway_url(entry)
+
+
+def _run_gateway(url: str, entry: "models.EmbedModel", *, texts: "List[str]", kind: str) -> "List[List[float]]":
+    try:
+        payload = portable.post_json(portable.join_url(url, "/v1/embeddings"), {"input": list(texts)}, timeout=60)
+    except Exception as exc:
+        raise MediaUnavailable(f"embedding gateway request failed — {exc}") from exc
+    rows = payload.get("data", []) if isinstance(payload, dict) else []
+    vectors = [r.get("embedding") for r in rows if isinstance(r, dict)]
+    if len(vectors) != len(texts):
+        raise MediaUnavailable("embedding gateway returned the wrong number of vectors")
+    out: list[list[float]] = []
+    for vec in vectors:
+        if not isinstance(vec, list) or len(vec) != entry.ndim:
+            raise MediaUnavailable(f"embedding gateway returned vectors that are not {entry.ndim}-dimensional")
+        out.append([float(x) for x in vec])
+    return out
+
+
+def backend(entry: "models.EmbedModel") -> "tuple[Callable, Callable, Callable]":
+    if entry.backend == "mlx":
+        return _probe_embed, _load_embed, _run_embed
+    if entry.backend == "llamacpp-gateway":
+        return _probe_gateway, _load_gateway, _run_gateway
+    raise MediaUnavailable(f"unknown embedding backend {entry.backend!r} — {_STUDIO_HINT}")

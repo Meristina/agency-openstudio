@@ -100,6 +100,17 @@ STT_HF_REVISION = "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb"
 # on the target Mac in Wave 2.4.
 IMAGE_MODEL_REPO = "dhairyashil/FLUX.1-schnell-mflux-8bit"
 
+SDCPP_MODEL = ModelFile(
+    name="sdxl-turbo-q4_k.gguf",
+    url="https://github.com/leejet/stable-diffusion.cpp/releases/tag/master-b7766",
+    sha256="0000000000000000000000000000000000000000000000000000000000000000",
+)
+WHISPERCPP_MODEL = ModelFile(
+    name="ggml-large-v3-turbo.bin",
+    url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+    sha256="0000000000000000000000000000000000000000000000000000000000000000",
+)
+
 
 # ── selectable image-model registry ──────────────────────────────────────────
 # The user picks one image model per generation. Each entry is a *backend-agnostic*
@@ -138,6 +149,8 @@ class ImageModel:
     qwen_repo: "str | None" = None  # the Qwen3-VL conditioner repo (HF)
     base_revision: "str | None" = None  # immutable commit SHA pinning base_repo
     qwen_revision: "str | None" = None  # immutable commit SHA pinning qwen_repo
+    binary: str = ""
+    model_file: "ModelFile | None" = None
 
 
 DEFAULT_IMAGE_MODEL = "flux-schnell"
@@ -190,6 +203,16 @@ IMAGE_MODELS: "dict[str, ImageModel]" = {
         base_revision="ce80bab5737cf123a4a60a427a1944559b094d5c",
         qwen_revision="defcdea7cc7a4b0858fea563cbbce171d328e457",
         steps_default=16, steps_max=50,
+    ),
+    "stable-diffusion-cpp": ImageModel(
+        id="stable-diffusion-cpp",
+        label="Stable Diffusion (CPU, stable-diffusion.cpp)",
+        note="Portable CPU backend · stable-diffusion.cpp",
+        backend="sdcpp",
+        binary="sd",
+        model_file=SDCPP_MODEL,
+        steps_default=4,
+        steps_max=16,
     ),
 }
 
@@ -246,6 +269,9 @@ class EmbedModel:
     query_prefix: str = ""    # prepended to a query before embedding (retrieval instruction)
     doc_prefix: str = ""      # prepended to a document chunk before embedding
     default: bool = False
+    backend: str = "mlx"
+    gateway_env: str = ""
+    gateway_default: str = ""
 
 
 DEFAULT_EMBED_MODEL = "nomic-text-v1.5"
@@ -271,6 +297,19 @@ EMBED_MODELS: "dict[str, EmbedModel]" = {
         note="Higher quality · 1024-dim · multilingual", repo="BAAI/bge-m3",
         revision="5617a9f61b028005a4858fdac845db406aefb181",
         ndim=1024, pooling_strategy="first", max_length=8192,
+    ),
+    "nomic-embed-gguf": EmbedModel(
+        id="nomic-embed-gguf",
+        label="nomic-embed GGUF (llama.cpp)",
+        note="Portable loopback embedding gateway",
+        repo="nomic-ai/nomic-embed-text-v1.5-GGUF",
+        revision=None,
+        ndim=768,
+        pooling_strategy="mean",
+        max_length=2048,
+        backend="llamacpp-gateway",
+        gateway_env="AGENCY_STUDIO_EMBED_GATEWAY_URL",
+        gateway_default="http://127.0.0.1:8080",
     ),
 }
 
@@ -305,6 +344,9 @@ class SttModel:
     revision: str
     probe_module: str
     default: bool = False
+    backend: str = "mlx"
+    binary: str = ""
+    model_file: "ModelFile | None" = None
 
 
 @dataclass(frozen=True)
@@ -330,6 +372,17 @@ STT_MODELS: "dict[str, SttModel]" = {
         revision=STT_HF_REVISION,
         probe_module="mlx_whisper",
         default=True,
+    ),
+    "whisper-cpp": SttModel(
+        id="whisper-cpp",
+        label="Whisper.cpp (CPU)",
+        note="Portable speech-to-text · whisper.cpp",
+        repo="ggerganov/whisper.cpp",
+        revision="",
+        probe_module="",
+        backend="whispercpp",
+        binary="whisper-cli",
+        model_file=WHISPERCPP_MODEL,
     ),
 }
 

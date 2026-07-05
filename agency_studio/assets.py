@@ -505,8 +505,10 @@ def render(
         _emit(on_event, {"phase": "asset", "status": "start", "kind": req.type})
         try:
             if req.type == "image":
+                from agency_studio import capabilities
+                model = capabilities.resolve("image") if req.model == models.DEFAULT_IMAGE_MODEL else req.model
                 result = manager.generate_image(
-                    req.prompt, model=req.model,
+                    req.prompt, model=model,
                     width=req.width, height=req.height, out_dir=out_dir,
                 )
                 entry = {

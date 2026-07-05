@@ -999,7 +999,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         if request is None:
             return  # a 400 was already sent
         (goal, engine, web_search, use_mcp, use_knowledge, use_mcp_tools,
-         use_personas, use_visual, use_video, resume_from, escalation, verification) = request
+         use_personas, use_visual, use_video, resume_from, escalation, verification, use_assets) = request
         # Resume: resolve the checkpoint BEFORE _begin_sse so any failure is a clean JSON error
         # (a broken SSE stream would be far worse UX). The envelope pins goal/engine/flags, so a
         # resumed run reconstructs the exact mission — the body's flags are ignored on resume.
@@ -1019,6 +1019,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             web_search, use_mcp, use_knowledge = bool(f.get("web_search")), bool(f.get("mcp")), bool(f.get("knowledge"))
             use_mcp_tools, use_personas = bool(f.get("mcp_tools")), bool(f.get("personas"))
             use_visual, use_video = bool(f.get("visual")), bool(f.get("video"))
+            use_assets = bool(f.get("assets"))
             escalation = f.get("escalation")
             verification = f.get("verification", verification)
         engine = engine or "claude-code"  # apply the default now that resume-vs-explicit is resolved
@@ -1041,6 +1042,12 @@ class StudioHandler(BaseHTTPRequestHandler):
         else:
             print("[studio] installed agency-kit lacks ensure_production_engine; "
                   "skipping pre-SSE engine validation (the mission loop still enforces it)")
+        blockers = self._mission_blockers(use_assets=use_assets, use_video=use_video)
+        if blockers:
+            return self._send_json({
+                "error": "mission blocked: required capabilities unavailable",
+                "blockers": [b.__dict__ for b in blockers],
+            }, status=409)
         self._begin_sse()
         # Register an ephemeral run id BEFORE streaming, and announce it as the first
         # frame, so the GUI can stop this exact run via POST /api/mission/{id}/cancel
@@ -1171,7 +1178,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         entry["cancel"].set()
         self._send_json({"status": "cancelling", "run_id": run_id}, status=202)
 
-    def _parse_mission_request(self) -> "tuple[str, str | None, bool, bool, bool, bool, bool, bool, bool, str, dict | None, dict] | None":
+    def _parse_mission_request(self) -> "tuple[str, str | None, bool, bool, bool, bool, bool, bool, bool, str, dict | None, dict, bool] | None":
         """Read + validate the JSON body. Returns ``(goal, engine, web_search, use_mcp,
         use_knowledge, use_mcp_tools, use_personas, use_visual, use_video, resume_from,
         escalation, verification)``, or
@@ -1215,7 +1222,17 @@ class StudioHandler(BaseHTTPRequestHandler):
                 bool(payload.get("web_search")), bool(payload.get("mcp")),
                 bool(payload.get("knowledge")), bool(payload.get("mcp_tools")),
                 bool(payload.get("personas")), bool(payload.get("visual")),
-                bool(payload.get("video")), resume_from, escalation, verification)
+                bool(payload.get("video")), resume_from, escalation, verification,
+                bool(payload.get("assets")))
+
+    def _mission_blockers(self, *, use_assets: bool, use_video: bool):
+        from agency_studio import capabilities
+        families: list[str] = []
+        if use_assets:
+            families.extend(["image", "tts"])
+        if use_video:
+            families.append("video")
+        return capabilities.preflight(families)
 
     def _parse_verification(self, value):
         if not isinstance(value, dict):
@@ -1308,7 +1325,7 @@ class StudioHandler(BaseHTTPRequestHandler):
         checkpoint_flags = {
             "web_search": web_search, "mcp": use_mcp, "knowledge": use_knowledge,
             "mcp_tools": use_mcp_tools, "personas": use_personas,
-            "visual": use_visual, "video": use_video,
+            "visual": use_visual, "video": use_video, "assets": False,
         }
         if escalation is not None:
             checkpoint_flags["escalation"] = escalation

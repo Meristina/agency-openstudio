@@ -161,6 +161,13 @@ ingest-only, user-consented upload. So it carries a **stricter, triple gate** (c
   reached only through the existing `path_inside`-guarded `/media` route with a `video/mp4` MIME);
   a failed render leaves no file, only a `_[video unavailable]_` placeholder in the deliverable.
 
+## Brick 5 loopback gateway exception
+
+The HTTPS-only outbound rule still applies off-machine. The portable embedding backend
+has one narrow exception: plain HTTP is allowed only for a user-run `llama.cpp` gateway
+after `portable.require_loopback()` verifies the URL host is `127.0.0.1`, `::1`, or
+`localhost` before opening a socket. Non-loopback gateway URLs are rejected.
+
 ## `path_inside()` reference implementation
 
 Mirrors the shipped guard in `agency_studio/server.py` (the source of truth). It takes the

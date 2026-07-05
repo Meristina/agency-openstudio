@@ -400,7 +400,7 @@ def test_models_status_reports_resident(monkeypatch, tmp_path):
         assert payload["resident"] is None
         # New shape: ordered image_models with id/label/note/default; flux-schnell first + default.
         ids = [m["id"] for m in payload["image_models"]]
-        assert ids == ["flux-schnell", "flux2-klein-4b", "boogu-base"]
+        assert ids == ["flux-schnell", "flux2-klein-4b", "boogu-base", "stable-diffusion-cpp"]
         assert payload["image_models"][0]["default"] is True
         assert payload["image_models"][0]["label"] == "FLUX.1-schnell"
         assert sum(m["default"] for m in payload["image_models"]) == 1  # exactly one default
