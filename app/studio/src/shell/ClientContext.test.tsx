@@ -33,6 +33,17 @@ describe("ClientContext", () => {
     expect(await screen.findByRole("option", { name: "No clients yet" })).toBeTruthy();
   });
 
+  it("keeps a persisted context that the loaded taxonomy still contains", async () => {
+    localStorage.setItem("agency-studio.prefs", JSON.stringify({ clientContext: { client: "Acme", project: "Rebrand", campaign: "Launch" } }));
+    vi.mocked(fetchTaxonomy).mockResolvedValue(taxonomy);
+    render(<I18nProvider><ClientContextProvider><ClientContextSelector /></ClientContextProvider></I18nProvider>);
+    await waitFor(() => expect(screen.getByRole("option", { name: "Acme" })).toBeTruthy());
+    expect((screen.getByLabelText("Client") as HTMLSelectElement).value).toBe("Acme");
+    expect((screen.getByLabelText("Project") as HTMLSelectElement).value).toBe("Rebrand");
+    expect((screen.getByLabelText("Campaign") as HTMLSelectElement).value).toBe("Launch");
+    expect(localStorage.getItem("agency-studio.prefs")).toContain("Launch");
+  });
+
   it("drops stale persisted context", async () => {
     localStorage.setItem("agency-studio.prefs", JSON.stringify({ clientContext: { client: "Gone", project: "Old", campaign: "Old" } }));
     vi.mocked(fetchTaxonomy).mockResolvedValue({ clients: [] });
