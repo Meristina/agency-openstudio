@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { cancelMission, getGraphStats, getMission, getModelsStatus, getPersonaStats, listMcpServers, listMissions, listVisual, runMission } from "./api";
+import { assignMission, cancelMission, fetchTaxonomy, getGraphStats, getMission, getModelsStatus, getPersonaStats, listMcpServers, listMissions, listVisual, runMission } from "./api";
 import Timeline from "./components/Timeline";
 import MissionDetail from "./components/MissionDetail";
 import ImagePanel from "./components/ImagePanel";
@@ -13,8 +13,8 @@ import DocsPanel from "./components/DocsPanel";
 import VisualDocsPanel from "./components/VisualDocsPanel";
 import Capabilities from "./components/Capabilities";
 import Gallery from "./components/Gallery";
-import { summaryVerdictClass } from "./types";
-import type { Dossier, GalleryItem, MissionEvent, MissionSummary, ModelsStatus } from "./types";
+import TaxonomyBrowser from "./components/TaxonomyBrowser";
+import type { Dossier, GalleryItem, MissionEvent, MissionSummary, ModelsStatus, TaxonomyTree } from "./types";
 
 type Tab = "mission" | "image" | "voice" | "docs" | "visual" | "capabilities";
 
@@ -35,6 +35,10 @@ const STOPPED_NOTICE = "Mission stopped — cancelled before it was saved.";
 export default function App() {
   const [missions, setMissions] = useState<MissionSummary[]>([]);
   const [goal, setGoal] = useState("");
+  const [client, setClient] = useState("");
+  const [project, setProject] = useState("");
+  const [campaign, setCampaign] = useState("");
+  const [taxonomy, setTaxonomy] = useState<TaxonomyTree>({ clients: [] });
   const [webSearch, setWebSearch] = useState(false);
   const [verifyOnline, setVerifyOnline] = useState(false);
   const [useMcp, setUseMcp] = useState(false);
@@ -79,6 +83,7 @@ export default function App() {
     setNotice(null);  // a manual refresh supersedes the "mission stopped" notice
     try {
       setMissions(await listMissions());
+      setTaxonomy(await fetchTaxonomy());
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -186,7 +191,7 @@ export default function App() {
           if (e.phase === "done" && e.mission_id) completedId = e.mission_id;
           if (e.phase === "cancelled") cancelled = true;
         },
-        { signal: ctrl.signal, webSearch, mcp: useMcp, knowledge: useKnowledge, mcpTools: useMcpTools, personas: usePersonas, visual: useVisual, video: useVideo, ...(verifyOnline ? { verification: { resolve: true } } : {}), resumeFrom },
+        { signal: ctrl.signal, webSearch, mcp: useMcp, knowledge: useKnowledge, mcpTools: useMcpTools, personas: usePersonas, visual: useVisual, video: useVideo, ...(verifyOnline ? { verification: { resolve: true } } : {}), resumeFrom, client: client.trim() || undefined, project: project.trim() || undefined, campaign: campaign.trim() || undefined },
       );
       // The stream ended on a terminal frame. Always refresh first so a mission that
       // won the cancel race (finished before the stop landed) still shows in History.
@@ -221,7 +226,25 @@ export default function App() {
       // mutually-exclusive rule), so refresh the warm-model chip when it ends.
       void refreshModelStatus();
     }
-  }, [goal, webSearch, verifyOnline, useMcp, useKnowledge, useMcpTools, usePersonas, useVisual, useVideo, running, refreshMissions, openMission, refreshModelStatus]);
+  }, [goal, webSearch, verifyOnline, useMcp, useKnowledge, useMcpTools, usePersonas, useVisual, useVideo, client, project, campaign, running, refreshMissions, openMission, refreshModelStatus]);
+
+  const filterMissions = useCallback(async (filters: { client?: string; project?: string; campaign?: string }) => {
+    try {
+      setMissions(await listMissions(filters));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  const reassignMission = useCallback(async (id: string, fields: { client?: string; project?: string; campaign?: string } | { clear: true }) => {
+    try {
+      await assignMission(id, fields);
+      await refreshMissions();
+      await openMission(id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [refreshMissions, openMission]);
 
   // The Run button / keyboard shortcut launch a fresh mission (no positional arg — an onClick
   // MouseEvent must never leak in as a resume id). The Timeline's "Reprendre la mission" button
@@ -269,6 +292,9 @@ export default function App() {
   );
 
   const resident = modelStatus?.resident;
+  const clientNames = taxonomy.clients.map((c) => c.name);
+  const projectNames = taxonomy.clients.flatMap((c) => c.projects.map((p) => p.name));
+  const campaignNames = taxonomy.clients.flatMap((c) => c.projects.flatMap((p) => p.campaigns.map((k) => k.name)));
 
   return (
     <div className="app">
@@ -323,6 +349,14 @@ export default function App() {
             disabled={running}
             rows={3}
           />
+          <div className="taxonomy-inputs">
+            <input aria-label="Client" list="client-suggestions" placeholder="Client" value={client} onChange={(ev) => setClient(ev.target.value)} disabled={running} />
+            <input aria-label="Project" list="project-suggestions" placeholder="Project" value={project} onChange={(ev) => setProject(ev.target.value)} disabled={running} />
+            <input aria-label="Campaign" list="campaign-suggestions" placeholder="Campaign" value={campaign} onChange={(ev) => setCampaign(ev.target.value)} disabled={running} />
+            <datalist id="client-suggestions">{clientNames.map((name) => <option key={name} value={name} />)}</datalist>
+            <datalist id="project-suggestions">{projectNames.map((name) => <option key={name} value={name} />)}</datalist>
+            <datalist id="campaign-suggestions">{campaignNames.map((name) => <option key={name} value={name} />)}</datalist>
+          </div>
           <div className="row">
             <button onClick={onRun} disabled={running || !goal.trim()}>
               {running ? "Running…" : "Run mission"}
@@ -466,25 +500,15 @@ export default function App() {
               Refresh
             </button>
           </div>
-          <ul className="missions">
-            {missions.length === 0 && <li className="muted">No saved missions.</li>}
-            {missions.map((m) => (
-              <li key={m.mission_id}>
-                <button
-                  className={`mission-item ${selectedId === m.mission_id ? "selected" : ""}`}
-                  onClick={() => void openMission(m.mission_id)}
-                >
-                  <span className="mission-item-head">
-                    <code>{m.mission_id}</code>
-                    {m.verdict && (
-                      <span className={`badge ${summaryVerdictClass(m.verdict)}`}>{m.verdict}</span>
-                    )}
-                  </span>
-                  {m.goal ? <span className="goal-text">{m.goal}</span> : null}
-                </button>
-              </li>
-            ))}
-          </ul>
+          <TaxonomyBrowser
+            taxonomy={taxonomy}
+            missions={missions}
+            selectedId={selectedId}
+            onFilter={(filters) => void filterMissions(filters)}
+            onClear={() => void refreshMissions()}
+            onOpen={(id) => void openMission(id)}
+            onAssign={(id, fields) => void reassignMission(id, fields)}
+          />
         </aside>
 
         <section className="panel detail-panel">
