@@ -31,6 +31,12 @@ describe("missionSession", () => {
     expect(missionSession.snapshot()).toMatchObject({ status: "cancelled", error: null });
   });
 
+  it("resumes through the existing launch path", async () => {
+    await missionSession.resume("r0");
+    // Empty goal so the server reconstructs it from the checkpoint (a non-empty mismatching goal 409s).
+    expect(runMission).toHaveBeenCalledWith("", expect.any(Function), expect.objectContaining({ resumeFrom: "r0" }));
+  });
+
   it("reset aborts the in-flight run and stays idle over the late rejection", async () => {
     let signal: AbortSignal | undefined;
     vi.mocked(runMission).mockImplementationOnce((_goal, _onEvent, opts) => new Promise((_resolve, reject) => {

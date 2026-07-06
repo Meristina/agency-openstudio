@@ -11,6 +11,7 @@ export type MissionDraft = {
     client?: string;
     project?: string;
     campaign?: string;
+    resumeFrom?: string;
   };
 };
 

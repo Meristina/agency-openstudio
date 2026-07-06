@@ -5,7 +5,7 @@ import FlowStep from "./FlowStep";
 import Review from "./Review";
 import { discardBriefDraft, loadBriefDraft, saveBriefDraft } from "./briefDraft";
 import { composeMission } from "./composeMission";
-import { missionSession } from "./missionSession";
+import { missionSession } from "../session/missionSession";
 import { questionSets, type Answer, type Brief, type DeliverableType, type Question } from "./questionSets";
 
 type GuidedBriefState = "resumePrompt" | "flow" | "review" | "launching" | "launched" | "failed";

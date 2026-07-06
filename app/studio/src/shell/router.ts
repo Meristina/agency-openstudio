@@ -14,7 +14,7 @@ export interface Route {
 export const routes: Route[] = [
   { id: "home", hash: "#/", titleKey: "nav.home", status: "shipped", taxonomyScoped: false },
   { id: "brief", hash: "#/brief", titleKey: "nav.brief", status: "shipped", taxonomyScoped: false },
-  { id: "missions", hash: "#/missions", titleKey: "nav.missions", status: "placeholder", taxonomyScoped: true },
+  { id: "missions", hash: "#/missions", titleKey: "nav.missions", status: "shipped", taxonomyScoped: true },
   { id: "library", hash: "#/library", titleKey: "nav.library", status: "placeholder", taxonomyScoped: true },
   { id: "import", hash: "#/import", titleKey: "nav.import", status: "placeholder", taxonomyScoped: false },
   { id: "export", hash: "#/export", titleKey: "nav.export", status: "placeholder", taxonomyScoped: false },
