@@ -42,6 +42,15 @@ describe("composeMission", () => {
     });
   });
 
+  it("enables existing material opt-ins only when requested", () => {
+    expect(composeMission({ ...brief, useImportedMaterial: true }, { documents: true, images: true }).opts).toMatchObject({
+      knowledge: true,
+      visual: true,
+    });
+    expect(composeMission({ ...brief, useImportedMaterial: true }, { documents: true, images: false }).opts.visual).toBeUndefined();
+    expect(composeMission({ ...brief, useImportedMaterial: false }, { documents: true, images: true }).opts).toEqual(composeMission(brief).opts);
+  });
+
   it("defaults research/strategy to no assets or paid off-machine work", () => {
     expect(composeMission({ ...brief, deliverableType: "research", research: true, attachment: null }).opts).toEqual({
       webSearch: true,

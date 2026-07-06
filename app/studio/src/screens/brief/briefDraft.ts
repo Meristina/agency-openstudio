@@ -6,6 +6,7 @@ export type BriefDraft = {
   version: 1;
   answers: Record<string, Answer>;
   stepIndex: number;
+  useImportedMaterial?: boolean;
 };
 
 export function loadBriefDraft(storage: Storage = localStorage): BriefDraft | null {
@@ -17,8 +18,8 @@ export function loadBriefDraft(storage: Storage = localStorage): BriefDraft | nu
   }
 }
 
-export function saveBriefDraft(answers: Record<string, Answer>, stepIndex: number, storage: Storage = localStorage): void {
-  storage.setItem(BRIEF_DRAFT_KEY, JSON.stringify({ version: 1, answers, stepIndex } satisfies BriefDraft));
+export function saveBriefDraft(answers: Record<string, Answer>, stepIndex: number, storage: Storage = localStorage, useImportedMaterial = false): void {
+  storage.setItem(BRIEF_DRAFT_KEY, JSON.stringify({ version: 1, answers, stepIndex, ...(useImportedMaterial ? { useImportedMaterial } : {}) } satisfies BriefDraft));
 }
 
 export function discardBriefDraft(storage: Storage = localStorage): void {

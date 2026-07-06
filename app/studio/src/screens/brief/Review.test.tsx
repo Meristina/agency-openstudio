@@ -1,12 +1,14 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchCapabilities } from "../../api";
+import { fetchCapabilities, listDocs, listVisual } from "../../api";
 import { I18nProvider } from "../../i18n/I18nProvider";
 import Review from "./Review";
 import type { Brief } from "./questionSets";
 
 vi.mock("../../api", () => ({
   fetchCapabilities: vi.fn().mockResolvedValue({ generated_at: "now", families: [] }),
+  listDocs: vi.fn().mockResolvedValue([]),
+  listVisual: vi.fn().mockResolvedValue([]),
 }));
 
 const brief: Brief = {
@@ -24,6 +26,8 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   vi.mocked(fetchCapabilities).mockResolvedValue({ generated_at: "now", families: [] });
+  vi.mocked(listDocs).mockResolvedValue([]);
+  vi.mocked(listVisual).mockResolvedValue([]);
 });
 
 describe("Review", () => {
@@ -56,6 +60,14 @@ describe("Review", () => {
     expect(screen.getByText("Make a plan")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Launch" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  });
+
+  it("shows the imported-material affordance only when material exists", async () => {
+    const onUseImportedMaterial = vi.fn();
+    vi.mocked(listDocs).mockResolvedValue([{ id: "d1", filename: "brief.pdf", title: "Brief", n_chunks: 1, created: 1 }]);
+    render(<I18nProvider><Review brief={brief} onUseImportedMaterial={onUseImportedMaterial} onLaunch={() => {}} /></I18nProvider>);
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Use the material you've imported" }));
+    expect(onUseImportedMaterial).toHaveBeenCalledWith(true);
   });
 
   it("labels available video work as on this machine and free", async () => {

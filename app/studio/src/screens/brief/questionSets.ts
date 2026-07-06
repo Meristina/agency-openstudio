@@ -34,6 +34,7 @@ export type Brief = {
   research: boolean;
   attachment: ClientAttachment | null;
   options: ProductionOption[];
+  useImportedMaterial?: boolean;
 };
 
 export type PartialBrief = Partial<Brief> & {
