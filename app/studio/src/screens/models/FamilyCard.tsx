@@ -21,7 +21,11 @@ export default function FamilyCard({ family, busy = false, onInventory }: Props)
   const inForceLabel = active?.label ?? t("models.choose.builtinDefault");
 
   async function reread() {
-    onInventory(await fetchCapabilities());
+    try {
+      onInventory(await fetchCapabilities());
+    } catch {
+      setError(t("models.error"));
+    }
   }
 
   async function choose(id: string) {
@@ -42,18 +46,21 @@ export default function FamilyCard({ family, busy = false, onInventory }: Props)
     setMessage(null);
     try {
       await action(family.family);
-      await reread();
-      // Under an env override the saved selection does not take effect — say so honestly.
-      setMessage(
-        family.isEnvOverridden && family.envVarName
-          ? t("models.override.saved", { var: family.envVarName })
-          : t("models.applies.nextProduction"),
-      );
     } catch {
+      // The mutation itself failed — nothing was persisted.
       setError(t("models.error"));
-    } finally {
       setSaving(false);
+      return;
     }
+    // The mutation persisted. Confirm honestly (an env override still wins), then
+    // refresh — a refresh failure is surfaced by reread() without claiming the save failed.
+    setMessage(
+      family.isEnvOverridden && family.envVarName
+        ? t("models.override.saved", { var: family.envVarName })
+        : t("models.applies.nextProduction"),
+    );
+    await reread();
+    setSaving(false);
   }
 
   return (

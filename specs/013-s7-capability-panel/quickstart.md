@@ -15,7 +15,7 @@ never a value).
 
 ## Where it lives
 
-```
+```text
 app/studio/src/
   screens/models/
     ModelsScreen.tsx     # loads inventory, renders families, re-check, error/empty, machine-level
@@ -54,7 +54,7 @@ See `contracts/capability-endpoints.md` (existing) and `contracts/capability-pan
 
 ## Verify
 
-```
+```bash
 cd app/studio
 npm run test        # Vitest — model + screen + family + relocated Models tests
 npm run build       # tsc + vite production build (typed CatalogKeys must resolve)

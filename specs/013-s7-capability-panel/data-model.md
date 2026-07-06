@@ -90,7 +90,7 @@ means the environment is in force regardless of `selected` — surfaced honestly
 
 ## State transitions (view-level, no persistence)
 
-```
+```text
 load → { loading }
       → success: inventory rendered (per-family: chooser | readonly)
       → error: plain retry

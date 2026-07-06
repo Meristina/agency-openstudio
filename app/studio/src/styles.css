@@ -426,16 +426,6 @@ body {
   opacity: 0.7;
 }
 
-.link-button {
-  border: 0;
-  padding: 0;
-  color: var(--studio-accent-strong);
-  background: transparent;
-  font: inherit;
-  text-decoration: underline;
-  cursor: pointer;
-}
-
 button:focus-visible,
 a:focus-visible,
 select:focus-visible,
