@@ -24,7 +24,7 @@ export type CatalogKey =
   | "missions.title" | "missions.running" | "missions.empty.body" | "missions.empty.cta"
   | "missions.connection.body" | "missions.resume.button" | "missions.resume.dismiss"
   | "missions.stage.prepare" | "missions.stage.departments" | "missions.stage.synthesis" | "missions.stage.inspection" | "missions.stage.media"
-  | "missions.state.upcoming" | "missions.state.running" | "missions.state.done" | "missions.state.skipped"
+  | "missions.state.upcoming" | "missions.state.running" | "missions.state.done" | "missions.state.skipped" | "missions.state.failed"
   | "missions.detail.show" | "missions.detail.hide" | "missions.detail.sources" | "missions.detail.material" | "missions.detail.visual" | "missions.detail.knowledge" | "missions.detail.context" | "missions.detail.tools" | "missions.detail.personas" | "missions.detail.synthesis" | "missions.detail.asset"
   | "missions.round" | "missions.verify.ok" | "missions.verify.needsWork"
   | "missions.asset.image" | "missions.asset.voice" | "missions.asset.video"

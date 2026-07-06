@@ -6,7 +6,7 @@
 
 **Tests**: Per Constitution Principle VII, every code change ships offline tests (Vitest + jsdom, fetch/SSE mocked — no network, no CLI, no live server). Within each story, tests are written FIRST and must fail before implementation. The root `pytest` suite is untouched (zero server changes) and must stay green.
 
-**Organization**: Tasks are grouped by user story (spec.md US1–US5) so each story is an independently testable increment. All paths are frontend (`app/studio/src/`) per plan.md — no files are touched outside the new `screens/missions/` module, the promoted `screens/session/missionSession.ts`, and the three declared integration points (router, i18n trio, placeholders). `timeline.ts` and `api.ts` are reused unchanged.
+**Organization**: Tasks are grouped by user story (spec.md US1–US5) so each story is an independently testable increment. All paths are frontend (`app/studio/src/`) per plan.md — no files are touched outside the new `screens/missions/` module, the promoted `screens/session/missionSession.ts`, and the four declared integration points (router, Shell mount, i18n trio, placeholders). `timeline.ts` and `api.ts` are reused unchanged.
 
 ## Format: `[ID] [P?] [Story] Description`
 

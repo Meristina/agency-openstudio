@@ -132,8 +132,9 @@ existing pure `timeline.ts` fold, and the existing `api.ts` client. The S2 launc
 (`missionSession`) is promoted from `screens/brief/` to a neutral `screens/session/`
 location so both the S2 launcher and the S3 follower import it from one shared place (a
 move + import-path update, behavior byte-identical). The only other edits outside the new
-module are the three declared integration points: the router status flip, the
-placeholder-list removal, and the catalog additions. No backend directories are touched.
+module are the declared integration points: the router status flip, the Shell mount, the
+placeholder-list removal, and the i18n catalog additions (plus the additive `resumeFrom`
+field on the shared `composeMission` draft that resume reuses). No backend directories are touched.
 
 ## Complexity Tracking
 

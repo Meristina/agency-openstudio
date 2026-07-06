@@ -113,6 +113,7 @@ export const fr: Record<CatalogKey, string> = {
   "missions.state.running": "En cours",
   "missions.state.done": "Terminé",
   "missions.state.skipped": "Passé",
+  "missions.state.failed": "Échoué",
   "missions.detail.show": "Voir le détail",
   "missions.detail.hide": "Masquer le détail",
   "missions.detail.sources": "Sources vérifiées",

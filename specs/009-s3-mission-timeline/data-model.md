@@ -32,7 +32,7 @@ The unit the screen renders — one curated operator-facing stage.
 |-------|------|-------|
 | `labelKey` | `CatalogKey` | plain-language activity label (e.g. `missions.detail.sources`) |
 | `value` | `string \| number \| null` | interpolated count/name (e.g. hits, department name) — never a raw phase code |
-| `state` | `"running" \| "done" \| "skipped"` | per-activity state |
+| `state` | `"running" \| "done" \| "skipped" \| "failed"` | per-activity state; `failed` carries a failed media render (never collapsed into `done`) |
 
 ### HumanIteration (inspection fix loop)
 

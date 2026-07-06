@@ -39,5 +39,5 @@
   - **Done handoff** → until S4 ships, route to the **existing local mission-detail/dossier view (incl. PDF export)**, swapped for the S4 library later. FR-010.
   - **Concurrency** → **single active run in v1** (Mission Run stays singular); multi-run following is a later additive enhancement. FR-015, Key Entities.
 - **Cancel and resume reuse the existing endpoints/signals** (cancel path; `resumable`/`checkpoint`); S3 adds no new mission semantics.
-- Implementation-facing note (for the planner): a pure event→stage folding model already exists (`app/studio/src/timeline.ts`) and the S2 launch-session artifact (`app/studio/src/screens/brief/missionSession.ts`) is the handoff point; S3 reuses these rather than re-implementing folding or launching.
+- Implementation-facing note (for the planner): a pure event→stage folding model already exists (`app/studio/src/timeline.ts`) and the S2 launch-session artifact (`app/studio/src/screens/session/missionSession.ts`) is the handoff point; S3 reuses these rather than re-implementing folding or launching.
 - Implementation-facing note (not part of spec scope, for the planner): a pure event→stage folding model already exists (`app/studio/src/timeline.ts`) and the launch session artifact from S2 (`missionSession`) is the handoff point; S3 is expected to reuse these rather than re-implement folding or launching.

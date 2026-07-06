@@ -113,6 +113,7 @@ export const en: Record<CatalogKey, string> = {
   "missions.state.running": "In progress",
   "missions.state.done": "Done",
   "missions.state.skipped": "Skipped",
+  "missions.state.failed": "Failed",
   "missions.detail.show": "Show detail",
   "missions.detail.hide": "Hide detail",
   "missions.detail.sources": "Sources checked",
