@@ -370,6 +370,72 @@ body {
   color: var(--text);
 }
 
+.models-head {
+  margin-bottom: 1rem;
+}
+
+.model-family-grid,
+.model-options {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.model-family h2 {
+  margin: 0 0 0.35rem;
+  font-size: var(--studio-font-lg);
+}
+
+.model-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.6rem;
+  align-items: start;
+  padding: 0.75rem;
+  border: 1px solid var(--studio-border);
+  border-radius: 8px;
+  background: var(--studio-panel-2);
+}
+
+.model-option-button {
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-option-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.model-option > span,
+.model-option-main {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.model-option-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.model-option.is-disabled {
+  opacity: 0.7;
+}
+
+.link-button {
+  border: 0;
+  padding: 0;
+  color: var(--studio-accent-strong);
+  background: transparent;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 button:focus-visible,
 a:focus-visible,
 select:focus-visible,
