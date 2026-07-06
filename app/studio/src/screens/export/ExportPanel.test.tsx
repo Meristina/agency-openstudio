@@ -45,6 +45,23 @@ describe("ExportPanel", () => {
     await waitFor(() => expect(screen.getAllByText(/Not available on this machine/).length).toBe(2));
   });
 
+  it("tracks busy state per format so concurrent downloads don't clear each other", async () => {
+    let resolveDoc: (b: Blob) => void = () => {};
+    vi.mocked(fetchMissionPdf).mockReturnValueOnce(new Promise<Blob>((r) => { resolveDoc = r; }));
+    render(<I18nProvider><ExportPanel deliverable={selected} /></I18nProvider>);
+    const docBtn = screen.getByRole("button", { name: /Prepare A polished document/ });
+    const bundleBtn = screen.getByRole("button", { name: /Prepare The whole bundle/ });
+    fireEvent.click(docBtn);
+    await waitFor(() => expect((docBtn as HTMLButtonElement).disabled).toBe(true));
+    // Document still in flight; the bundle download resolves and completes.
+    fireEvent.click(bundleBtn);
+    await waitFor(() => expect(fetchMissionBundle).toHaveBeenCalled());
+    // The document must remain busy/disabled — the bundle finishing must not re-enable it.
+    expect((docBtn as HTMLButtonElement).disabled).toBe(true);
+    resolveDoc(new Blob(["pdf"]));
+    await waitFor(() => expect((docBtn as HTMLButtonElement).disabled).toBe(false));
+  });
+
   it("marks the media pack unavailable (not a retry) when media was pruned since production", async () => {
     render(<I18nProvider><ExportPanel deliverable={selected} /></I18nProvider>);
     vi.mocked(fetchMissionMediaZip).mockRejectedValueOnce(new Error("GET /api/mission/media.zip → 404: no media for mission 'm1'"));

@@ -8,7 +8,9 @@ import FormatCard from "./FormatCard";
 
 export default function ExportPanel({ deliverable }: { deliverable: ExportDeliverable }) {
   const { t } = useI18n();
-  const [busy, setBusy] = useState<ExportFormat | null>(null);
+  // Per-format, not a single lock: two formats can download concurrently, so each must
+  // track its own in-flight state — a shared value would let one finishing clear another's.
+  const [busy, setBusy] = useState<Set<ExportFormat>>(new Set());
   // The document and full bundle both render server-side PDF: one 501 proves the
   // capability is absent for both, so track it once rather than per-format.
   const [pdfCapable, setPdfCapable] = useState(true);
@@ -22,7 +24,7 @@ export default function ExportPanel({ deliverable }: { deliverable: ExportDelive
 
   async function produce(format: FormatView) {
     if (format.state !== "available") return;
-    setBusy(format.id);
+    setBusy((prev) => new Set(prev).add(format.id));
     setMessages((prev) => ({ ...prev, [format.id]: t("export.progress") }));
     const controller = new AbortController();
     // Generous ceiling: a media-heavy bundle can legitimately take a while to assemble
@@ -51,7 +53,11 @@ export default function ExportPanel({ deliverable }: { deliverable: ExportDelive
       }
     } finally {
       clearTimeout(timer);
-      setBusy(null);
+      setBusy((prev) => {
+        const next = new Set(prev);
+        next.delete(format.id);
+        return next;
+      });
     }
   }
 
@@ -60,7 +66,7 @@ export default function ExportPanel({ deliverable }: { deliverable: ExportDelive
       <h2 id="export-panel-title">{deliverable.title}</h2>
       <div className="deliverable-grid">
         {formats.map((format) => (
-          <FormatCard key={format.id} format={format} busy={busy === format.id} message={messages[format.id] || null} onProduce={() => void produce(format)} />
+          <FormatCard key={format.id} format={format} busy={busy.has(format.id)} message={messages[format.id] || null} onProduce={() => void produce(format)} />
         ))}
       </div>
       {mediaGone && <p className="muted">{t("export.mediaPruned")}</p>}
