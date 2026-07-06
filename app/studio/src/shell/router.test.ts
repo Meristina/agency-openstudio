@@ -13,6 +13,7 @@ describe("router", () => {
     for (const route of routes) expect(en[route.titleKey]).toBeTruthy();
     expect(routes.find((route) => route.id === "brief")?.status).toBe("shipped");
     expect(routes.find((route) => route.id === "missions")?.status).toBe("shipped");
+    expect(routes.find((route) => route.id === "library")?.status).toBe("shipped");
   });
 
   it("maps empty hash to home and unknown hash to notFound", () => {

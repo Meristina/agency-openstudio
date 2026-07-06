@@ -35,6 +35,10 @@ app/cache/
 missions/
 chat-history/
 transcriptions/
+# ...but NEVER the frontend source screen of the same name (the runtime store is
+# a `missions/` output dir; `app/studio/src/screens/missions/` is S3's shipped code).
+!app/studio/src/screens/missions/
+!app/studio/src/screens/missions/**
 
 # ── Wave 2 — locally generated multimodal assets (images / audio) ─────────
 # Downloaded model weights live in the OS cache (~/.cache/agency-studio,

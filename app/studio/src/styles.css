@@ -236,6 +236,123 @@ body {
   background: var(--studio-panel-2);
 }
 
+.library-screen {
+  display: grid;
+  gap: 1rem;
+  max-width: 1100px;
+}
+
+.library-header h1 {
+  margin: 0;
+  font-size: var(--studio-font-xl);
+  letter-spacing: 0;
+}
+
+.library-header p {
+  margin: 0.35rem 0 0;
+  color: var(--studio-muted);
+}
+
+.library-controls,
+.library-filing {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.65rem;
+}
+
+.library-controls input,
+.library-controls select,
+.library-filing select {
+  min-height: 2.4rem;
+  border: 1px solid var(--studio-border);
+  border-radius: var(--studio-radius);
+  padding: 0.5rem 0.65rem;
+  font: inherit;
+}
+
+.library-controls input {
+  min-width: min(100%, 320px);
+}
+
+.library-filing label {
+  display: grid;
+  gap: 0.25rem;
+  color: var(--studio-muted);
+  font-size: var(--studio-font-sm);
+  font-weight: 650;
+}
+
+.library-shelves {
+  display: grid;
+  gap: 1rem;
+}
+
+.library-shelf,
+.library-project,
+.library-campaign,
+.deliverable-card,
+.library-preview {
+  border: 1px solid var(--studio-border);
+  border-radius: var(--studio-radius);
+  background: var(--studio-panel-2);
+}
+
+.library-shelf,
+.library-project {
+  padding: 0.75rem;
+}
+
+.library-shelf summary,
+.library-project summary {
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.library-campaign {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+}
+
+.library-campaign h3,
+.deliverable-card h4,
+.library-preview h4,
+.library-preview h5 {
+  margin: 0 0 0.55rem;
+  letter-spacing: 0;
+}
+
+.deliverable-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0.75rem;
+}
+
+.deliverable-card {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.85rem;
+}
+
+.deliverable-card-head,
+.row.between {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 0.75rem;
+}
+
+.library-actions {
+  display: grid;
+  gap: 0.65rem;
+  border-top: 1px solid var(--studio-border);
+  padding-top: 0.7rem;
+}
+
+.library-preview {
+  padding: 0.75rem;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
