@@ -65,7 +65,7 @@ export default function GuidedBrief({ search = "" }: { search?: string }) {
   }, []);
 
   useEffect(() => {
-    if (state === "flow" && dirty) saveBriefDraft(answers, stepIndex, localStorage, useImportedMaterial);
+    if ((state === "flow" || state === "review") && dirty) saveBriefDraft(answers, stepIndex, localStorage, useImportedMaterial);
   }, [answers, stepIndex, state, dirty, useImportedMaterial]);
 
   // Launch handoff: the session owns the SSE stream, so the screen leaves

@@ -12,33 +12,40 @@ export default function BringInPanel({ activeContext, onAccepted }: { activeCont
   const [result, setResult] = useState<BringInResult | null>(null);
 
   async function bring(files: FileList | File[]) {
-    const file = Array.from(files)[0];
-    if (!file) return;
-    const kind = classifyFileKind(file);
-    if (kind === "unsupported") {
-      setResult(classifyBringInError(null, kind));
-      return;
-    }
+    if (busy) return;   // ignore overlapping selections/drops so they can't race the shared result/busy state
+    const list = Array.from(files);
+    if (!list.length) return;
     setBusy(true);
     setResult(null);
+    let accepted = false;
+    let last: BringInResult | null = null;
     try {
-      const meta = kind === "document" ? await ingestDoc(file) : await uploadVisual(file, { cloud });
-      defaultOnAccept(meta.id, activeContext);
-      setResult({ status: "accepted", kind, reason: null, item: null });
-      onAccepted();
-    } catch (error) {
-      setResult(classifyBringInError(error, kind));
+      // Process every provided file (a multi-file drop must not silently discard the extras).
+      for (const file of list) {
+        const kind = classifyFileKind(file);
+        if (kind === "unsupported") { last = classifyBringInError(null, kind); continue; }
+        try {
+          const meta = kind === "document" ? await ingestDoc(file) : await uploadVisual(file, { cloud });
+          defaultOnAccept(meta.id, activeContext);
+          last = { status: "accepted", kind, reason: null, item: null };
+          accepted = true;
+        } catch (error) {
+          last = classifyBringInError(error, kind);
+        }
+      }
     } finally {
+      setResult(last);
       setBusy(false);
       if (input.current) input.current.value = "";
     }
+    if (accepted) onAccepted();
   }
 
   return (
     <section className="state-panel import-bring-in" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void bring(event.dataTransfer.files); }}>
       <h2>{t("import.bringIn.cta")}</h2>
       <p>{t("import.bringIn.docHint")} {t("import.bringIn.imageHint")}</p>
-      <input ref={input} type="file" aria-label={t("import.bringIn.cta")} onChange={(event) => { if (event.target.files) void bring(event.target.files); }} />
+      <input ref={input} type="file" aria-label={t("import.bringIn.cta")} disabled={busy} onChange={(event) => { if (event.target.files) void bring(event.target.files); }} />
       <label className="toggle">
         <input type="checkbox" checked={cloud} onChange={(event) => setCloud(event.target.checked)} />
         <span>{t("import.cloud.optInLabel")}</span>

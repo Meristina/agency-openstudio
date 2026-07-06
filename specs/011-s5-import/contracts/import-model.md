@@ -66,9 +66,11 @@ For each chosen file:
    `cloud` is the per-item opt-in (default off).
 3. **Progress** shown while the request is in flight (FR-004).
 4. **Map the response** to `BringInResult` (see data-model): `201 → accepted` (+ default
-   association = active client context, written to the map); `400 → rejected`
-   (`unreadable`/`tooLarge`); `501 → capabilityAbsent` (enable hint, FR-011); `500 →
-   rejected` (generic plain reason). **Never** a silent drop, never a raw error (FR-003).
+   association = active client context, written to the map); `413 → rejected` (`tooLarge` —
+   the server's streamed size cap); `400 → rejected` (`unreadable`); `501 → capabilityAbsent`
+   (enable hint, FR-011); `500`/other → `rejected` (generic plain reason). The status is read
+   from the `errorText` delimiter (`<label> → <status>`), never a bare substring. **Never** a
+   silent drop, never a raw error (FR-003).
 5. **Reflect** an accepted item on its shelf within one frame; the imported list re-reads
    `listDocs`/`listVisual` (or optimistically appends) and re-runs `buildImportModel`.
 

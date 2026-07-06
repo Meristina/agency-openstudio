@@ -16,12 +16,14 @@ export default function Import() {
   const [docs, setDocs] = useState<DocMeta[]>([]);
   const [visuals, setVisuals] = useState<VisualMeta[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [failed, setFailed] = useState(false);
   const [version, setVersion] = useState(0);
 
+  // No `t` dependency: a language switch must not refetch/re-prune the list — the error is stored
+  // as a flag and translated at render time instead.
   const load = useCallback(async () => {
     setLoading(true);
-    setError("");
+    setFailed(false);
     try {
       const [nextDocs, nextVisuals] = await Promise.all([listDocs(), listVisual()]);
       pruneAssociations([...nextDocs, ...nextVisuals].map((item) => item.id));
@@ -29,11 +31,11 @@ export default function Import() {
       setVisuals(nextVisuals);
       setVersion((n) => n + 1);
     } catch {
-      setError(t("import.state.loadError"));
+      setFailed(true);
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, []);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -45,7 +47,7 @@ export default function Import() {
   const allTotal = docs.length + visuals.length;
 
   if (loading) return <Loading />;
-  if (error) return <ErrorState message={error} />;
+  if (failed) return <ErrorState message={t("import.state.loadError")} />;
 
   return (
     <section className="library-screen" aria-labelledby="import-title">

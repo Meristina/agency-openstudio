@@ -121,8 +121,11 @@ export function classifyFileKind(file: File): MaterialKind | "unsupported" {
 export function classifyBringInError(error: unknown, kind: MaterialKind | "unsupported"): BringInResult {
   if (kind === "unsupported") return { status: "rejected", kind, reason: "import.reject.unsupportedKind", item: null };
   const message = error instanceof Error ? error.message : String(error);
-  if (message.includes("501")) return { status: "capabilityAbsent", kind, reason: "import.capabilityAbsent.hint", item: null };
-  if (message.includes("413")) return { status: "rejected", kind, reason: "import.reject.tooLarge", item: null };
-  if (message.includes("400")) return { status: "rejected", kind, reason: "import.reject.unreadable", item: null };
+  // Read the HTTP status from the `errorText` delimiter (`<label> → <status>[: …]`), never a bare
+  // substring — an incidental "400 bytes" in a message must not be mistaken for a 400 rejection.
+  const status = Number(message.match(/→\s*(\d{3})\b/)?.[1]);
+  if (status === 501) return { status: "capabilityAbsent", kind, reason: "import.capabilityAbsent.hint", item: null };
+  if (status === 413) return { status: "rejected", kind, reason: "import.reject.tooLarge", item: null };
+  if (status === 400) return { status: "rejected", kind, reason: "import.reject.unreadable", item: null };
   return { status: "rejected", kind, reason: "import.reject.generic", item: null };
 }

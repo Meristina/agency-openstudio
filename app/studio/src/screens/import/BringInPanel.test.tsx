@@ -62,6 +62,22 @@ describe("BringInPanel", () => {
     expect(uploadVisual).toHaveBeenCalledWith(expect.any(File), { cloud: true });
   });
 
+  it("processes every file in a multi-file drop — nothing is silently discarded", async () => {
+    vi.mocked(ingestDoc).mockResolvedValue({ id: "d1", filename: "a.pdf", title: "A", n_chunks: 1, created: 1 });
+    vi.mocked(uploadVisual).mockResolvedValue({ id: "v1", filename: "b.png", title: "B", n_chunks: 1, created: 1 });
+    const { onAccepted, input } = renderPanel();
+
+    fireEvent.change(input, { target: { files: [
+      new File(["x"], "a.pdf", { type: "application/pdf" }),
+      new File(["x"], "b.png", { type: "image/png" }),
+    ] } });
+
+    await screen.findByText("Material added.");
+    expect(ingestDoc).toHaveBeenCalledTimes(1);
+    expect(uploadVisual).toHaveBeenCalledTimes(1);
+    expect(onAccepted).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects an unsupported kind with a plain reason and no network call (FR-012)", async () => {
     const { onAccepted, input } = renderPanel();
 

@@ -43,21 +43,21 @@ export default function AssociateControl({ item, taxonomy, onAssociated }: { ite
         <span>{t("library.filing.pickClient")}</span>
         <select value={client} onChange={(event) => { setClient(event.target.value); setProject(""); setCampaign(""); }}>
           <option value="">{t("import.shelf.unassigned")}</option>
-          {taxonomy.clients.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+          {taxonomy.clients.map((entry) => <option key={entry.name} value={entry.name}>{entry.name}</option>)}
         </select>
       </label>
       <label>
         <span>{t("library.filing.pickProject")}</span>
         <select value={project} disabled={!selectedClient} onChange={(event) => { setProject(event.target.value); setCampaign(""); }}>
           <option value=""></option>
-          {selectedClient?.projects.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+          {selectedClient?.projects.map((entry) => <option key={entry.name} value={entry.name}>{entry.name}</option>)}
         </select>
       </label>
       <label>
         <span>{t("library.filing.pickCampaign")}</span>
         <select value={campaign} disabled={!selectedProject} onChange={(event) => setCampaign(event.target.value)}>
           <option value=""></option>
-          {selectedProject?.campaigns.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+          {selectedProject?.campaigns.map((entry) => <option key={entry.name} value={entry.name}>{entry.name}</option>)}
         </select>
       </label>
       <button type="button" disabled={!client} onClick={file}>{item.association ? t("import.associate.move") : t("import.associate.attach")}</button>

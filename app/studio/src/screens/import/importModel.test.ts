@@ -22,6 +22,10 @@ describe("bring-in classification", () => {
     expect(classifyFileKind(new File(["x"], "brief.pdf", { type: "application/pdf" }))).toBe("document");
     expect(classifyFileKind(new File(["x"], "image.png", { type: "image/png" }))).toBe("image");
     expect(classifyBringInError(new Error("POST /api/visual → 501"), "image").status).toBe("capabilityAbsent");
+    expect(classifyBringInError(new Error("POST /api/docs → 413 request body too large"), "document").reason).toBe("import.reject.tooLarge");
     expect(classifyBringInError(new Error("POST /api/docs → 400"), "document").reason).toBe("import.reject.unreadable");
+    // Reads the status from the `→` delimiter, not a bare substring: incidental digits in the
+    // message body must not flip the classification (400 stays unreadable despite the "501").
+    expect(classifyBringInError(new Error("POST /api/docs → 400: unreadable after 501 attempts"), "document").reason).toBe("import.reject.unreadable");
   });
 });
