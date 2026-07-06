@@ -8,12 +8,19 @@ export type MissionDraft = {
     webSearch: boolean;
     video: boolean;
     assets: boolean;
+    knowledge?: boolean;
+    visual?: boolean;
     client?: string;
     project?: string;
     campaign?: string;
     resumeFrom?: string;
   };
 };
+
+export interface ImportedMaterialPresence {
+  documents: boolean;
+  images: boolean;
+}
 
 export function cleanAttachmentName(name: string, field: "client" | "project" | "campaign" = "client"): string {
   const clean = name.trim();
@@ -29,7 +36,7 @@ function answerText(value: unknown): string {
   return "";
 }
 
-export function composeMission(brief: Brief): MissionDraft {
+export function composeMission(brief: Brief, imported: ImportedMaterialPresence = { documents: false, images: false }): MissionDraft {
   const set = questionSets[brief.deliverableType];
   const lines = [
     `Intent: ${brief.intent}`,
@@ -52,6 +59,8 @@ export function composeMission(brief: Brief): MissionDraft {
       ...(brief.attachment?.client ? { client: cleanAttachmentName(brief.attachment.client, "client") } : {}),
       ...(brief.attachment?.project ? { project: cleanAttachmentName(brief.attachment.project, "project") } : {}),
       ...(brief.attachment?.campaign ? { campaign: cleanAttachmentName(brief.attachment.campaign, "campaign") } : {}),
+      ...(brief.useImportedMaterial && imported.documents ? { knowledge: true } : {}),
+      ...(brief.useImportedMaterial && imported.images ? { visual: true } : {}),
     },
   };
 }

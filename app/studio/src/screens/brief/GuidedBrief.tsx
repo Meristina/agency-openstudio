@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { listDocs, listVisual } from "../../api";
 import { useI18n } from "../../i18n/I18nProvider";
 import { useClientContext } from "../../shell/ClientContext";
 import FlowStep from "./FlowStep";
@@ -28,6 +29,8 @@ export default function GuidedBrief({ search = "" }: { search?: string }) {
     deliverableType: "research",
     deliverableLanguage: locale,
   });
+  const [useImportedMaterial, setUseImportedMaterialState] = useState(draft?.useImportedMaterial ?? false);
+  const [importedPresence, setImportedPresence] = useState({ documents: false, images: false });
   const [stepIndex, setStepIndex] = useState(0);
   const [state, setState] = useState<GuidedBriefState>(draft ? "resumePrompt" : "flow");
   const [error, setError] = useState("");
@@ -54,8 +57,16 @@ export default function GuidedBrief({ search = "" }: { search?: string }) {
   useEffect(() => missionSession.subscribe(setSession), []);
 
   useEffect(() => {
-    if (state === "flow" && dirty) saveBriefDraft(answers, stepIndex);
-  }, [answers, stepIndex, state, dirty]);
+    let alive = true;
+    Promise.all([listDocs(), listVisual()])
+      .then(([docs, visuals]) => { if (alive) setImportedPresence({ documents: docs.length > 0, images: visuals.length > 0 }); })
+      .catch(() => { if (alive) setImportedPresence({ documents: false, images: false }); });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    if ((state === "flow" || state === "review") && dirty) saveBriefDraft(answers, stepIndex, localStorage, useImportedMaterial);
+  }, [answers, stepIndex, state, dirty, useImportedMaterial]);
 
   // Launch handoff: the session owns the SSE stream, so the screen leaves
   // "launching" as soon as the run is announced — not when the mission ends.
@@ -137,7 +148,13 @@ export default function GuidedBrief({ search = "" }: { search?: string }) {
         }
         : null,
       options: [],
+      useImportedMaterial,
     };
+  }
+
+  function setUseImportedMaterial(enabled: boolean) {
+    setUseImportedMaterialState(enabled);
+    setDirty(true);
   }
 
   function edit(id: string) {
@@ -150,13 +167,14 @@ export default function GuidedBrief({ search = "" }: { search?: string }) {
 
   function launch() {
     setState("launching");
-    void missionSession.launch(composeMission(currentBrief()));
+    void missionSession.launch(composeMission(currentBrief(), importedPresence));
   }
 
   function resumeDraft() {
     if (!draft) return;
     setAnswers(draft.answers);
     setStepIndex(draft.stepIndex);
+    setUseImportedMaterialState(draft.useImportedMaterial ?? false);
     setDirty(true);
     setState("flow");
   }
@@ -197,7 +215,7 @@ export default function GuidedBrief({ search = "" }: { search?: string }) {
           </div>
         </form>
       )}
-      {state === "review" && <Review brief={currentBrief()} error={error} onEdit={edit} onLaunch={launch} />}
+      {state === "review" && <Review brief={currentBrief()} error={error} onEdit={edit} onUseImportedMaterial={setUseImportedMaterial} onLaunch={launch} />}
       {state === "launching" && <p>{t("state.loading")}</p>}
       {(state === "launched" || state === "failed") && (
         <>

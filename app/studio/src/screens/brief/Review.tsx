@@ -1,22 +1,24 @@
 import { useEffect, useState } from "react";
-import { fetchCapabilities } from "../../api";
+import { fetchCapabilities, listDocs, listVisual } from "../../api";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { CapabilityEntry } from "../../types";
 import type { Answer, Brief, Question } from "./questionSets";
 import { questionSets } from "./questionSets";
 
-export default function Review({ brief, error, launching, readOnly, onEdit, onLaunch }: {
+export default function Review({ brief, error, launching, readOnly, onEdit, onUseImportedMaterial, onLaunch }: {
   brief: Brief;
   error?: string | null;
   launching?: boolean;
   readOnly?: boolean;
   onEdit?: (id: string) => void;
+  onUseImportedMaterial?: (enabled: boolean) => void;
   onLaunch?: () => void;
 }) {
   const { t } = useI18n();
   const [videoEntry, setVideoEntry] = useState<CapabilityEntry | null>(null);
   const [preflightError, setPreflightError] = useState("");
   const [ackPaid, setAckPaid] = useState(false);
+  const [hasImported, setHasImported] = useState(false);
   const questions = questionSets[brief.deliverableType].questions.filter(
     (question) => !["intent", "deliverableLanguage"].includes(question.id),
   );
@@ -36,6 +38,14 @@ export default function Review({ brief, error, launching, readOnly, onEdit, onLa
       .catch(() => { if (alive) setPreflightError(t("brief.capability.unavailable")); });
     return () => { alive = false; };
   }, [needsVideo, t]);
+
+  useEffect(() => {
+    let alive = true;
+    Promise.all([listDocs(), listVisual()])
+      .then(([docs, visuals]) => { if (alive) setHasImported(docs.length + visuals.length > 0); })
+      .catch(() => { if (alive) setHasImported(false); });
+    return () => { alive = false; };
+  }, []);
 
   function answerDisplay(question: Question, value: Answer): string {
     if (question.kind === "toggle") return t(value !== false ? "brief.review.on" : "brief.review.off");
@@ -75,6 +85,13 @@ export default function Review({ brief, error, launching, readOnly, onEdit, onLa
           );
         })}
       </dl>
+      {hasImported && !readOnly && onUseImportedMaterial && (
+        <label className="toggle">
+          <input type="checkbox" checked={brief.useImportedMaterial === true} onChange={(event) => onUseImportedMaterial(event.target.checked)} />
+          <span>{t("import.brief.useMaterialLabel")}</span>
+        </label>
+      )}
+      {hasImported && brief.useImportedMaterial && <p className="notice">{t("import.brief.willUseSummary")}</p>}
       {error && <p role="alert">{error}</p>}
       {(videoBlocked || preflightError) && (
         <p role="alert">

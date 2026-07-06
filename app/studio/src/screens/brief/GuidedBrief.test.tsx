@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchCapabilities, fetchTaxonomy, runMission } from "../../api";
+import { fetchCapabilities, fetchTaxonomy, listDocs, listVisual, runMission } from "../../api";
 import { I18nProvider } from "../../i18n/I18nProvider";
 import { ClientContextProvider } from "../../shell/ClientContext";
 import { expectNamedInteractives } from "../../testing/a11y";
@@ -11,6 +11,8 @@ import { missionSession } from "../session/missionSession";
 vi.mock("../../api", () => ({
   fetchTaxonomy: vi.fn().mockResolvedValue({ clients: [] }),
   fetchCapabilities: vi.fn().mockResolvedValue({ generated_at: "now", families: [] }),
+  listDocs: vi.fn().mockResolvedValue([]),
+  listVisual: vi.fn().mockResolvedValue([]),
   runMission: vi.fn(async (_goal: string, onEvent: (event: { phase: string; run_id: string }) => void) => {
     onEvent({ phase: "run", run_id: "r42" });
   }),
@@ -24,6 +26,8 @@ afterEach(() => {
   vi.clearAllMocks();
   vi.mocked(fetchTaxonomy).mockResolvedValue({ clients: [] });
   vi.mocked(fetchCapabilities).mockResolvedValue({ generated_at: "now", families: [] });
+  vi.mocked(listDocs).mockResolvedValue([]);
+  vi.mocked(listVisual).mockResolvedValue([]);
 });
 
 function renderBrief(search = "") {

@@ -85,5 +85,5 @@ archived in `docs/legacy/`. The OpenMontage fusion decision record is
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/010-s4-deliverable-library/plan.md
+at specs/011-s5-import/plan.md
 <!-- SPECKIT END -->

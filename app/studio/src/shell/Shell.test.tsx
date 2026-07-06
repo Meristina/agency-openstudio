@@ -13,6 +13,7 @@ vi.mock("../api", () => ({
   listMcpServers: vi.fn().mockResolvedValue([]),
   getGraphStats: vi.fn().mockResolvedValue({ nodes: 0, edges: 0, top_entities: [] }),
   getPersonaStats: vi.fn().mockResolvedValue({ total: 0, enabled: 0, by_dept: {} }),
+  listDocs: vi.fn().mockResolvedValue([]),
   listVisual: vi.fn().mockResolvedValue([]),
   runMission: vi.fn(),
   cancelMission: vi.fn(),

@@ -44,7 +44,17 @@ export type CatalogKey =
   | "library.action.open" | "library.action.downloadPdf" | "library.pdf.inProgress" | "library.pdf.failed" | "library.pdf.hint"
   | "library.filing.attach" | "library.filing.move" | "library.filing.unassign" | "library.filing.success" | "library.filing.failed" | "library.filing.pickClient" | "library.filing.pickProject" | "library.filing.pickCampaign"
   | "library.comingSoon.title" | "library.comingSoon.body"
-  | "import.comingSoon.title" | "import.comingSoon.body"
+  | "import.title" | "import.subtitle" | "import.kind.document" | "import.kind.image"
+  | "import.bringIn.cta" | "import.bringIn.docHint" | "import.bringIn.imageHint" | "import.bringIn.progress" | "import.bringIn.accepted"
+  | "import.reject.unsupportedKind" | "import.reject.tooLarge" | "import.reject.unreadable" | "import.reject.generic"
+  | "import.capabilityAbsent.title" | "import.capabilityAbsent.body" | "import.capabilityAbsent.hint"
+  | "import.cloud.optInLabel" | "import.cloud.offMachineWarning"
+  | "import.shelf.unassigned" | "import.card.importedOn" | "import.card.remove"
+  | "import.empty.firstRun.title" | "import.empty.firstRun.body" | "import.empty.firstRun.cta" | "import.empty.context.title" | "import.empty.context.body"
+  | "import.state.loadError"
+  | "import.associate.attach" | "import.associate.move" | "import.associate.unassign" | "import.associate.success" | "import.associate.failed"
+  | "import.remove.confirm" | "import.remove.success" | "import.remove.failed"
+  | "import.brief.useMaterialLabel" | "import.brief.willUseSummary" | "import.brief.startWithMaterial"
   | "export.comingSoon.title" | "export.comingSoon.body"
   | "settings.comingSoon.title" | "settings.comingSoon.body";
 
