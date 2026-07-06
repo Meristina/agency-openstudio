@@ -878,6 +878,63 @@ def test_mission_pdf_unknown_mission_is_404(monkeypatch, tmp_path):
         httpd.shutdown()
 
 
+def test_mission_media_zip_streams_scoped_media(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _save_dossier("20260630-101010-demo", tmp_path)
+    media = tmp_path / "studio_assets" / "missions" / "20260630-101010-demo"
+    media.mkdir(parents=True)
+    (media / "hero.png").write_bytes(b"img")
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _get(host, port, "/api/mission/20260630-101010-demo/media.zip")
+        assert resp.status == 200
+        assert resp.getheader("Content-Type") == "application/zip"
+        assert "attachment" in (resp.getheader("Content-Disposition") or "")
+        assert body.startswith(b"PK")
+    finally:
+        httpd.shutdown()
+
+
+def test_mission_media_zip_no_media_is_404(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _save_dossier("20260630-101010-demo", tmp_path)
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _get(host, port, "/api/mission/20260630-101010-demo/media.zip")
+        assert resp.status == 404
+        assert "no media" in json.loads(body)["error"]
+    finally:
+        httpd.shutdown()
+
+
+def test_mission_bundle_zip_streams_bundle_and_maps_missing_pdf(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _save_dossier("20260630-101010-demo", tmp_path)
+    pdf = tmp_path / "deliverable.pdf"
+    pdf.write_bytes(b"%PDF")
+    monkeypatch.setattr("agency_cli.exporter.export_pdf", lambda _mid, **_kw: pdf)
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _get(host, port, "/api/mission/20260630-101010-demo/bundle.zip")
+        assert resp.status == 200
+        assert resp.getheader("Content-Type") == "application/zip"
+        assert body.startswith(b"PK")
+    finally:
+        httpd.shutdown()
+
+    def _no_extra(_mid, **_kw):
+        raise ImportError('Run: pip install -e ".[pdf]"')
+
+    monkeypatch.setattr("agency_cli.exporter.export_pdf", _no_extra)
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, body = _get(host, port, "/api/mission/20260630-101010-demo/bundle.zip")
+        assert resp.status == 501
+        assert "pip install" in json.loads(body)["error"]
+    finally:
+        httpd.shutdown()
+
+
 def test_mission_pdf_no_deliverable_is_404(monkeypatch, tmp_path):
     # Dossier exists (passes the scope gate) but has no deliverable.md, so
     # export_pdf raises and the OSError→404 branch must answer cleanly.

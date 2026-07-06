@@ -869,6 +869,10 @@ class StudioHandler(BaseHTTPRequestHandler):
             rest = path[len("/api/mission/"):]
             if rest.endswith("/pdf"):
                 return self._handle_mission_pdf(rest[: -len("/pdf")])
+            if rest.endswith("/media.zip"):
+                return self._handle_mission_media_zip(rest[: -len("/media.zip")])
+            if rest.endswith("/bundle.zip"):
+                return self._handle_mission_bundle(rest[: -len("/bundle.zip")])
             return self._handle_get_mission(rest)
         if path.startswith("/media/"):
             return self._handle_media_asset(path)
@@ -1049,6 +1053,59 @@ class StudioHandler(BaseHTTPRequestHandler):
             body, "application/pdf",
             extra_headers={"Content-Disposition": f'attachment; filename="{mission_id}.pdf"'},
         )
+
+    def _download_stem(self, dossier: dict, fallback: str) -> str:
+        raw = str(dossier.get("goal") or "").strip().lower()
+        stem = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+        return stem[:80] or fallback
+
+    def _send_zip_file(self, path: Path, filename: str) -> None:
+        try:
+            body = path.read_bytes()
+        finally:
+            path.unlink(missing_ok=True)
+        self._send_bytes(
+            body, "application/zip",
+            extra_headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    def _handle_mission_media_zip(self, mission_id: str) -> None:
+        mission_id = _safe_mission_id(mission_id)
+        if mission_id is None:
+            return self._send_error_json(404, "mission not found")
+        dossier = self._load_scoped_dossier(mission_id)
+        if dossier is None:
+            return
+        from agency_studio import bundler
+        try:
+            zip_path = bundler.build_media_zip(mission_id, self.server.assets_root)  # type: ignore[attr-defined]
+        except bundler.NoMediaError:
+            return self._send_error_json(404, f"no media for mission '{mission_id}'")
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            return self._send_error_json(500, "media export failed")
+        self._send_zip_file(zip_path, f"{self._download_stem(dossier, mission_id)}-media.zip")
+
+    def _handle_mission_bundle(self, mission_id: str) -> None:
+        mission_id = _safe_mission_id(mission_id)
+        if mission_id is None:
+            return self._send_error_json(404, "mission not found")
+        dossier = self._load_scoped_dossier(mission_id)
+        if dossier is None:
+            return
+        from agency_studio import bundler
+        try:
+            zip_path = bundler.build_bundle(mission_id, self.server.assets_root)  # type: ignore[attr-defined]
+        except ImportError as exc:  # [pdf] extra not installed
+            return self._send_error_json(501, str(exc))
+        except FileNotFoundError:  # export_pdf: no deliverable for this mission
+            return self._send_error_json(404, f"no deliverable for mission '{mission_id}'")
+        except Exception:  # BundleAssemblyError (media vanished mid-write) or any render failure
+            import traceback
+            traceback.print_exc()
+            return self._send_error_json(500, "bundle export failed")
+        self._send_zip_file(zip_path, f"{self._download_stem(dossier, mission_id)}-bundle.zip")
 
     # ── API: run a mission, stream SSE ────────────────────────────────────────
     def _handle_run_mission(self) -> None:
