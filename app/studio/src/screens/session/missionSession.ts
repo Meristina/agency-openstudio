@@ -1,6 +1,6 @@
 import { cancelMission, runMission } from "../../api";
 import type { MissionEvent } from "../../types";
-import type { MissionDraft } from "./composeMission";
+import type { MissionDraft } from "../brief/composeMission";
 
 type State = {
   status: "idle" | "launching" | "running" | "cancelled" | "failed" | "done";
@@ -62,6 +62,13 @@ export const missionSession = {
       publish();
     }
     return state;
+  },
+  async resume(runId: string) {
+    // Send an EMPTY goal: the server reconstructs the goal from the checkpoint envelope, and a
+    // non-empty goal that disagrees with the pinned envelope goal is rejected with 409
+    // ("checkpoint is for a different goal"). After a reload we don't have the original goal,
+    // so empty is the only correct value here.
+    return this.launch({ goal: "", opts: { webSearch: false, video: false, assets: false, resumeFrom: runId } });
   },
   async cancel() {
     controller?.abort();

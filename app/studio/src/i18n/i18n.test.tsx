@@ -55,4 +55,16 @@ describe("i18n", () => {
       }
     }
   });
+
+  it("keeps missions wording localized without raw key leaks", () => {
+    const banned = /\b(engine|pipeline|phase|flag|environment variable|websearch|dept|mcp_tools)\b/i;
+    for (const catalog of [en, fr]) {
+      for (const [key, value] of Object.entries(catalog)) {
+        if (key.startsWith("missions.")) {
+          expect(value).not.toMatch(banned);
+          expect(value).not.toMatch(/^missions\./);
+        }
+      }
+    }
+  });
 });

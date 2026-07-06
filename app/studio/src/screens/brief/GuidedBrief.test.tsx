@@ -6,7 +6,7 @@ import { ClientContextProvider } from "../../shell/ClientContext";
 import { expectNamedInteractives } from "../../testing/a11y";
 import GuidedBrief from "./GuidedBrief";
 import { saveBriefDraft } from "./briefDraft";
-import { missionSession } from "./missionSession";
+import { missionSession } from "../session/missionSession";
 
 vi.mock("../../api", () => ({
   fetchTaxonomy: vi.fn().mockResolvedValue({ clients: [] }),

@@ -53,6 +53,12 @@ describe("Shell", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "Agency Studio" })).toBeTruthy());
   });
 
+  it("renders the shipped missions screen", async () => {
+    renderShell();
+    fireEvent.click(screen.getByRole("link", { name: "Missions" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Mission timeline" })).toBeTruthy());
+  });
+
   it("hands home intent to the guided brief screen", async () => {
     renderShell();
     fireEvent.change(screen.getByLabelText("Intent"), { target: { value: "Launch plan" } });
