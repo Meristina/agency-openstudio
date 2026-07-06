@@ -13,6 +13,7 @@ afterEach(() => {
 describe("placeholders", () => {
   it("renders every placeholder route with a way home", () => {
     const placeholders = routes.filter((route) => route.status === "placeholder");
+    expect(placeholders.map((route) => route.id)).not.toContain("brief");
     for (const route of placeholders) {
       cleanup();
       render(<I18nProvider><PlaceholderScreen id={route.id} /></I18nProvider>);

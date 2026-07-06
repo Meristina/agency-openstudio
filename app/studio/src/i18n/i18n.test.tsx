@@ -46,4 +46,13 @@ describe("i18n", () => {
     render(<I18nProvider><Probe /></I18nProvider>);
     expect(document.body.textContent).not.toMatch(/\bnav\.|state\./);
   });
+
+  it("keeps guided brief wording out of internal machinery terms", () => {
+    const banned = /\b(department|engine|pipeline|flag|environment variable|api)\b/i;
+    for (const catalog of [en, fr]) {
+      for (const [key, value] of Object.entries(catalog)) {
+        if (key.startsWith("brief.")) expect(value).not.toMatch(banned);
+      }
+    }
+  });
 });

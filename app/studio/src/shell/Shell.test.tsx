@@ -52,4 +52,12 @@ describe("Shell", () => {
     fireEvent.click(screen.getByRole("link", { name: "Console" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Agency Studio" })).toBeTruthy());
   });
+
+  it("hands home intent to the guided brief screen", async () => {
+    renderShell();
+    fireEvent.change(screen.getByLabelText("Intent"), { target: { value: "Launch plan" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start brief" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Guided brief" })).toBeTruthy());
+    expect((screen.getByLabelText("Intent") as HTMLTextAreaElement).value).toBe("Launch plan");
+  });
 });

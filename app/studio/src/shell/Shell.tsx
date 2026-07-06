@@ -7,6 +7,7 @@ import { useRoute } from "./router";
 import Home from "../screens/Home";
 import Console from "../screens/Console";
 import Models from "../screens/Models";
+import GuidedBrief from "../screens/brief/GuidedBrief";
 import { PlaceholderScreen } from "../screens/placeholders";
 import { NotFound } from "../ui/states";
 import { useI18n } from "../i18n/I18nProvider";
@@ -17,6 +18,7 @@ function Outlet() {
   const context = useClientContext();
   if (match.notFound || !match.route) return <NotFound />;
   if (match.route.id === "home") return <Home />;
+  if (match.route.id === "brief") return <GuidedBrief search={match.search} />;
   if (match.route.id === "console") return <Console />;
   if (match.route.id === "models") return <Models />;
   return (
