@@ -64,6 +64,8 @@ export default function GuidedBrief({ search = "" }: { search?: string }) {
     if (session.status === "running" || session.status === "done") {
       discardBriefDraft();
       setState("launched");
+    } else if (session.status === "cancelled") {
+      setState("review");
     } else if (session.status === "failed") {
       if (session.runId) {
         setState("failed");

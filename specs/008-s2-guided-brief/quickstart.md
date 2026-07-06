@@ -5,7 +5,8 @@
 - Feature module: `app/studio/src/screens/brief/` (new — see [plan.md](./plan.md) structure)
 - Integration edits only in: `app/studio/src/shell/router.ts` (status flip),
   `app/studio/src/i18n/{catalog,en,fr}.ts` (`brief.*` keys),
-  `app/studio/src/screens/placeholders.tsx` (remove S2 entry)
+  `app/studio/src/screens/placeholders.tsx` (remove S2 entry),
+  `app/studio/src/api.ts` (`runMission` gains an optional `assets` opt — absent ⇒ today's `true`)
 - Server: **no changes** (`agency_studio/` untouched)
 
 ## Develop

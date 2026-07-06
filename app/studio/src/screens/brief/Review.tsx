@@ -89,10 +89,11 @@ export default function Review({ brief, error, launching, readOnly, onEdit, onLa
         </label>
       )}
       {!readOnly && onLaunch && (
-        <button type="button" disabled={launching} onClick={() => {
-          if (videoBlocked || (videoPaid && !ackPaid)) return;
-          onLaunch();
-        }}>{t("brief.launch")}</button>
+        <button
+          type="button"
+          disabled={launching || videoBlocked || (videoPaid && !ackPaid)}
+          onClick={onLaunch}
+        >{t("brief.launch")}</button>
       )}
     </section>
   );

@@ -3,7 +3,7 @@ import type { MissionEvent } from "../../types";
 import type { MissionDraft } from "./composeMission";
 
 type State = {
-  status: "idle" | "launching" | "running" | "failed" | "done";
+  status: "idle" | "launching" | "running" | "cancelled" | "failed" | "done";
   runId: string | null;
   events: MissionEvent[];
   error: string | null;
@@ -40,12 +40,25 @@ export const missionSession = {
         }
         publish();
       }, { ...draft.opts, signal: controller?.signal });
-      state.status = "done";
+      if (state.status !== "idle") state.status = "done";
       publish();
     } catch (error) {
-      state.status = "failed";
-      const message = error instanceof Error ? error.message : "Launch failed";
-      state.error = /blocker|capabilit|409/i.test(message) ? `Production is blocked. ${message}` : message;
+      // reset() may have already returned the session to idle before this
+      // rejection lands — a settled reset must not be overwritten.
+      // The as-cast defeats TS's over-narrow flow analysis: the SSE callback
+      // mutates state.status ("running") in ways this scope cannot see.
+      const current = state.status as State["status"];
+      if (current === "launching" || current === "running") {
+        // DOMException is not an Error subclass in every runtime — match by name.
+        if ((error as { name?: string } | null)?.name === "AbortError") {
+          state.status = "cancelled";
+          state.error = null;
+        } else {
+          state.status = "failed";
+          const message = error instanceof Error ? error.message : "Launch failed";
+          state.error = /blocker|capabilit|409/i.test(message) ? `Production is blocked. ${message}` : message;
+        }
+      }
       publish();
     }
     return state;
@@ -55,8 +68,9 @@ export const missionSession = {
     return state.runId ? cancelMission(state.runId) : false;
   },
   reset() {
-    Object.assign(state, { status: "idle", runId: null, events: [], error: null });
+    controller?.abort();
     controller = null;
+    Object.assign(state, { status: "idle", runId: null, events: [], error: null });
     publish();
   },
 };

@@ -74,7 +74,11 @@ export default function FlowStep({ question, value, error, onAnswer, onDefault, 
       )}
       {question.kind === "toggle" && (
         <label>
-          <input type="checkbox" checked={value !== false} onChange={(event) => onAnswer(event.target.checked)} />
+          <input
+            type="checkbox"
+            checked={typeof value === "boolean" ? value : question.defaultValue !== false}
+            onChange={(event) => onAnswer(event.target.checked)}
+          />
           <span>{t(question.labelKey)}</span>
         </label>
       )}

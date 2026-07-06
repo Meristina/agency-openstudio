@@ -14,9 +14,9 @@ export type MissionDraft = {
   };
 };
 
-export function cleanAttachmentName(name: string): string {
+export function cleanAttachmentName(name: string, field: "client" | "project" | "campaign" = "client"): string {
   const clean = name.trim();
-  if (!clean || clean.length > 80 || /[<>]/.test(clean)) throw new Error("Invalid client name");
+  if (!clean || clean.length > 80 || /[<>]/.test(clean)) throw new Error(`Invalid ${field} name`);
   return clean;
 }
 
@@ -48,9 +48,9 @@ export function composeMission(brief: Brief): MissionDraft {
       webSearch: brief.research,
       video: brief.deliverableType === "video",
       assets: brief.deliverableType === "video",
-      ...(brief.attachment?.client ? { client: cleanAttachmentName(brief.attachment.client) } : {}),
-      ...(brief.attachment?.project ? { project: cleanAttachmentName(brief.attachment.project) } : {}),
-      ...(brief.attachment?.campaign ? { campaign: cleanAttachmentName(brief.attachment.campaign) } : {}),
+      ...(brief.attachment?.client ? { client: cleanAttachmentName(brief.attachment.client, "client") } : {}),
+      ...(brief.attachment?.project ? { project: cleanAttachmentName(brief.attachment.project, "project") } : {}),
+      ...(brief.attachment?.campaign ? { campaign: cleanAttachmentName(brief.attachment.campaign, "campaign") } : {}),
     },
   };
 }
