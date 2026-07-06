@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { fetchMissionPdf } from "../../api";
 import { useI18n } from "../../i18n/I18nProvider";
 import { navigate } from "../../shell/router";
@@ -7,6 +8,7 @@ import { missionSession } from "../session/missionSession";
 
 export default function TerminalPanel({ terminal, pointer }: { terminal: Terminal | null; pointer?: FollowPointer | null }) {
   const { t } = useI18n();
+  const [pdfError, setPdfError] = useState(false);
   const kind = terminal?.kind ?? (pointer?.status === "done" ? "done" : pointer?.status === "error" ? "error" : pointer?.status === "cancelled" ? "cancelled" : null);
   const missionId = terminal?.kind === "done" ? terminal.missionId : pointer?.missionId ?? null;
   const resumable = terminal?.kind === "error" ? terminal.resumable : pointer?.resumable;
@@ -18,17 +20,23 @@ export default function TerminalPanel({ terminal, pointer }: { terminal: Termina
   }
   async function downloadPdf() {
     if (!missionId) return;
+    setPdfError(false);
     // Fetch → blob download (mirrors MissionDetail's export): a plain <a href> can't carry the
     // fetch's error handling, and the blob must actually reach the user, not be discarded.
-    const blob = await fetchMissionPdf(missionId);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${missionId}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    try {
+      const blob = await fetchMissionPdf(missionId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${missionId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch {
+      // A 404 / missing [pdf] extra / render error must not fail silently.
+      setPdfError(true);
+    }
   }
   async function resume() {
     if (pointer?.runId) {
@@ -46,6 +54,7 @@ export default function TerminalPanel({ terminal, pointer }: { terminal: Termina
         <button type="button" disabled={!missionId} onClick={openDetails}>{t("missions.terminal.openDetails")}</button>
         <button type="button" disabled={!missionId} onClick={downloadPdf}>{t("missions.terminal.downloadPdf")}</button>
         <button type="button" onClick={() => navigate("#/brief")}>{t("missions.terminal.startAnother")}</button>
+        {pdfError && <p className="error-text" role="alert">{t("missions.terminal.pdfFailed")}</p>}
       </section>
     );
   }

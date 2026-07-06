@@ -36,6 +36,13 @@ describe("TerminalPanel", () => {
     vi.unstubAllGlobals();
   });
 
+  it("surfaces a plain-language failure when the PDF cannot be prepared", async () => {
+    vi.mocked(fetchMissionPdf).mockRejectedValueOnce(new Error("no [pdf] extra"));
+    render(<I18nProvider><TerminalPanel terminal={{ kind: "done", verdict: "PASS", missionId: "m1", path: "x", residualRisk: null }} /></I18nProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Download PDF" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+  });
+
   it("resumes a recoverable pointer and shows a stopped terminal", async () => {
     const resume = vi.spyOn(missionSession, "resume").mockResolvedValueOnce(missionSession.snapshot());
     render(<I18nProvider><TerminalPanel terminal={null} pointer={{ runId: "r1", status: "error", resumable: true, checkpoint: "c", updatedAt: 1 }} /></I18nProvider>);

@@ -38,7 +38,7 @@ describe("DeliverableLibrary", () => {
 
     fireEvent.change(screen.getByLabelText("Search title, client, project, or campaign"), { target: { value: "broken" } });
     expect(screen.getByText("Broken video")).toBeTruthy();
-    fireEvent.change(screen.getByLabelText("All outcomes"), { target: { value: "successful" } });
+    fireEvent.change(screen.getByLabelText("Filter by outcome"), { target: { value: "successful" } });
     expect(screen.getByText("No deliverables match this search.")).toBeTruthy();
     fireEvent.click(screen.getAllByRole("button", { name: "Clear" }).at(-1)!);
     expect(screen.getAllByText("Sponsor deck").length).toBeGreaterThan(0);

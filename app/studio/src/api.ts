@@ -130,8 +130,8 @@ export async function getMission(id: string): Promise<Dossier> {
  * replacing the SPA with raw JSON and, for a still-running mission, aborting its SSE
  * stream (which the server treats as a cancel).
  */
-export async function fetchMissionPdf(id: string): Promise<Blob> {
-  const res = await fetch(`/api/mission/${encodeURIComponent(id)}/pdf`);
+export async function fetchMissionPdf(id: string, signal?: AbortSignal): Promise<Blob> {
+  const res = await fetch(`/api/mission/${encodeURIComponent(id)}/pdf`, { signal });
   if (!res.ok) throw new Error(await errorText(res, "GET /api/mission/pdf"));
   return res.blob();
 }

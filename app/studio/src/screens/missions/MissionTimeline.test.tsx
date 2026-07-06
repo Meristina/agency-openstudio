@@ -35,6 +35,12 @@ function renderTimeline() {
 }
 
 describe("MissionTimeline", () => {
+  it("shows the stopped panel for a cancelled run after reload, not the empty state", () => {
+    record({ runId: "r1", status: "cancelled", missionId: "m1" });
+    renderTimeline();
+    expect(screen.getByRole("heading", { name: "Production stopped" })).toBeTruthy();
+  });
+
   it("renders an empty state when nothing is active", () => {
     renderTimeline();
     expect(screen.getByRole("heading", { name: "Mission timeline" })).toBeTruthy();

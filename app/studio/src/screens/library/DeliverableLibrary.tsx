@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import MissionDetail from "../../components/MissionDetail";
 import { getMission, listMissions } from "../../api";
 import { useI18n } from "../../i18n/I18nProvider";
@@ -29,6 +29,8 @@ export default function DeliverableLibrary({ search = "" }: { search?: string })
   const [error, setError] = useState(false);
   const [openDossier, setOpenDossier] = useState<Dossier | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [openError, setOpenError] = useState(false);
+  const handledDeepLink = useRef<string | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [loadingPreviewId, setLoadingPreviewId] = useState<string | null>(null);
   const [previews, setPreviews] = useState<Record<string, DeliverablePreview>>({});
@@ -54,11 +56,20 @@ export default function DeliverableLibrary({ search = "" }: { search?: string })
 
   async function open(id: string) {
     setDetailLoading(true);
+    setOpenError(false);
     try {
       setOpenDossier(await getMission(id));
+    } catch {
+      // Opening the full detail failed — surface it instead of a silent no-op.
+      setOpenError(true);
     } finally {
       setDetailLoading(false);
     }
+  }
+
+  function closeDetail() {
+    setOpenDossier(null);
+    setOpenError(false);
   }
 
   async function preview(id: string) {
@@ -82,7 +93,12 @@ export default function DeliverableLibrary({ search = "" }: { search?: string })
 
   useEffect(() => {
     const id = new URLSearchParams(search).get("deliverable");
-    if (!id || loading || !visibleMissions.some((m) => m.mission_id === id)) return;
+    // Consume a given deep-link id at most once: without this guard the effect
+    // re-fires whenever `visibleMissions` is recreated (e.g. any filing action),
+    // re-fetching and flickering the already-open detail. A new id still opens.
+    if (!id || loading || handledDeepLink.current === id) return;
+    if (!visibleMissions.some((m) => m.mission_id === id)) return;
+    handledDeepLink.current = id;
     void open(id);
   }, [search, loading, visibleMissions]);
 
@@ -122,7 +138,7 @@ export default function DeliverableLibrary({ search = "" }: { search?: string })
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
-            <select aria-label={t("library.outcomeFilter.all")} value={outcomeFilter} onChange={(event) => setOutcomeFilter(event.target.value as OutcomeFilter)}>
+            <select aria-label={t("library.outcomeFilter.label")} value={outcomeFilter} onChange={(event) => setOutcomeFilter(event.target.value as OutcomeFilter)}>
               <option value="all">{t("library.outcomeFilter.all")}</option>
               <option value="successful">{t("library.outcomeFilter.successful")}</option>
               <option value="needs-attention">{t("library.outcomeFilter.needsAttention")}</option>
@@ -155,7 +171,12 @@ export default function DeliverableLibrary({ search = "" }: { search?: string })
               onFiled={onFiled}
             />
           )}
-          {(openDossier || detailLoading) && <MissionDetail dossier={openDossier} loading={detailLoading} />}
+          {(openDossier || detailLoading || openError) && (
+            <div className="library-detail">
+              <button type="button" className="ghost" onClick={closeDetail}>{t("library.detail.close")}</button>
+              {openError ? <ErrorState message={t("library.detail.error")} /> : <MissionDetail dossier={openDossier} loading={detailLoading} />}
+            </div>
+          )}
         </>
       )}
     </section>

@@ -23,8 +23,12 @@ export default function DeliverableActions({
   async function download() {
     setBusy(true);
     setError(false);
+    // Bound the request so a wedged connection can't leave the button disabled
+    // forever with no retry path; abort after 30s and surface the failure.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000);
     try {
-      const blob = await fetchMissionPdf(deliverable.id);
+      const blob = await fetchMissionPdf(deliverable.id, controller.signal);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -36,6 +40,7 @@ export default function DeliverableActions({
     } catch {
       setError(true);
     } finally {
+      clearTimeout(timer);
       setBusy(false);
     }
   }

@@ -17,7 +17,12 @@ function valid(value: unknown): value is FollowPointer {
 
 export function record(pointer: Omit<FollowPointer, "updatedAt">): FollowPointer {
   const next = { ...pointer, updatedAt: Date.now() };
-  localStorage.setItem(FOLLOW_POINTER_KEY, JSON.stringify(next));
+  try {
+    localStorage.setItem(FOLLOW_POINTER_KEY, JSON.stringify(next));
+  } catch {
+    // storage unavailable/full (quota, Safari private mode) — persistence is
+    // best-effort, matching read()'s tolerance; never break the mission flow.
+  }
   return next;
 }
 

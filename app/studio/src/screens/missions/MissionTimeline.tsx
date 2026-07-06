@@ -42,7 +42,7 @@ export default function MissionTimeline() {
   if (session.status === "launching") return <Loading />;
 
   if (session.status === "idle") {
-    if (pointer?.status === "done" || (pointer?.status === "error" && pointer.resumable)) {
+    if (pointer?.status === "done" || pointer?.status === "cancelled" || (pointer?.status === "error" && pointer.resumable)) {
       return (
         <section className="mission-screen">
           <TerminalPanel terminal={null} pointer={pointer} />

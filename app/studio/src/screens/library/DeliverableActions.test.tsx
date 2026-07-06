@@ -34,7 +34,7 @@ describe("DeliverableActions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open full detail" }));
     expect(onOpen).toHaveBeenCalledWith("d1");
     fireEvent.click(screen.getByRole("button", { name: "Download PDF" }));
-    await waitFor(() => expect(fetchMissionPdf).toHaveBeenCalledWith("d1"));
+    await waitFor(() => expect(fetchMissionPdf).toHaveBeenCalledWith("d1", expect.any(AbortSignal)));
     expect(screen.queryByRole("button", { name: /delete|remove/i })).toBeFalsy();
   });
 

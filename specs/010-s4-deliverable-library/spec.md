@@ -25,7 +25,10 @@ Mission Timeline points at on a successful finish.
 It builds on the Brick 7 umbrella foundation (shell, persistent navigation, the shell's
 client-context selector, EN/FR i18n, design system, shared loading/empty/error states),
 on the Brick 6 client/project/campaign taxonomy, and on the existing local mission store
-and its saved dossiers — which S4 only **reads and organizes**, never alters (umbrella
+and its saved dossiers. S4 treats **dossier content as strictly read-only** — it never
+changes what a production produced, how or where it is persisted, or its shape — and the
+**only** mutation it performs is **taxonomy placement** (attach/move/return-to-unassigned),
+through the pre-existing assign path (FR-009/FR-010); it adds no other write (umbrella
 FR-016; Constitution Principles III, V, X). The finished-deliverable listing, the
 per-client/project/campaign grouping, the saved dossier detail view, its PDF, and the
 attach/move-within-taxonomy capability all already exist as building blocks; S4 is the
