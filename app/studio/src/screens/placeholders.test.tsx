@@ -15,6 +15,7 @@ describe("placeholders", () => {
     const placeholders = routes.filter((route) => route.status === "placeholder");
     expect(placeholders.map((route) => route.id)).not.toContain("brief");
     expect(placeholders.map((route) => route.id)).not.toContain("import");
+    expect(placeholders.map((route) => route.id)).toEqual(["settings"]);
     for (const route of placeholders) {
       cleanup();
       render(<I18nProvider><PlaceholderScreen id={route.id} /></I18nProvider>);

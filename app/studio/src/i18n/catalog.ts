@@ -55,7 +55,10 @@ export type CatalogKey =
   | "import.associate.attach" | "import.associate.move" | "import.associate.unassign" | "import.associate.success" | "import.associate.failed"
   | "import.remove.confirm" | "import.remove.success" | "import.remove.failed"
   | "import.brief.useMaterialLabel" | "import.brief.willUseSummary" | "import.brief.startWithMaterial"
-  | "export.comingSoon.title" | "export.comingSoon.body"
+  | "export.title" | "export.subtitle" | "export.deliverables" | "export.empty.title" | "export.empty.body" | "export.empty.cta" | "export.empty.context.title" | "export.connectionLost"
+  | "export.format.document" | "export.format.mediaPack" | "export.format.fullBundle"
+  | "export.contents.document" | "export.contents.mediaPack" | "export.contents.fullBundle"
+  | "export.produce" | "export.progress" | "export.ready" | "export.failed" | "export.capabilityAbsent" | "export.noMedia" | "export.onlyFinished" | "export.mediaPruned"
   | "settings.comingSoon.title" | "settings.comingSoon.body";
 
 export const PREFS_KEY = "agency-studio.prefs";

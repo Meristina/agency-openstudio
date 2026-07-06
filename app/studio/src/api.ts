@@ -136,6 +136,18 @@ export async function fetchMissionPdf(id: string, signal?: AbortSignal): Promise
   return res.blob();
 }
 
+export async function fetchMissionMediaZip(id: string, signal?: AbortSignal): Promise<Blob> {
+  const res = await fetch(`/api/mission/${encodeURIComponent(id)}/media.zip`, { signal });
+  if (!res.ok) throw new Error(await errorText(res, "GET /api/mission/media.zip"));
+  return res.blob();
+}
+
+export async function fetchMissionBundle(id: string, signal?: AbortSignal): Promise<Blob> {
+  const res = await fetch(`/api/mission/${encodeURIComponent(id)}/bundle.zip`, { signal });
+  if (!res.ok) throw new Error(await errorText(res, "GET /api/mission/bundle.zip"));
+  return res.blob();
+}
+
 /**
  * Cancel an in-flight mission by its run id (the `run` SSE frame). Sets the run's
  * cancel flag server-side, which kills the in-flight engine subprocess before any
