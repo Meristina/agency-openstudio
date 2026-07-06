@@ -3,7 +3,6 @@ import { ComingSoon } from "../ui/states";
 import type { RouteId } from "../shell/router";
 
 const copy: Partial<Record<RouteId, { titleKey: CatalogKey; bodyKey: CatalogKey }>> = {
-  brief: { titleKey: "brief.comingSoon.title", bodyKey: "brief.comingSoon.body" },
   missions: { titleKey: "missions.comingSoon.title", bodyKey: "missions.comingSoon.body" },
   library: { titleKey: "library.comingSoon.title", bodyKey: "library.comingSoon.body" },
   import: { titleKey: "import.comingSoon.title", bodyKey: "import.comingSoon.body" },
