@@ -8,6 +8,7 @@ import Home from "../screens/Home";
 import Console from "../screens/Console";
 import Models from "../screens/Models";
 import GuidedBrief from "../screens/brief/GuidedBrief";
+import DeliverableLibrary from "../screens/library/DeliverableLibrary";
 import MissionTimeline from "../screens/missions/MissionTimeline";
 import { PlaceholderScreen } from "../screens/placeholders";
 import { NotFound } from "../ui/states";
@@ -21,6 +22,7 @@ function Outlet() {
   if (match.route.id === "home") return <Home />;
   if (match.route.id === "brief") return <GuidedBrief search={match.search} />;
   if (match.route.id === "missions") return <MissionTimeline />;
+  if (match.route.id === "library") return <DeliverableLibrary search={match.search} />;
   if (match.route.id === "console") return <Console />;
   if (match.route.id === "models") return <Models />;
   return (
