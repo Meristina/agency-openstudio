@@ -9,6 +9,7 @@ import Console from "../screens/Console";
 import Models from "../screens/Models";
 import SettingsScreen from "../screens/settings/SettingsScreen";
 import GuidedBrief from "../screens/brief/GuidedBrief";
+import RecipeCatalog from "../screens/recipes/RecipeCatalog";
 import Import from "../screens/import/Import";
 import Export from "../screens/export/Export";
 import DeliverableLibrary from "../screens/library/DeliverableLibrary";
@@ -24,6 +25,7 @@ function Outlet() {
   if (match.notFound || !match.route) return <NotFound />;
   if (match.route.id === "home") return <Home />;
   if (match.route.id === "brief") return <GuidedBrief search={match.search} />;
+  if (match.route.id === "recipes") return <RecipeCatalog />;
   if (match.route.id === "missions") return <MissionTimeline />;
   if (match.route.id === "library") return <DeliverableLibrary search={match.search} />;
   if (match.route.id === "import") return <Import />;

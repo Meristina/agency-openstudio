@@ -179,6 +179,21 @@ def _build_props(prompt: str, cuts: "Optional[Sequence[dict]]") -> dict:
     return {"theme": THEME, "cuts": timed, "overlays": [], "captions": [], "audio": {}}
 
 
+def render_composition(prompt: str, out_path: "Path",
+                       should_cancel: "Optional[Callable[[], bool]]" = None) -> None:
+    """Render ONE local composition video (Remotion, subprocess) from ``prompt`` into
+    ``out_path`` — the studio's own module shelling out to ``npx``, never an in-process
+    ``openmontage/`` import (Principle V). A thin, explicit public wrapper over the
+    probe→load→run triple so callers outside the seedance dispatch (e.g. a deliverable recipe's
+    compose stage) get a **guaranteed-local, zero-key** render without resolving the possibly-
+    cloud default video backend. Raises :class:`OpenMontageUnavailable` when the local
+    prerequisites (Node/npx, the ``openmontage/`` subtree, an ``npm install``) are absent — the
+    caller degrades honestly (never a fabricated video)."""
+    _probe_local(None)
+    backend = _load_local(None)
+    _run_local(backend, None, prompt=prompt, out_path=out_path, should_cancel=should_cancel)
+
+
 def _run_local(backend, entry, *, prompt: str, out_path: Path,
                should_cancel: "Optional[Callable[[], bool]]" = None,
                cuts: "Optional[Sequence[dict]]" = None) -> None:

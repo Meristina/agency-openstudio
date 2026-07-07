@@ -50,7 +50,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       writePrefs({ locale: next });
     },
     t(key, params) {
-      const template = catalogs[locale][key] || en[key];
+      const template = catalogs[locale][key] || en[key] || key;
       return Object.entries(params ?? {}).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, String(value)), template);
     },
   }), [locale]);

@@ -161,4 +161,4 @@ testpaths = ["tests"]
 [tool.setuptools]
 # Wave 0 shipped the thin local server package; Wave 2 adds the engines subpackage
 # (local multimodal inference). The React GUI lives in app/studio/.
-packages = ["agency_studio", "agency_studio.engines"]
+packages = ["agency_studio", "agency_studio.engines", "agency_studio.recipes"]

@@ -847,6 +847,8 @@ class StudioHandler(BaseHTTPRequestHandler):
         self._safe_dispatch(self._route_get)
 
     def _route_get(self, path: str) -> None:
+        if path == "/api/recipes":
+            return self._handle_list_recipes()
         if path == "/api/missions":
             return self._handle_list_missions()
         if path == "/api/taxonomy":
@@ -888,6 +890,11 @@ class StudioHandler(BaseHTTPRequestHandler):
         self._safe_dispatch(self._route_post)
 
     def _route_post(self, path: str) -> None:
+        if path == "/api/recipe":
+            return self._handle_run_recipe()
+        if path.startswith("/api/recipe/") and path.endswith("/cancel"):
+            run_id = path[len("/api/recipe/"):-len("/cancel")]
+            return self._handle_cancel_mission(run_id)
         if path == "/api/mission":
             return self._handle_run_mission()
         if path == "/api/image":
@@ -912,6 +919,82 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_assign_mission(mission_id)
         # Unknown POST: the body is never read, so close to avoid a keep-alive desync.
         self._reject(404, "not found")
+
+    def _handle_list_recipes(self) -> None:
+        from agency_studio.recipes.registry import RECIPES, serialize_recipe
+        self._send_json({"recipes": [serialize_recipe(r) for r in RECIPES.values()]})
+
+    def _handle_run_recipe(self) -> None:
+        payload = self._read_json_body()
+        if payload is None:
+            return
+        recipe_id = _str_field(payload, "recipe_id")
+        subject = _str_field(payload, "subject") or _str_field(payload.get("inputs") or {}, "subject")
+        if not recipe_id:
+            return self._send_error_json(400, "missing 'recipe_id'")
+        if not subject:
+            return self._send_error_json(400, "missing 'subject'")
+        # Keys are env-only: reject any secret-looking field anywhere in the body — including the
+        # nested `inputs` container that `subject` is legitimately read from (a top-level-only
+        # scan would let `inputs.api_key` slip through).
+        def _looks_like_secret(k: str) -> bool:
+            k = k.lower()
+            return k in {"key", "api_key", "token", "secret"} or k.endswith("_key")
+        if any(_looks_like_secret(k) for k in (*payload, *(payload.get("inputs") or {}))):
+            return self._send_error_json(400, "keys must be provided through environment variables")
+        cloud_optins = payload.get("cloud_optins") or []
+        if not isinstance(cloud_optins, list) or not all(isinstance(x, str) for x in cloud_optins):
+            return self._send_error_json(400, "cloud_optins must be a list of stage ids")
+        from agency_studio.recipes.registry import RECIPES
+        recipe = RECIPES.get(recipe_id)
+        if recipe is None:
+            return self._send_error_json(404, "unknown recipe")
+        # Constitution II: a recipe whose mission stage runs a production mission must clear the
+        # SAME validated-engine gate as POST /api/mission — the recipe path is never a bypass.
+        if any(s.kind == "mission" for s in recipe.stages):
+            from agency_studio.recipes.orchestrator import ENGINE as _RECIPE_ENGINE
+            try:
+                from agency_cli.engines.cli_engine import ensure_production_engine, EngineNotValidated
+            except ImportError:
+                ensure_production_engine = EngineNotValidated = None
+            if ensure_production_engine is not None:
+                try:
+                    ensure_production_engine(_RECIPE_ENGINE)
+                except EngineNotValidated as exc:  # match _handle_run_mission's status mapping
+                    return self._send_error_json(422, str(exc))
+                except ValueError as exc:
+                    return self._send_error_json(400, str(exc))
+        for stage in recipe.stages:
+            if stage.tier == "cloud" and stage.kind not in cloud_optins:
+                return self._send_error_json(501, f"{stage.kind} needs explicit cloud opt-in")
+        server = self.server  # type: ignore[attr-defined]
+        run_id = uuid.uuid4().hex
+        cancel_event = threading.Event()
+        explicit_cancel = threading.Event()
+        # Single active run: check-and-register atomically under one lock (no TOCTOU window
+        # between the emptiness check and registration).
+        with server.runs_lock:
+            if server.runs:
+                active = next(iter(server.runs))
+                return self._send_json({"error": "a run is already active", "run_id": active}, status=409)
+            server.runs[run_id] = {"cancel": cancel_event, "explicit": explicit_cancel}
+        self._begin_sse()
+        result_box: dict = {}
+        try:
+            from agency_studio.recipes import orchestrator
+            from agency_studio.recipes.stages import RecipeStageUnavailable
+            result_box = orchestrator.run(
+                self, recipe, run_id=run_id, subject=subject,
+                cloud_optins=set(cloud_optins), cancel_event=cancel_event,
+                explicit_cancel=explicit_cancel,
+            )
+        except RecipeStageUnavailable as exc:  # e.g. a not-yet-wired production pipeline
+            result_box = {"error": str(exc)}
+        except Exception as exc:  # never crash mid-stream — surface an honest error frame
+            result_box = {"error": str(exc)}
+        finally:
+            self._unregister_run(run_id)
+        self._send_terminal_frame(result_box)
 
     def do_PUT(self) -> None:  # noqa: N802
         if not self._host_allowed():

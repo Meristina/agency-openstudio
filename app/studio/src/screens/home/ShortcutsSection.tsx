@@ -4,6 +4,7 @@ import { navigate } from "../../shell/router";
 export default function ShortcutsSection() {
   const { t } = useI18n();
   const shortcuts = [
+    ["#/recipes", "home.shortcuts.recipes"],
     ["#/library", "home.shortcuts.library"],
     ["#/import", "home.shortcuts.import"],
     ["#/models", "home.shortcuts.models"],

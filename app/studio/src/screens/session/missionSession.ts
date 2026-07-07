@@ -1,6 +1,7 @@
 import { cancelMission, runMission } from "../../api";
 import type { MissionEvent } from "../../types";
 import type { MissionDraft } from "../brief/composeMission";
+import { startRecipe } from "../recipes/recipesApi";
 
 type State = {
   status: "idle" | "launching" | "running" | "cancelled" | "failed" | "done";
@@ -61,6 +62,36 @@ export const missionSession = {
       }
       publish();
     }
+    return state;
+  },
+  async launchRecipe(recipeId: string, subject: string, cloudOptins: string[] = []) {
+    if (state.status === "launching" || state.status === "running") return state;
+    controller = new AbortController();
+    Object.assign(state, { status: "launching", runId: null, events: [], error: null });
+    publish();
+    try {
+      await startRecipe(recipeId, subject, (event) => {
+        state.events.push(event);
+        if (event.phase === "run") {
+          state.runId = event.run_id;
+          state.status = "running";
+        }
+        publish();
+      }, { signal: controller?.signal, cloudOptins });
+      if (state.status !== "idle") state.status = "done";
+    } catch (error) {
+      const current = state.status as State["status"];
+      if (current === "launching" || current === "running") {
+        if ((error as { name?: string } | null)?.name === "AbortError") {
+          state.status = "cancelled";
+          state.error = null;  // a user-initiated cancel is not an error (matches launch())
+        } else {
+          state.status = "failed";
+          state.error = error instanceof Error ? error.message : "Launch failed";
+        }
+      }
+    }
+    publish();
     return state;
   },
   async resume(runId: string) {

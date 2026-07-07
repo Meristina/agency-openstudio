@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { CatalogKey } from "../i18n/catalog";
 
-export type RouteId = "home" | "brief" | "missions" | "library" | "import" | "export" | "models" | "settings" | "console";
+export type RouteId = "home" | "brief" | "recipes" | "missions" | "library" | "import" | "export" | "models" | "settings" | "console";
 
 export interface Route {
   id: RouteId;
@@ -14,6 +14,7 @@ export interface Route {
 export const routes: Route[] = [
   { id: "home", hash: "#/", titleKey: "nav.home", status: "shipped", taxonomyScoped: false },
   { id: "brief", hash: "#/brief", titleKey: "nav.brief", status: "shipped", taxonomyScoped: false },
+  { id: "recipes", hash: "#/recipes", titleKey: "nav.recipes", status: "shipped", taxonomyScoped: false },
   { id: "missions", hash: "#/missions", titleKey: "nav.missions", status: "shipped", taxonomyScoped: true },
   { id: "library", hash: "#/library", titleKey: "nav.library", status: "shipped", taxonomyScoped: true },
   { id: "import", hash: "#/import", titleKey: "nav.import", status: "shipped", taxonomyScoped: true },
