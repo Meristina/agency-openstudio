@@ -119,9 +119,19 @@ runtime or an honest agent failure degrades to a clean error frame — never a f
 video or verdict (Principle III). Not validatable offline by nature (needs Node + skills +
 tools + a validated CLI engine), so only the subprocess spawn is the monkeypatched boundary.
 Runner is documented **trusted-operator-only** (127.0.0.1 single-operator studio); a hard
-OS/container sandbox for untrusted input is the next security step. **Still deferred**
-(tracked in #21): per-stage resume beyond the mission checkpoint, the Guided-Brief
-deliverable-type entry, and the remaining frontend tests.
+OS/container sandbox for untrusted input is the next security step.
+
+**Per-stage resume landed** (`#23`, issue #21 · T043/T044/T039): a recipe that fails at a
+**post-mission** stage now snapshots a recipe checkpoint (`completed_stages` + replayable
+`outputs`, reusing the mission checkpoint seam, distinguished by `kind`) and offers a
+resume that **replays the completed mission** — reloading its dossier, never re-running the
+veto-gated mission — and restarts at the failed stage. `POST /api/recipe` accepts
+`resume_from`; the mission listing/resume paths skip recipe checkpoints so the two resume
+lanes stay isolated. Additive: without `resume_from`, behavior is byte-identical.
+
+**Still deferred** (tracked in #21): the Guided-Brief deliverable-type entry (rest of
+T030) and the remaining frontend tests (T019/T032/T037/T045, incl. the recipe resume
+affordance wiring in `RecipeLaunch`).
 
 ## Brick 9 — Real multi-CLI
 
