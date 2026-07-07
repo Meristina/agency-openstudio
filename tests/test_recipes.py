@@ -235,7 +235,10 @@ def test_om_bridge_fallback_ignores_symlink_escape(tmp_path):
     work.mkdir()
     outside = tmp_path / "real.mp4"
     outside.write_bytes(b"\x00\x00\x00\x18ftypmp42")
-    (work / "link.mp4").symlink_to(outside)
+    try:
+        (work / "link.mp4").symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not creatable on this platform/privilege level")
     with pytest.raises(RuntimeError, match="without producing a video"):
         om_bridge._resolve_artifact("", work)
 
