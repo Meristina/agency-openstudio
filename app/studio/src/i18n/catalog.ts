@@ -32,7 +32,7 @@ export type KnownCatalogKey =
   | "brief.capability.video" | "brief.capability.videoLocal" | "brief.capability.videoPaid" | "brief.capability.blocked" | "brief.capability.unavailable" | "brief.capability.openModels" | "brief.capability.ackPaid"
   | "brief.draft.title" | "brief.draft.resume" | "brief.draft.discard"
   | "brief.question.researchAudience" | "brief.question.researchObjective" | "brief.question.strategyAudience" | "brief.question.strategyGoal" | "brief.question.videoAudience" | "brief.question.videoMessage"
-  | "brief.choice.research" | "brief.choice.strategy" | "brief.choice.video"
+  | "brief.choice.research" | "brief.choice.strategy" | "brief.choice.video" | "brief.choice.recipe"
   | "brief.sector.general" | "brief.sector.food" | "brief.sector.sport" | "brief.sector.events" | "brief.sector.other"
   | "brief.validation.required" | "brief.validation.tooLong" | "brief.validation.clientName" | "brief.error.launch" | "brief.state.launched"
   | "brief.comingSoon.title" | "brief.comingSoon.body"

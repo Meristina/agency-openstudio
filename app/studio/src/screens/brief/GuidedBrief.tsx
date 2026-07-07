@@ -7,7 +7,8 @@ import Review from "./Review";
 import { discardBriefDraft, loadBriefDraft, saveBriefDraft } from "./briefDraft";
 import { composeMission } from "./composeMission";
 import { missionSession } from "../session/missionSession";
-import { questionSets, type Answer, type Brief, type DeliverableType, type Question } from "./questionSets";
+import { navigate } from "../../shell/router";
+import { isDeliverableType, questionSets, RECIPE_DELIVERABLE, type Answer, type Brief, type Question } from "./questionSets";
 
 type GuidedBriefState = "resumePrompt" | "flow" | "review" | "launching" | "launched" | "failed";
 
@@ -39,7 +40,9 @@ export default function GuidedBrief({ search = "" }: { search?: string }) {
   // and make "discard" immediately recreate what it just removed (FR-021).
   const [dirty, setDirty] = useState(false);
   const [session, setSession] = useState(missionSession.snapshot());
-  const activeType = (answers.deliverableType as DeliverableType) || "research";
+  // "recipe" is a hand-off choice, not a mission question set — guard so it never indexes
+  // questionSets (the flow intercepts it in next() and routes to the recipe catalog instead).
+  const activeType = isDeliverableType(answers.deliverableType) ? answers.deliverableType : "research";
   const questions = questionSets[activeType].questions.filter((question) => !question.relevant || question.relevant({ answers, deliverableType: activeType }));
   const question = questions[stepIndex];
   const contextAttachment: Answer | undefined = clientContext.client ? {
@@ -103,6 +106,13 @@ export default function GuidedBrief({ search = "" }: { search?: string }) {
 
   function next() {
     if (!question) return;
+    // Picking "recipe" hands off to the recipe catalog (one entry point, FR-002) rather than
+    // composing a mission — leave no phantom mission draft behind on the way out.
+    if (question.id === "deliverableType" && answers.deliverableType === RECIPE_DELIVERABLE) {
+      discardBriefDraft();
+      navigate("#/recipes");
+      return;
+    }
     const nextValue = answers[question.id] ?? fallbackFor(question);
     if ((nextValue === undefined || nextValue === "") && !question.skippable) {
       setError(t("brief.validation.required"));
