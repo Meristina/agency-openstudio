@@ -107,10 +107,21 @@ composition video (`openmontage_backend`, subprocess) plus a bundle, in one run.
 production pipelines are exposed in the catalog (EN/FR), launchable, and degrade to an
 honest 501 when their runtime is absent. Local-first with explicit cloud opt-in (keys
 env-only), single active run, cancel/kill-tree; inspector veto byte-identical; offline
-tests green. **Deferred follow-up** (tracked): the full agentic OpenMontage pipeline
-runner (the "A2" work — real per-pipeline execution via a CLI-agent subprocess, not
-validatable offline), per-stage resume beyond the mission checkpoint, and the
-Guided-Brief deliverable-type entry.
+tests green.
+
+**Follow-up landed** (`#22`, issue #21 · T025/T026): the production-pipeline **agentic
+runner** (the "A2" work) is now wired — a production recipe drives its OpenMontage
+pipeline's `executive-producer` skill via a CLI-agent **subprocess** in `openmontage/`
+(cwd = subtree, no in-process import), with kill-tree cancel, a manifest-derived hard
+timeout, `OM_ARTIFACT` sentinel parsing, atomic + symlink-safe output, and a lightweight
+deliverable record in the store (retrievable via library/export, FR-018/FR-019). An absent
+runtime or an honest agent failure degrades to a clean error frame — never a fabricated
+video or verdict (Principle III). Not validatable offline by nature (needs Node + skills +
+tools + a validated CLI engine), so only the subprocess spawn is the monkeypatched boundary.
+Runner is documented **trusted-operator-only** (127.0.0.1 single-operator studio); a hard
+OS/container sandbox for untrusted input is the next security step. **Still deferred**
+(tracked in #21): per-stage resume beyond the mission checkpoint, the Guided-Brief
+deliverable-type entry, and the remaining frontend tests.
 
 ## Brick 9 — Real multi-CLI
 
