@@ -4,7 +4,7 @@ import { ClientContextProvider, ClientContextSelector, useClientContext } from "
 import LanguageSwitch from "./LanguageSwitch";
 import Nav from "./Nav";
 import { useRoute } from "./router";
-import Home from "../screens/Home";
+import Home from "../screens/home/Home";
 import Console from "../screens/Console";
 import Models from "../screens/Models";
 import SettingsScreen from "../screens/settings/SettingsScreen";

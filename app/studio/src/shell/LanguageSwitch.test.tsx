@@ -5,6 +5,7 @@ import Shell from "./Shell";
 
 vi.mock("../api", () => ({
   fetchTaxonomy: vi.fn().mockResolvedValue({ clients: [] }),
+  listMissions: vi.fn().mockResolvedValue([]),
   fetchCapabilities: vi.fn().mockResolvedValue({ families: [], generated_at: "now" }),
   selectCapability: vi.fn(),
   clearCapability: vi.fn(),

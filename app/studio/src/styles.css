@@ -84,6 +84,8 @@ body {
 
 .home-screen {
   max-width: 760px;
+  display: grid;
+  gap: 1rem;
 }
 
 .home-screen h1,
@@ -93,6 +95,55 @@ body {
   color: var(--studio-text);
   font-size: var(--studio-font-xl);
   letter-spacing: 0;
+}
+
+.home-screen h2 {
+  margin: 0 0 0.65rem;
+  font-size: var(--studio-font-lg);
+  letter-spacing: 0;
+}
+
+.home-screen h3 {
+  margin: 0.85rem 0 0.45rem;
+  font-size: var(--studio-font-md);
+  letter-spacing: 0;
+}
+
+.home-panel,
+.home-context {
+  border: 1px solid var(--studio-border);
+  border-radius: var(--studio-radius);
+  padding: 1rem;
+  background: #fff;
+}
+
+.home-recent-list {
+  list-style: none;
+  display: grid;
+  gap: 0.5rem;
+  padding: 0;
+  margin: 0 0 0.65rem;
+}
+
+.home-recent-list button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  text-align: left;
+}
+
+.home-recent-list small,
+.home-context span {
+  color: var(--studio-muted);
+}
+
+.home-shortcuts,
+.home-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
 }
 
 .intent-form,
