@@ -36,17 +36,16 @@ export async function listRecipes(): Promise<Recipe[]> {
   return data.recipes ?? [];
 }
 
-export async function startRecipe(
-  recipeId: string,
-  subject: string,
+async function streamRecipe(
+  body: Record<string, unknown>,
   onEvent: (event: MissionEvent) => void,
-  opts: { signal?: AbortSignal; cloudOptins?: string[] } = {},
+  signal?: AbortSignal,
 ): Promise<void> {
   const res = await fetch("/api/recipe", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ recipe_id: recipeId, subject, inputs: { subject }, cloud_optins: opts.cloudOptins ?? [] }),
-    signal: opts.signal,
+    body: JSON.stringify(body),
+    signal,
   });
   if (!res.ok) throw new Error(await errorText(res));
   if (!res.body) throw new Error("POST /api/recipe failed");
@@ -66,6 +65,27 @@ export async function startRecipe(
   }
   const tail = parseFrame(buffer);
   if (tail) onEvent(tail);
+}
+
+export async function startRecipe(
+  recipeId: string,
+  subject: string,
+  onEvent: (event: MissionEvent) => void,
+  opts: { signal?: AbortSignal; cloudOptins?: string[] } = {},
+): Promise<void> {
+  return streamRecipe(
+    { recipe_id: recipeId, subject, inputs: { subject }, cloud_optins: opts.cloudOptins ?? [] },
+    onEvent, opts.signal);
+}
+
+export async function resumeRecipe(
+  runId: string,
+  onEvent: (event: MissionEvent) => void,
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> {
+  // Resume a checkpointed recipe run: the server reconstructs recipe/subject/opt-ins from the
+  // pinned checkpoint (POST /api/recipe {resume_from}); the client need only name the checkpoint.
+  return streamRecipe({ resume_from: runId }, onEvent, opts.signal);
 }
 
 export async function cancelRecipe(runId: string): Promise<boolean> {
