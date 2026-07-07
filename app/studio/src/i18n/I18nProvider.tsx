@@ -35,7 +35,7 @@ export function writePrefs(next: UserPrefs): void {
   localStorage.setItem(PREFS_KEY, JSON.stringify({ ...readPrefs(), ...next }));
 }
 
-function defaultLocale(): Locale {
+export function defaultLocale(): Locale {
   const saved = readPrefs().locale;
   if (saved === "en" || saved === "fr") return saved;
   return navigator.language.toLowerCase().startsWith("fr") ? "fr" : "en";

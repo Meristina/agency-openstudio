@@ -13,6 +13,7 @@ import type {
   MissionSummary,
   ModelsStatus,
   SpeechResult,
+  SystemInfo,
   Attribution,
   TaxonomyTree,
   VisualMeta,
@@ -288,6 +289,13 @@ export async function fetchCapabilities(refresh = false): Promise<CapabilityInve
   const res = await fetch(`/api/capabilities${refresh ? "?refresh=1" : ""}`);
   if (!res.ok) throw new Error(await errorText(res, "GET /api/capabilities"));
   return (await res.json()) as CapabilityInventory;
+}
+
+export async function getSystemInfo(): Promise<SystemInfo> {
+  const res = await fetch("/api/system");
+  if (!res.ok) throw new Error(await errorText(res, "GET /api/system"));
+  const data = (await res.json()) as { version: string; data_dir: string };
+  return { version: data.version, dataDir: data.data_dir };
 }
 
 export async function selectCapability(family: Family, id: string): Promise<CapabilityFamilyView> {

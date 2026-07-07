@@ -39,6 +39,8 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional
 from urllib.parse import parse_qs, urlparse
 
+from agency_studio import __version__
+
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
@@ -851,6 +853,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_taxonomy()
         if path == "/api/models":
             return self._handle_models_status()
+        if path == "/api/system":
+            return self._handle_system()
         if path == "/api/capabilities":
             return self._handle_capabilities()
         if path == "/api/docs":
@@ -1792,6 +1796,10 @@ class StudioHandler(BaseHTTPRequestHandler):
         from agency_studio import capabilities
         refresh = parse_qs(urlparse(self.path).query).get("refresh", ["0"])[0] in ("1", "true", "yes")
         self._send_json(capabilities.inventory(refresh=refresh))
+
+    def _handle_system(self) -> None:
+        from agency_studio import rag
+        self._send_json({"version": __version__, "data_dir": str(rag.data_dir())})
 
     def _handle_select_capability(self) -> None:
         payload = self._read_json_body()

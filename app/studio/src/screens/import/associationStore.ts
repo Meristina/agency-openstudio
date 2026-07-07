@@ -1,11 +1,11 @@
 import { PREFS_KEY } from "../../i18n/catalog";
 import type { AssociationMap, ClientAssociation } from "./importModel";
 
-const KEY = `${PREFS_KEY}.importAssociations`;
+export const ASSOCIATION_KEY = `${PREFS_KEY}.importAssociations`;
 
 function read(): AssociationMap {
   try {
-    const parsed = JSON.parse(localStorage.getItem(KEY) || "{}") as unknown;
+    const parsed = JSON.parse(localStorage.getItem(ASSOCIATION_KEY) || "{}") as unknown;
     return parsed && typeof parsed === "object" ? parsed as AssociationMap : {};
   } catch {
     return {};
@@ -14,7 +14,7 @@ function read(): AssociationMap {
 
 function write(map: AssociationMap): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(map));
+    localStorage.setItem(ASSOCIATION_KEY, JSON.stringify(map));
   } catch {
     // localStorage may be disabled; the import view simply behaves as unassigned.
   }
