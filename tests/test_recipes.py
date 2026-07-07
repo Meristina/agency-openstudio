@@ -31,6 +31,50 @@ def test_registry_has_composed_and_production_recipes():
     assert serialize_recipe(RECIPES["full-campaign"])["stages"][0]["kind"] == "mission"
 
 
+def test_full_campaign_produces_video_and_attaches_it(monkeypatch, tmp_path):
+    # The real done-when: one run yields a dossier AND a locally-composed video attached to it.
+    # Boundaries monkeypatched (runner_bridge.run, the Remotion render) — no CLI, no Node, no GPU.
+    from agency_kit import store
+    from agency_studio import openmontage_backend as omb
+
+    def fake_run(**kwargs):
+        mid = store.new_mission_id("launch coffee")
+        dossier = {
+            "mission_id": mid, "goal": "launch coffee",
+            "project_root": store.canonical_project_root(str(tmp_path)),
+            "route": ["marketing"], "delivered": "# Strategy\n\nLaunch it.",
+            "assets": [], "verdicts": [{"verdict": "PASS"}],
+        }
+        path = store.save(dossier)
+        kwargs["on_event"]({"phase": "route", "status": "done", "route": ["marketing"]})
+        return runner_bridge.MissionResult(path=path, dossier=dossier)
+
+    def fake_render(prompt, out_path, should_cancel=None):
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(b"\x00\x00\x00\x18ftypmp42")  # a stand-in mp4
+
+    monkeypatch.setattr(runner_bridge, "run", fake_run)
+    monkeypatch.setattr(omb, "render_composition", fake_render)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        body = json.dumps({"recipe_id": "full-campaign", "subject": "launch coffee"})
+        conn.request("POST", "/api/recipe", body=body, headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        events = _read_sse(resp)
+        assert resp.status == 200
+        # A real compose asset frame (status ok, a video), not a fabricated one.
+        compose = [e for e in events if e.get("stage") == "compose" and e.get("phase") == "asset"]
+        assert compose and compose[0]["status"] == "ok"
+        # The done frame carries the dossier with the video attached.
+        done = events[-1]
+        assert done["phase"] == "done"
+        assert any(a.get("type") == "video" and a.get("status") == "ok" for a in done["assets"])
+    finally:
+        httpd.shutdown()
+
+
 def test_recipe_run_rejects_nested_secret(tmp_path):
     # Keys are env-only: a secret smuggled inside the nested `inputs` container must be rejected
     # too, not just top-level fields (CodeRabbit finding).
@@ -85,6 +129,40 @@ def test_production_recipe_does_not_fabricate(monkeypatch, tmp_path):
         assert resp.status == 200
         assert events[-1]["phase"] == "error"
         assert "not available" in events[-1]["message"]
+    finally:
+        httpd.shutdown()
+
+
+def test_second_run_blocked_while_active(tmp_path):
+    # Single active run (FR-020): a launch while a run is registered is refused with 409.
+    httpd, host, port = _start(tmp_path)
+    try:
+        httpd.runs["active-1"] = {"cancel": threading.Event(), "explicit": threading.Event()}
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/recipe", body=json.dumps({"recipe_id": "full-campaign", "subject": "x"}),
+                     headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        assert resp.status == 409
+        assert json.loads(resp.read())["run_id"] == "active-1"
+    finally:
+        httpd.shutdown()
+
+
+def test_cancel_recipe_run(tmp_path):
+    # Cancel reuses the mission run registry: unknown → 404, active → 202 with the events set
+    # (the orchestrator/mission poll them and kill the whole tree).
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/recipe/nope/cancel", body="", headers={"Content-Length": "0"})
+        assert conn.getresponse().status == 404
+
+        cancel, explicit = threading.Event(), threading.Event()
+        httpd.runs["run-9"] = {"cancel": cancel, "explicit": explicit}
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/recipe/run-9/cancel", body="", headers={"Content-Length": "0"})
+        assert conn.getresponse().status == 202
+        assert cancel.is_set() and explicit.is_set()
     finally:
         httpd.shutdown()
 

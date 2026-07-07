@@ -69,7 +69,7 @@ together from the existing library/export.
 
 ### Tests for User Story 1 (offline — write first, ensure they FAIL) ⚠️
 
-- [ ] T008 [P] [US1] Orchestrator chain test in `tests/test_recipes_orchestrator.py` — `full-campaign` runs mission→compose→export, stream ends `done`, the dossier record carries strategy content AND creatives (monkeypatch `runner_bridge.run` + `openmontage_backend._spawn_render`)
+- [X] T008 [P] [US1] Orchestrator chain test in `tests/test_recipes_orchestrator.py` — `full-campaign` runs mission→compose→export, stream ends `done`, the dossier record carries strategy content AND creatives (monkeypatch `runner_bridge.run` + `openmontage_backend._spawn_render`)
 - [ ] T009 [P] [US1] Veto-parity test in `tests/test_recipes_veto.py` — a mission-stage VETO holds the run identically to a standalone mission; no downstream compose/export runs on unapproved strategy
 - [X] T010 [P] [US1] Run-endpoint test in `tests/test_recipes_endpoint_run.py` — `POST /api/recipe` streams SSE mission-vocabulary frames and a terminal `done` carrying the collected `mission_id`; 400 on a missing required input
 
@@ -77,8 +77,8 @@ together from the existing library/export.
 
 - [X] T011 [US1] Add the `full-campaign` composed recipe definition (orchestrated stages mission→compose→export — image/voice assets are rendered within the mission stage; all `tier=local`, required `subject` input) to `agency_studio/recipes/registry.py`
 - [X] T012 [US1] Implement the `mission` stage driver in `agency_studio/recipes/stages.py` — calls `agency_cli.runner_bridge.run(**run_kwargs)` exactly as `server._handle_run_mission` (**inspector veto + source-verification UNCHANGED**), rendering assets via the existing `asset_clause`/`_build_render_assets` hook; returns dossier id + media
-- [ ] T013 [US1] Implement the `compose` stage driver in `agency_studio/recipes/stages.py` — drives `agency_studio/openmontage_backend.py` across the subprocess boundary to render the campaign composition video onto the dossier
-- [ ] T014 [US1] Implement the `export` stage driver in `agency_studio/recipes/stages.py` — collects the dossier + creatives into one package via the existing `agency_studio/bundler.py` + `agency_kit.store`
+- [X] T013 [US1] Implement the `compose` stage driver in `agency_studio/recipes/stages.py` — drives `agency_studio/openmontage_backend.py` across the subprocess boundary to render the campaign composition video onto the dossier
+- [X] T014 [US1] Implement the `export` stage driver in `agency_studio/recipes/stages.py` — collects the dossier + creatives into one package via the existing `agency_studio/bundler.py` + `agency_kit.store`
 - [X] T015 [US1] Implement the sequential `orchestrator.run()` in `agency_studio/recipes/orchestrator.py` — drive declared stages in order, stream mission-vocabulary SSE per stage, register the run in `server.runs`, and stop honestly on failure/veto preserving completed outputs
 - [X] T016 [US1] Wire `POST /api/recipe` in `agency_studio/server.py` to launch the orchestrator and stream SSE (reuse the mission SSE header + drain loop); reject a missing required input with a localized 400
 - [X] T017 [P] [US1] Implement `startRecipe()` (SSE, mission-stream shape) plus `listRecipes()`/`cancelRecipe()` in `app/studio/src/screens/recipes/recipesApi.ts`
@@ -114,8 +114,8 @@ install hint and other recipes stay usable.
 - [X] T027 [US2] Wire `GET /api/recipes` in `agency_studio/server.py` to serialize the registry (keys only, immediate — no probe on list)
 - [X] T028 [P] [US2] Implement `catalogView()` + Composed/Production grouping in `app/studio/src/screens/recipes/recipesModel.ts` (localized, no raw ids/slugs as operator content)
 - [ ] T029 [US2] Implement `RecipeCatalog.tsx` in `app/studio/src/screens/recipes/` — plain-language rows (name / produces / needs), honest "needs install" note for an unavailable recipe, launch entry into `RecipeLaunch`
-- [ ] T030 [US2] Add the additive "start from a recipe" entry on Home (`app/studio/src/screens/home/`) and the recipes deliverable-type path in the Guided Brief (`app/studio/src/screens/brief/`) — existing behavior intact
-- [ ] T031 [P] [US2] Fill EN + FR strings for every `recipes.*` key in `app/studio/src/i18n/en.ts` and `fr.ts` (parity)
+- [X] T030 [US2] Add the additive "start from a recipe" entry on Home (`app/studio/src/screens/home/`) and the recipes deliverable-type path in the Guided Brief (`app/studio/src/screens/brief/`) — existing behavior intact
+- [X] T031 [P] [US2] Fill EN + FR strings for every `recipes.*` key in `app/studio/src/i18n/en.ts` and `fr.ts` (parity)
 - [ ] T032 [P] [US2] Frontend test `app/studio/src/screens/recipes/RecipeCatalog.test.tsx` — renders all 17 in EN + FR, launch reachable from Home + Brief, an unavailable recipe shows the honest note
 
 **Checkpoint**: The full menu is browsable and launchable.
@@ -133,7 +133,7 @@ cloud and confirm the choice is required and visible before launch.
 
 ### Tests for User Story 3 (offline — write first) ⚠️
 
-- [ ] T033 [P] [US3] Local-first test in `tests/test_recipes_local_first.py` — a default launch sets no cloud backend and makes no network call beyond sanctioned mission research; a cloud stage runs only when `cloud_optins` includes it; no key is ever read from the request body
+- [X] T033 [P] [US3] Local-first test in `tests/test_recipes_local_first.py` — a default launch sets no cloud backend and makes no network call beyond sanctioned mission research; a cloud stage runs only when `cloud_optins` includes it; no key is ever read from the request body
 
 ### Implementation for User Story 3
 
@@ -157,9 +157,9 @@ with no orphan; a failure offers resume-from-failed-stage without re-running the
 
 ### Tests for User Story 4 (offline — write first) ⚠️
 
-- [ ] T038 [P] [US4] Single-active-run test in `tests/test_recipes_single_active.py` — a 2nd `POST /api/recipe` during an active run returns 409; no second run starts
+- [X] T038 [P] [US4] Single-active-run test in `tests/test_recipes_single_active.py` — a 2nd `POST /api/recipe` during an active run returns 409; no second run starts
 - [ ] T039 [P] [US4] Resume test in `tests/test_recipes_resume.py` — a run that fails at compose writes a checkpoint; resuming skips mission/assets (replays outputs — the mission does NOT re-run) and restarts at compose
-- [ ] T040 [P] [US4] Cancel test in `tests/test_recipes_cancel.py` — cancel mid-run kills the active stage's tree (no orphan), emits a `cancelled` terminal frame
+- [X] T040 [P] [US4] Cancel test in `tests/test_recipes_cancel.py` — cancel mid-run kills the active stage's tree (no orphan), emits a `cancelled` terminal frame
 
 ### Implementation for User Story 4
 
