@@ -12,8 +12,9 @@ S3 surface), and retrieves the **strategy dossier AND the associated creatives**
 single run. Two families:
 
 1. **Composed agency recipes** (P1 — the done-when): *full campaign*, *client pitch*,
-   *turnkey event*, *social content pack*. Each declares its own stage set drawn from the
-   canonical chain **mission → assets → composition → export**.
+   *turnkey event*, *social content pack*. Each declares its own stage set; the orchestrated
+   stages are **mission → compose → export** (image/voice assets render **within** the mission
+   stage — "assets" is the mission's creative output, not a standalone orchestrated step).
 2. **Production recipes** (P2): the **13 OpenMontage pipelines** exposed one-to-one, each a
    single-stage recipe driving that pipeline.
 

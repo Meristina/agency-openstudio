@@ -31,6 +31,21 @@ def test_registry_has_composed_and_production_recipes():
     assert serialize_recipe(RECIPES["full-campaign"])["stages"][0]["kind"] == "mission"
 
 
+def test_recipe_run_rejects_nested_secret(tmp_path):
+    # Keys are env-only: a secret smuggled inside the nested `inputs` container must be rejected
+    # too, not just top-level fields (CodeRabbit finding).
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        body = json.dumps({"recipe_id": "full-campaign", "inputs": {"subject": "x", "api_key": "sk-leak"}})
+        conn.request("POST", "/api/recipe", body=body, headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        assert resp.status == 400
+        assert b"environment variables" in resp.read()
+    finally:
+        httpd.shutdown()
+
+
 def test_production_recipe_tier_derived_from_manifest():
     # C1: a pipeline whose manifest declares a paid budget is a cloud (opt-in) stage; a
     # zero/absent-budget pipeline stays local. Regression guard for the indented-field bug.

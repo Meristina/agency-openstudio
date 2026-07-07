@@ -82,8 +82,13 @@ export const missionSession = {
     } catch (error) {
       const current = state.status as State["status"];
       if (current === "launching" || current === "running") {
-        state.status = (error as { name?: string } | null)?.name === "AbortError" ? "cancelled" : "failed";
-        state.error = error instanceof Error ? error.message : "Launch failed";
+        if ((error as { name?: string } | null)?.name === "AbortError") {
+          state.status = "cancelled";
+          state.error = null;  // a user-initiated cancel is not an error (matches launch())
+        } else {
+          state.status = "failed";
+          state.error = error instanceof Error ? error.message : "Launch failed";
+        }
       }
     }
     publish();

@@ -122,7 +122,7 @@ collected package (dossier + creatives) is reachable via the existing library/ex
 
 ```
 Recipe (registry, immutable)
-  └── Stage[]  (per-recipe; mission | assets | compose | pipeline | export)
+  └── Stage[]  (per-recipe; mission | compose | pipeline | export — assets render within mission)
 
 Launch → RecipeRun (singleton, transient)
   ├── registered in server.runs  (cancel + kill-tree, single-active guard)

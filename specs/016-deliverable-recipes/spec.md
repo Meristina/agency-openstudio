@@ -38,11 +38,12 @@ production template the user picks from the front door. Two families exist:
 1. **Production recipes** — the 13 OpenMontage pipelines exposed one-to-one (e.g. a
    talking-head video, a cinematic clip, an animated explainer), for when the user
    already knows what single artifact they want.
-2. **Composed agency recipes** — higher-level, end-to-end templates that chain a full
-   agency **mission** (agency-kit departments) → **assets** (image / voice) →
-   **composition** (video) → **export bundle** in one run: *full campaign*, *client
-   pitch*, *turnkey event*, *social content pack*. These deliver the strategy dossier
-   **and** the associated creatives together.
+2. **Composed agency recipes** — higher-level, end-to-end templates that, in one run, produce
+   a full agency **mission** (agency-kit departments — which also renders its **assets**:
+   image / voice), then a **composition** (video), then an **export bundle**: *full campaign*,
+   *client pitch*, *turnkey event*, *social content pack*. The orchestrated stages are
+   **mission → composition → export** (assets render within the mission stage). These deliver
+   the strategy dossier **and** the associated creatives together.
 
 The user chooses a recipe from Home/Brief, launches it, follows a **single unified
 timeline** (reusing the S3 Mission Timeline), and retrieves **everything the run
@@ -76,7 +77,8 @@ from one place — with no terminal touched at any point.
 
 1. **Given** the recipe entry point is open, **When** the user selects the full-campaign
    recipe, gives a subject, and launches, **Then** a single recipe run starts that
-   chains mission → assets → composition → export without further manual steps.
+   chains mission → composition → export (assets render within the mission stage) without
+   further manual steps.
 2. **Given** the recipe run reaches the mission stage, **When** the departments produce
    the dossier, **Then** the inspector veto loop runs with **byte-identical behavior**
    to a standalone mission (a veto holds the run exactly as it would today; recipe
