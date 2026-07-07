@@ -143,8 +143,17 @@ existing timeline resume button works for recipes with no change to the shared
 timeline/TerminalPanel. Immediate same-session resume works; a reload-then-resume (in-memory
 kind lost) is a noted small follow-up.
 
-**Still deferred** (tracked in #21): only the Guided-Brief deliverable-type entry (rest of
-T030) remains.
+**Guided-Brief recipe entry wired** (`#26`, issue #21 · T030): the brief's deliverable-type
+step offers "recipe" (EN/FR), which hands off to the `#/recipes` catalog instead of composing
+a mission (guarded so it never keys `questionSets`; leaves no phantom draft) — closing FR-002's
+single entry point. Mission flow byte-identical.
+
+**Issue #21 fully addressed** (#22 runner · #23 resume backend · #24 catalog/launch tests ·
+#25 resume affordance · #26 brief entry). Only honest, explicitly-noted edges remain as small
+future work: persisting the run kind for a reload-then-resume, and a hard OS/container sandbox
+for the production runner under untrusted input. Brick 8 is now complete end-to-end — the 13
+production pipelines really run (subprocess CLI-agent), recipes resume per stage, and every
+surface is reachable and tested.
 
 ## Brick 9 — Real multi-CLI
 
