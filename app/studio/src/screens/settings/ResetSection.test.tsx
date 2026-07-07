@@ -30,7 +30,7 @@ describe("ResetSection", () => {
     renderReset();
 
     fireEvent.click(screen.getByRole("button", { name: "Reset preferences" }));
-    fireEvent.click(screen.getByRole("button", { name: "Reset preferences" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm reset" }));
 
     // The one-off keys are gone; unrelated same-origin data survives.
     for (const key of [ASSOCIATION_KEY, BRIEF_DRAFT_KEY, FOLLOW_POINTER_KEY]) expect(localStorage.getItem(key)).toBeNull();

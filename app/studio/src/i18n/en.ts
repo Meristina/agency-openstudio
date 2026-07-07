@@ -328,6 +328,7 @@ export const en: Record<CatalogKey, string> = {
   "settings.reset.title": "Reset local preferences",
   "settings.reset.body": "Clears language, default context, import filing, brief draft, and follow-position preferences. It does not delete missions, deliverables, or model choices.",
   "settings.reset.confirm": "Reset preferences",
+  "settings.reset.confirmAction": "Confirm reset",
   "settings.reset.cancel": "Cancel",
   "settings.reset.done": "Local preferences reset.",
   "settings.network.perMissionNote": "Network research stays an explicit choice on each mission.",

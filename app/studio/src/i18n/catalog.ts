@@ -71,7 +71,7 @@ export type CatalogKey =
   | "settings.title" | "settings.section.preferences" | "settings.section.system" | "settings.section.reset"
   | "settings.system.connection" | "settings.system.connected" | "settings.system.offline" | "settings.system.unknown"
   | "settings.system.version" | "settings.system.dataLocation" | "settings.system.localFirst" | "settings.system.modelSummary" | "settings.system.modelLink"
-  | "settings.reset.title" | "settings.reset.body" | "settings.reset.confirm" | "settings.reset.cancel" | "settings.reset.done"
+  | "settings.reset.title" | "settings.reset.body" | "settings.reset.confirm" | "settings.reset.confirmAction" | "settings.reset.cancel" | "settings.reset.done"
   | "settings.network.perMissionNote";
 
 export const PREFS_KEY = "agency-studio.prefs";

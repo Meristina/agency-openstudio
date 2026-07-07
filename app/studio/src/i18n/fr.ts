@@ -328,6 +328,7 @@ export const fr: Record<CatalogKey, string> = {
   "settings.reset.title": "Réinitialiser les préférences locales",
   "settings.reset.body": "Efface la langue, le contexte par défaut, le classement des imports, le brouillon de brief et la position suivie. Cela ne supprime pas les missions, livrables ni choix de modèles.",
   "settings.reset.confirm": "Réinitialiser les préférences",
+  "settings.reset.confirmAction": "Confirmer la réinitialisation",
   "settings.reset.cancel": "Annuler",
   "settings.reset.done": "Préférences locales réinitialisées.",
   "settings.network.perMissionNote": "La recherche réseau reste un choix explicite sur chaque mission.",

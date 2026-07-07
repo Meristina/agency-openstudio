@@ -26,7 +26,7 @@ export default function ResetSection() {
       <p>{t("settings.reset.body")}</p>
       {confirming ? (
         <div className="actions">
-          <button onClick={reset}>{t("settings.reset.confirm")}</button>
+          <button onClick={reset}>{t("settings.reset.confirmAction")}</button>
           <button className="ghost" onClick={() => setConfirming(false)}>{t("settings.reset.cancel")}</button>
         </div>
       ) : (
