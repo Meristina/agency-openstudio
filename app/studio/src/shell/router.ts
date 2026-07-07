@@ -19,7 +19,7 @@ export const routes: Route[] = [
   { id: "import", hash: "#/import", titleKey: "nav.import", status: "shipped", taxonomyScoped: true },
   { id: "export", hash: "#/export", titleKey: "nav.export", status: "shipped", taxonomyScoped: true },
   { id: "models", hash: "#/models", titleKey: "nav.models", status: "shipped", taxonomyScoped: false },
-  { id: "settings", hash: "#/settings", titleKey: "nav.settings", status: "placeholder", taxonomyScoped: false },
+  { id: "settings", hash: "#/settings", titleKey: "nav.settings", status: "shipped", taxonomyScoped: false },
   { id: "console", hash: "#/console", titleKey: "nav.console", status: "shipped", taxonomyScoped: false },
 ];
 

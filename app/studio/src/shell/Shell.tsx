@@ -7,6 +7,7 @@ import { useRoute } from "./router";
 import Home from "../screens/Home";
 import Console from "../screens/Console";
 import Models from "../screens/Models";
+import SettingsScreen from "../screens/settings/SettingsScreen";
 import GuidedBrief from "../screens/brief/GuidedBrief";
 import Import from "../screens/import/Import";
 import Export from "../screens/export/Export";
@@ -29,6 +30,7 @@ function Outlet() {
   if (match.route.id === "export") return <Export />;
   if (match.route.id === "console") return <Console />;
   if (match.route.id === "models") return <Models />;
+  if (match.route.id === "settings") return <SettingsScreen />;
   return (
     <>
       {match.route.taxonomyScoped && (

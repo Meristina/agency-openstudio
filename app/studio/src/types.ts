@@ -303,6 +303,11 @@ export interface CapabilityInventory {
   generated_at: string;
 }
 
+export interface SystemInfo {
+  version: string;
+  dataDir: string;
+}
+
 /** One selectable image model in the registry (GET /api/models → image_models). */
 export interface ImageModelInfo {
   id: string;

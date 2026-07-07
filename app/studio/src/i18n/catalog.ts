@@ -68,6 +68,10 @@ export type CatalogKey =
   | "export.format.document" | "export.format.mediaPack" | "export.format.fullBundle"
   | "export.contents.document" | "export.contents.mediaPack" | "export.contents.fullBundle"
   | "export.produce" | "export.progress" | "export.ready" | "export.failed" | "export.capabilityAbsent" | "export.noMedia" | "export.onlyFinished" | "export.mediaPruned"
-  | "settings.comingSoon.title" | "settings.comingSoon.body";
+  | "settings.title" | "settings.section.preferences" | "settings.section.system" | "settings.section.reset"
+  | "settings.system.connection" | "settings.system.connected" | "settings.system.offline" | "settings.system.unknown"
+  | "settings.system.version" | "settings.system.dataLocation" | "settings.system.localFirst" | "settings.system.modelSummary" | "settings.system.modelLink"
+  | "settings.reset.title" | "settings.reset.body" | "settings.reset.confirm" | "settings.reset.cancel" | "settings.reset.done"
+  | "settings.network.perMissionNote";
 
 export const PREFS_KEY = "agency-studio.prefs";
