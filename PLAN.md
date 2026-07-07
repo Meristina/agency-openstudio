@@ -91,13 +91,26 @@ UX references: AnythingLLM (workspace = project), Jan (local-first).
 **Done when**: a non-technical user produces a complete deliverable
 (research → strategy → video → export) unassisted.
 
-## Brick 8 — Deliverable recipes (mission → production in one click)
+## Brick 8 — Deliverable recipes (mission → production in one click) *(merged — `92a704e`, #20; recipe engine + composed-recipe done-when landed; production-pipeline runner deferred — see below)*
 
 Expose the 13 OpenMontage pipelines plus composed agency recipes (full campaign,
 client pitch, turnkey event, social content pack): a recipe chains mission
 (departments) → assets (image/voice) → composition (video) → export.
 **Done when**: "launch a campaign for X" produces the strategy dossier AND the
 associated creatives in a single run.
+
+**Delivered**: an additive recipe engine (`agency_studio/recipes/` — default-empty
+registry, sequential orchestrator streaming the mission SSE vocabulary, 3 endpoints
+reusing the run registry) with the **composed-recipe done-when met for real** — the
+`full-campaign` run produces the sourced, veto-gated dossier AND a guaranteed-**local**
+composition video (`openmontage_backend`, subprocess) plus a bundle, in one run. All 13
+production pipelines are exposed in the catalog (EN/FR), launchable, and degrade to an
+honest 501 when their runtime is absent. Local-first with explicit cloud opt-in (keys
+env-only), single active run, cancel/kill-tree; inspector veto byte-identical; offline
+tests green. **Deferred follow-up** (tracked): the full agentic OpenMontage pipeline
+runner (the "A2" work — real per-pipeline execution via a CLI-agent subprocess, not
+validatable offline), per-stage resume beyond the mission checkpoint, and the
+Guided-Brief deliverable-type entry.
 
 ## Brick 9 — Real multi-CLI
 
