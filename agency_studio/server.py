@@ -930,10 +930,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             return
         recipe_id = _str_field(payload, "recipe_id")
         subject = _str_field(payload, "subject") or _str_field(payload.get("inputs") or {}, "subject")
-        if not recipe_id:
-            return self._send_error_json(400, "missing 'recipe_id'")
-        if not subject:
-            return self._send_error_json(400, "missing 'subject'")
+        resume_from = _str_field(payload, "resume_from")
         # Keys are env-only: reject any secret-looking field anywhere in the body — including the
         # nested `inputs` container that `subject` is legitimately read from (a top-level-only
         # scan would let `inputs.api_key` slip through).
@@ -942,9 +939,32 @@ class StudioHandler(BaseHTTPRequestHandler):
             return k in {"key", "api_key", "token", "secret"} or k.endswith("_key")
         if any(_looks_like_secret(k) for k in (*payload, *(payload.get("inputs") or {}))):
             return self._send_error_json(400, "keys must be provided through environment variables")
-        cloud_optins = payload.get("cloud_optins") or []
-        if not isinstance(cloud_optins, list) or not all(isinstance(x, str) for x in cloud_optins):
-            return self._send_error_json(400, "cloud_optins must be a list of stage ids")
+        # Resume (T043): a resume body need only carry `resume_from` — reconstruct recipe/subject/
+        # opt-ins from the pinned recipe checkpoint (the run is replayed exactly, like a mission
+        # resume). Resolved BEFORE the required-field checks and before the SSE stream opens, so an
+        # invalid/unknown id is a clean JSON 4xx rather than a mid-stream error frame.
+        resume_envelope = None
+        run_id = uuid.uuid4().hex
+        if resume_from:
+            from agency_studio.recipes import checkpoint as _recipe_ckpt
+            cid = _safe_checkpoint_id(resume_from)
+            if cid is None:
+                return self._send_error_json(400, "invalid checkpoint id")
+            resume_envelope = _recipe_ckpt.load(self.server.docs_root, cid)  # type: ignore[attr-defined]
+            if resume_envelope is None:
+                return self._send_error_json(404, "recipe checkpoint not found")
+            run_id = cid  # stable across a fail→resume→fail chain (matches the mission checkpoint)
+            recipe_id = str(resume_envelope.get("recipe_id") or recipe_id)
+            subject = str(resume_envelope.get("subject") or subject)
+            cloud_optins = list(resume_envelope.get("cloud_optins") or [])
+        else:
+            cloud_optins = payload.get("cloud_optins") or []
+            if not isinstance(cloud_optins, list) or not all(isinstance(x, str) for x in cloud_optins):
+                return self._send_error_json(400, "cloud_optins must be a list of stage ids")
+        if not recipe_id:
+            return self._send_error_json(400, "missing 'recipe_id'")
+        if not subject:
+            return self._send_error_json(400, "missing 'subject'")
         from agency_studio.recipes.registry import RECIPES
         recipe = RECIPES.get(recipe_id)
         if recipe is None:
@@ -968,7 +988,6 @@ class StudioHandler(BaseHTTPRequestHandler):
             if stage.tier == "cloud" and stage.kind not in cloud_optins:
                 return self._send_error_json(501, f"{stage.kind} needs explicit cloud opt-in")
         server = self.server  # type: ignore[attr-defined]
-        run_id = uuid.uuid4().hex
         cancel_event = threading.Event()
         explicit_cancel = threading.Event()
         # Single active run: check-and-register atomically under one lock (no TOCTOU window
@@ -986,7 +1005,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             result_box = orchestrator.run(
                 self, recipe, run_id=run_id, subject=subject,
                 cloud_optins=set(cloud_optins), cancel_event=cancel_event,
-                explicit_cancel=explicit_cancel,
+                explicit_cancel=explicit_cancel, resume_envelope=resume_envelope,
             )
         except RecipeStageUnavailable as exc:  # e.g. a not-yet-wired production pipeline
             result_box = {"error": str(exc)}

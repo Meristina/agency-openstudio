@@ -158,15 +158,15 @@ with no orphan; a failure offers resume-from-failed-stage without re-running the
 ### Tests for User Story 4 (offline — write first) ⚠️
 
 - [X] T038 [P] [US4] Single-active-run test in `tests/test_recipes_single_active.py` — a 2nd `POST /api/recipe` during an active run returns 409; no second run starts
-- [ ] T039 [P] [US4] Resume test in `tests/test_recipes_resume.py` — a run that fails at compose writes a checkpoint; resuming skips mission/assets (replays outputs — the mission does NOT re-run) and restarts at compose
+- [X] T039 [P] [US4] Resume test in `tests/test_recipes.py` — a run that fails at compose writes a checkpoint; resuming replays the completed mission (the mission does NOT re-run) and restarts at compose
 - [X] T040 [P] [US4] Cancel test in `tests/test_recipes_cancel.py` — cancel mid-run kills the active stage's tree (no orphan), emits a `cancelled` terminal frame
 
 ### Implementation for User Story 4
 
 - [X] T041 [US4] Enforce the single-active-run guard in `POST /api/recipe` (`agency_studio/server.py`) via a `server.runs`/`runs_lock` slot → localized 409 when a run is active
 - [X] T042 [US4] Wire `POST /api/recipe/{id}/cancel` in `agency_studio/server.py` reusing `_handle_cancel_mission` semantics (explicit + cancel events, kill-tree); 404 on unknown/finished run
-- [ ] T043 [US4] Implement the recipe-run checkpoint envelope in `agency_studio/recipes/checkpoint.py` (`completed_stages` + `outputs`, on the existing `_checkpoint_path`/`_on_checkpoint`/`_resolve_resume` pattern) and resume handling in `agency_studio/recipes/orchestrator.py` (skip + replay completed stages, restart at the failed stage; honest partial-failure terminal frame carrying the resume affordance)
-- [ ] T044 [US4] Emit the thin per-stage `stage` framing on the SSE stream in `agency_studio/recipes/orchestrator.py` so the existing `timeline.ts::groupTimeline` / `MissionTimeline` render the whole chain as one unified timeline; carry the resume affordance on error/veto terminal frames
+- [X] T043 [US4] Implement the recipe-run checkpoint envelope in `agency_studio/recipes/checkpoint.py` (`completed_stages` + `outputs`, reusing the mission `_write_checkpoint`/`_load_checkpoint`/`_checkpoint_path` seam; distinguished by `kind`) and resume handling in `agency_studio/recipes/orchestrator.py` + `POST /api/recipe` `resume_from` (replay completed stages, reload the mission dossier instead of re-running it, restart at the failed stage; a fatal post-mission stage writes the checkpoint and returns an error result carrying the resume affordance). Only checkpoints when the mission is complete (nothing to skip otherwise).
+- [X] T044 [US4] Emit the thin per-stage `stage` framing on the SSE stream in `agency_studio/recipes/orchestrator.py` so the existing `timeline.ts::groupTimeline` / `MissionTimeline` render the whole chain as one unified timeline; carry the resume affordance (`resumable`/`checkpoint`) on error terminal frames (replayed stages flagged `replayed`)
 - [ ] T045 [P] [US4] Frontend test `app/studio/src/screens/recipes/timeline-reuse.test.tsx` — the run view reuses `MissionTimeline`; a 2nd launch is blocked with a plain-language message; a failure surfaces a resume affordance
 
 **Checkpoint**: Full run model — one timeline, one active run, cancel, resume.
