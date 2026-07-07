@@ -1,6 +1,8 @@
 export type Locale = "en" | "fr";
 
-export type CatalogKey =
+export type CatalogKey = string;
+
+export type KnownCatalogKey =
   | "nav.home" | "nav.brief" | "nav.missions" | "nav.library" | "nav.import" | "nav.export" | "nav.models" | "nav.settings" | "nav.console"
   | "home.question" | "home.intentLabel" | "home.intentPlaceholder" | "home.start"
   | "home.resume.title" | "home.resume.draft" | "home.resume.recentTitle"

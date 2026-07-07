@@ -8,7 +8,7 @@ afterEach(() => {
 
 describe("router", () => {
   it("contains the full inventory with distinct hashes and catalog title keys", () => {
-    expect(routes.map((route) => route.id)).toEqual(["home", "brief", "missions", "library", "import", "export", "models", "settings", "console"]);
+    expect(routes.map((route) => route.id)).toEqual(["home", "brief", "recipes", "missions", "library", "import", "export", "models", "settings", "console"]);
     expect(new Set(routes.map((route) => route.hash)).size).toBe(routes.length);
     for (const route of routes) expect(en[route.titleKey]).toBeTruthy();
     expect(routes.find((route) => route.id === "brief")?.status).toBe("shipped");
