@@ -1,8 +1,8 @@
 import { FormEvent, useState } from "react";
-import { useI18n } from "../i18n/I18nProvider";
-import { navigate } from "../shell/router";
+import { useI18n } from "../../i18n/I18nProvider";
+import { navigate } from "../../shell/router";
 
-export default function Home() {
+export default function StartSection() {
   const { t } = useI18n();
   const [intent, setIntent] = useState("");
   const submit = (event: FormEvent) => {
@@ -11,8 +11,8 @@ export default function Home() {
     navigate(`#/brief${qs}`);
   };
   return (
-    <section className="home-screen">
-      <h1>{t("home.question")}</h1>
+    <section className="home-start" aria-labelledby="home-start-title">
+      <h1 id="home-start-title">{t("home.question")}</h1>
       <form className="intent-form" onSubmit={submit}>
         <label>
           <span>{t("home.intentLabel")}</span>
