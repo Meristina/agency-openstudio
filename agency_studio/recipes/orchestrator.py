@@ -26,11 +26,15 @@ from .stages import ensure_cloud_allowed, run_compose, run_export
 ENGINE = "claude-code"
 
 
-def _replay(handler, stage) -> None:
-    """Replay an already-completed stage on resume: emit its start/done frames (and, for a media
-    stage, re-emit the asset frame from the saved output) so the timeline renders the whole chain,
-    without re-doing the work."""
+def _replay(handler, stage, outputs: dict) -> None:
+    """Replay an already-completed stage on resume: emit its start/done frames and, for a media
+    stage, re-emit the asset frame from the saved output — so the resumed timeline renders identically
+    to a fresh run, without re-doing the work."""
     handler._write_sse({"phase": "stage", "stage": stage.kind, "status": "start"})
+    entry = outputs.get(stage.kind)
+    if stage.kind in ("compose", "pipeline") and isinstance(entry, dict):
+        handler._write_sse({"phase": "asset", "stage": stage.kind, "kind": "video",
+                            "status": entry.get("status"), "url": entry.get("url")})
     handler._write_sse({"phase": "stage", "stage": stage.kind, "status": "done", "replayed": True})
 
 
@@ -73,7 +77,7 @@ def run(handler, recipe: Recipe, *, run_id: str, subject: str, cloud_optins: set
         if cancel_event.is_set():
             return {"cancelled": True}
         if stage.kind in completed:
-            _replay(handler, stage)
+            _replay(handler, stage, outputs)
             continue
         handler._write_sse({"phase": "stage", "stage": stage.kind, "status": "start"})
         try:
