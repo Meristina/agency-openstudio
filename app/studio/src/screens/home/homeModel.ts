@@ -5,7 +5,10 @@ import type { FollowPointer } from "../missions/followPointer";
 
 export interface RecentMissionItem {
   key: string;
+  /** Plain mission goal; empty when the mission has no goal (see `untitled`). Never a machine token. */
   label: string;
+  /** True when `label` is empty and the consumer must render the localized `home.recent.untitled`. */
+  untitled: boolean;
   statusKey: CatalogKey;
   target: string;
 }
@@ -18,10 +21,10 @@ export interface ContextParts {
 
 const TERMINAL_FAIL = new Set(["FAIL", "FAILED", "VETO", "NEEDS_WORK", "NEEDS-ATTENTION", "NEEDS_ATTENTION"]);
 
-function humanGoal(goal: unknown): string {
+function humanGoal(goal: unknown): { text: string; untitled: boolean } {
   const text = typeof goal === "string" ? goal.trim().replace(/\s+/g, " ") : "";
-  if (!text) return "Recent production";
-  return text.length > 80 ? `${text.slice(0, 77).trim()}...` : text;
+  if (!text) return { text: "", untitled: true };
+  return { text: text.length > 80 ? `${text.slice(0, 77).trim()}...` : text, untitled: false };
 }
 
 export function isLiveRun(mission: MissionSummary, pointer: FollowPointer | null): boolean {
@@ -33,9 +36,11 @@ export function recentMissionsView(missions: MissionSummary[], pointer: FollowPo
   return missions.slice(0, 5).map((mission) => {
     const live = isLiveRun(mission, pointer);
     const verdict = String(mission.verdict ?? "").toUpperCase();
+    const goal = humanGoal(mission.goal);
     return {
       key: mission.mission_id,
-      label: humanGoal(mission.goal),
+      label: goal.text,
+      untitled: goal.untitled,
       statusKey: mission.delivered ? "home.recent.delivered" : TERMINAL_FAIL.has(verdict) ? "home.recent.failedVerdict" : "home.recent.inProgress",
       target: live ? "#/missions" : `#/library?deliverable=${encodeURIComponent(mission.mission_id)}`,
     };

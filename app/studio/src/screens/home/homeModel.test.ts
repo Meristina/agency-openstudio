@@ -21,6 +21,18 @@ describe("homeModel", () => {
     expect(view.some((item) => item.label === "m1" || item.label === "VETO")).toBe(false);
   });
 
+  it("flags an empty/whitespace goal for localized fallback instead of raw English", () => {
+    const view = recentMissionsView(
+      [
+        { mission_id: "m0", goal: "   ", delivered: false },
+        { mission_id: "m1", goal: "Real goal", delivered: false },
+      ],
+      null,
+    );
+    expect(view[0]).toMatchObject({ label: "", untitled: true });
+    expect(view[1]).toMatchObject({ label: "Real goal", untitled: false });
+  });
+
   it("detects resumable drafts and live runs", () => {
     expect(hasResumableDraft(null)).toBe(false);
     expect(hasResumableDraft({ version: 1, stepIndex: 0, answers: {} })).toBe(false);

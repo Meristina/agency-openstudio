@@ -23,6 +23,7 @@ export const en: Record<CatalogKey, string> = {
   "home.recent.empty": "No recent work yet.",
   "home.recent.loadError": "Recent work could not be loaded. You can still start a new brief.",
   "home.recent.seeAll": "See all work",
+  "home.recent.untitled": "Untitled work",
   "home.shortcuts.title": "Open the studio",
   "home.shortcuts.library": "Library",
   "home.shortcuts.import": "Import",

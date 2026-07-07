@@ -45,7 +45,7 @@ export default function ResumeSection() {
           {items.map((item) => (
             <li key={item.key}>
               <button type="button" onClick={() => navigate(item.target)}>
-                <span>{item.label}</span>
+                <span>{item.untitled ? t("home.recent.untitled") : item.label}</span>
                 <small>{t(item.statusKey)}</small>
               </button>
             </li>
