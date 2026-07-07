@@ -22,7 +22,23 @@ What it does, and the invariants it holds
   never a truncated render (the ``_run_local`` contract).
 * **The subject never chooses compute or the filesystem.** The subject is the creative brief; the
   render target, the allowed tools, and the writable dir are renderer-fixed here — the agent is
-  told to write only into the work dir, and a returned artifact outside it is rejected.
+  told to write only into the work dir, and a returned artifact (resolved through any symlink) that
+  escapes it is rejected.
+
+Trust boundary (why the prompt is not the security boundary)
+------------------------------------------------------------
+The child inherits the server's environment and is granted broad tools (Bash/Write/…), so the
+in-prompt "write only into this directory" line is guidance, not a sandbox — a hostile ``subject``
+could in principle steer it. This is **deliberately trusted-operator-only**, and the enclosing
+model makes that safe: the studio binds ``127.0.0.1`` (never ``0.0.0.0``, no CORS ``*``) and is a
+single-operator, local-first tool, so the ``subject`` is entered by the same operator whose machine
+and credentials the agent already runs as — there is no remote attacker on this surface. Keys stay
+**env-only** (the endpoint rejects any secret in the request body), so the child reads a cloud key
+from the environment only when the operator opted that stage into ``cloud`` — never from untrusted
+input. Confinement is defence-in-depth, not the trust root: the agent's cwd is the vendored subtree
+and its writable target is a per-run work dir (``--add-dir``), and the artifact we accept is bounded
+to that dir. A hard OS/container sandbox (curated env + mount scope) is the correct next step if this
+ever runs untrusted input — see issue #21.
 
 Not validatable offline (it needs the OpenMontage runtime — Node + skills + tools + a CLI engine),
 so the one impure surface — the subprocess spawn (:func:`_spawn_agent`) — is isolated for the
@@ -176,27 +192,39 @@ def _within(child: Path, parent: Path) -> bool:
 
 
 def _resolve_artifact(stdout: str, work_dir: Path) -> Path:
-    """The finished video the agent produced. Prefer the explicit ``OM_ARTIFACT=`` sentinel; fall
-    back to the newest video file in the work dir. SECURITY: the artifact MUST live inside
-    ``work_dir`` — a sentinel pointing outside it (an attempt to pull an arbitrary local file into
-    the deliverable/export) is rejected. No artifact ⇒ an honest failure, never a fabricated one."""
+    """The finished video the agent produced, as a **resolved real path inside ``work_dir``**.
+    Prefer the explicit ``OM_ARTIFACT=`` sentinel; fall back to the newest video file in the work
+    dir. SECURITY: the artifact is resolved (symlinks followed) and MUST stay inside ``work_dir`` —
+    a sentinel or a symlink escaping it (an attempt to pull an arbitrary local file into the
+    deliverable/export, since ``.is_file()`` follows links) is rejected. No artifact ⇒ an honest
+    failure, never a fabricated one."""
+    work_real = work_dir.resolve()
     match = _ARTIFACT_RE.search(stdout)
     if match:
         candidate = Path(match.group(1).strip())
         if not candidate.is_absolute():
             candidate = work_dir / candidate
-        if candidate.is_file() and _within(candidate, work_dir):
-            return candidate
-        if not _within(candidate, work_dir):
+        try:
+            resolved = candidate.resolve(strict=True)  # follow the link, then bound the target
+        except OSError:
+            raise RuntimeError("openmontage: pipeline reported a missing artifact") from None
+        if not _within(resolved, work_real):
             raise RuntimeError(
                 "openmontage: pipeline reported an artifact outside its work dir — rejected"
             )
-    videos = sorted(
-        (p for p in work_dir.rglob("*") if p.is_file() and p.suffix.lower() in _VIDEO_SUFFIXES),
-        key=lambda p: p.stat().st_mtime,
-    )
+        if not resolved.is_file():
+            raise RuntimeError("openmontage: pipeline reported an artifact that is not a file")
+        return resolved
+    # Fallback: the newest real video whose resolved path stays inside the work dir. Skip symlinks
+    # outright — a genuine render is a real file, and a link is the escape vector we must not follow.
+    videos = [
+        p for p in work_dir.rglob("*")
+        if not p.is_symlink() and p.is_file() and p.suffix.lower() in _VIDEO_SUFFIXES
+        and _within(p, work_real)
+    ]
+    videos.sort(key=lambda p: p.stat().st_mtime)
     if videos:
-        return videos[-1]
+        return videos[-1].resolve()
     raise RuntimeError("openmontage: pipeline finished without producing a video")
 
 
@@ -251,6 +279,9 @@ def run_pipeline(pipeline: str, subject: str, *,
     orchestration = read_orchestration(PIPELINES / f"{pipeline}.yaml")
     work_dir.mkdir(parents=True, exist_ok=True)
     prompt = _build_prompt(pipeline, subject, orchestration, work_dir)
+    # Trusted-operator-only: a broad-tool agent driven by an operator-supplied subject on a
+    # 127.0.0.1 single-operator studio (see the module "Trust boundary" note). Confinement below —
+    # cwd = vendored subtree, writable scope = the per-run work dir — is defence-in-depth.
     cmd = [
         _engine_binary(),
         "--allowedTools", (os.environ.get(_TOOLS_ENV) or _DEFAULT_TOOLS),

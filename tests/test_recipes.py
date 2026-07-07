@@ -224,6 +224,22 @@ def test_om_bridge_rejects_artifact_outside_work_dir(monkeypatch, tmp_path):
                                should_cancel=lambda: False)
 
 
+def test_om_bridge_fallback_ignores_symlink_escape(tmp_path):
+    # Security (CodeRabbit): the no-sentinel fallback must not follow a `*.mp4` symlink out of the
+    # work dir — `.is_file()` follows links, so a link to an outside file could otherwise be moved
+    # into the deliverable. Such a work dir yields an honest "no video" failure, not the escape.
+    from agency_studio.recipes import om_bridge
+    import pytest
+
+    work = tmp_path / "work"
+    work.mkdir()
+    outside = tmp_path / "real.mp4"
+    outside.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    (work / "link.mp4").symlink_to(outside)
+    with pytest.raises(RuntimeError, match="without producing a video"):
+        om_bridge._resolve_artifact("", work)
+
+
 def test_second_run_blocked_while_active(tmp_path):
     # Single active run (FR-020): a launch while a run is registered is refused with 409.
     httpd, host, port = _start(tmp_path)
