@@ -80,7 +80,7 @@ missions.
 **Done when**: history is browsable by client and campaign, and every deliverable
 belongs to a project.
 
-## Brick 7 — The magic box (full custom UI redesign) *(umbrella merged — `652777a`, #11; S2 Guided Brief merged — `3643772`, #12; S3 Mission Timeline merged — `94e51cc`, #13; S4 Deliverable Library merged — `e40c0e1`, #14; S5 Import merged — `7fd9923`, #15; S6 Export merged — `d22c9c4`, #16; S7 Capability & Model Panel merged — `5c36bcf`, #17; S8 Settings merged — `99efe87`, #18; remaining screens ship via child specs)*
+## Brick 7 — The magic box (full custom UI redesign) *(umbrella merged — `652777a`, #11; S2 Guided Brief merged — `3643772`, #12; S3 Mission Timeline merged — `94e51cc`, #13; S4 Deliverable Library merged — `e40c0e1`, #14; S5 Import merged — `7fd9923`, #15; S6 Export merged — `d22c9c4`, #16; S7 Capability & Model Panel merged — `5c36bcf`, #17; S8 Settings merged — `99efe87`, #18; S1 Home merged — `71b14f8`, #19; all child-spec screens shipped)*
 
 A new front-end application: **a single entry point** ("what do you want to
 produce?"), a guided brief by sector/domain/deliverable type, a live mission timeline,
