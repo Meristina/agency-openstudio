@@ -12,7 +12,7 @@ deliverable — from brief to final video.
 
 | Pillar | Directory | Role |
 |---|---|---|
-| **agency-kit** (studio fork) | [`agencykit/`](./agencykit/) | The brain: route → 9 specialist departments (solve, product, marketing, finance, comms, data, ops, people, tech) → synthesis → inspector with veto power. Multi-engine: claude-code / codex / gemini. Mandatory internet research, cited sources. |
+| **agency-kit** (studio fork) | [`agencykit/`](./agencykit/) | The brain: route → 9 specialist departments (solve, product, marketing, finance, comms, data, ops, people, tech) → synthesis → inspector with veto power. Multi-engine: claude-code / codex / antigravity / opencode; see the [`agencykit` engine matrix](./agencykit/#installation). Mandatory internet research, cited sources. |
 | **OpenMontage** | [`openmontage/`](./openmontage/) | Production: 122 tools (free local / GPU / paid API), 13 video pipelines, Remotion + HyperFrames rendering. |
 | **The studio** | [`agency_studio/`](./agency_studio/) + [`app/studio/`](./app/studio/) | The local server (Python stdlib, zero dependencies), the local multimodal engines (image, voice, RAG, video), and the web GUI. |
 
@@ -24,8 +24,8 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ./agencykit
 pip install -e .
 
-# 2. A CLI agent on PATH (the validated v1 engine is claude)
-#    claude / codex / gemini — see agencykit/README.md
+# 2. A CLI agent on PATH (validated engines: claude-code and codex)
+#    claude / codex / agy / opencode — see agencykit/README.md
 
 # 3. Launch
 agency-studio          # (alias: agency-openstudio) → http://127.0.0.1:8765

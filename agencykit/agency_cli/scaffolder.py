@@ -105,8 +105,8 @@ def check(target: str = ".") -> list:
     ))
 
     # At least one VALIDATED engine's CLI on PATH. Only validated engines may run a
-    # production mission, so an unvalidated engine on PATH (codex/gemini) does NOT make
-    # the studio runnable — reporting it as healthy would be misleading.
+    # production mission, so an unvalidated engine on PATH (antigravity/opencode) does NOT
+    # make the studio runnable — reporting it as healthy would be misleading.
     engines = _engine_binaries()
     validated_found = [n for n, (binary, ok) in engines.items() if ok and shutil.which(binary)]
     unvalidated_found = [n for n, (binary, ok) in engines.items() if not ok and shutil.which(binary)]

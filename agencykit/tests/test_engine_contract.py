@@ -5,6 +5,8 @@ engine CLI, no Node), so they encode POSIX process-group semantics and are skipp
 Windows; the registry/refusal logic tests are platform-agnostic and always run."""
 
 import os
+from pathlib import Path
+import re
 import sys
 import textwrap
 import time
@@ -104,6 +106,8 @@ def _assert_tree_dead(pid_file):
 
 
 def test_engine_views_match_specs_and_register_engine_refreshes_views(monkeypatch):
+    assert set(cli_engine.ENGINE_SPECS) == {"claude-code", "codex", "antigravity", "opencode"}
+    assert "gemini" not in cli_engine.ENGINE_SPECS
     assert set(cli_engine.ENGINES) == set(cli_engine.ENGINE_SPECS)
     assert set(cli_engine._ROUTE_CMD) == set(cli_engine.ENGINE_SPECS)
     for name, spec in cli_engine.ENGINE_SPECS.items():
@@ -131,6 +135,16 @@ def test_engine_views_match_specs_and_register_engine_refreshes_views(monkeypatc
         cli_engine.ENGINE_SPECS.clear()
         cli_engine.ENGINE_SPECS.update(original_specs)
         cli_engine._refresh_engine_views()
+
+
+def test_codex_commands_are_noninteractive_and_search_only_on_run():
+    spec = cli_engine.ENGINE_SPECS["codex"]
+
+    assert "exec" in spec.route_cmd
+    assert "--search" not in spec.route_cmd
+    assert spec.run_cmd.index("--search") < spec.run_cmd.index("exec")
+    assert "--skip-git-repo-check" in spec.run_cmd
+    assert "--skip-git-repo-check" in spec.route_cmd
 
 
 @requires_posix
@@ -211,7 +225,10 @@ def test_call_timeout_kills_parent_and_child(tree_engine):
     _assert_tree_dead(pid_file)
 
 
-@pytest.mark.parametrize("engine", ["codex", "gemini"])
+@pytest.mark.parametrize(
+    "engine",
+    [name for name, spec in cli_engine.ENGINE_SPECS.items() if not spec.validated],
+)
 def test_run_mission_refuses_unvalidated_engines_before_subprocess(monkeypatch, engine):
     monkeypatch.setattr(cli_engine, "_call", lambda *a, **k: pytest.fail("must not invoke CLI"))
 
@@ -222,6 +239,45 @@ def test_run_mission_refuses_unvalidated_engines_before_subprocess(monkeypatch, 
     assert engine in message
     assert "NOT validated" in message
     assert "claude-code" in message
+
+
+def test_run_mission_rejects_removed_gemini_engine():
+    with pytest.raises(ValueError, match="Unknown engine") as exc:
+        cli_engine.run_mission_cli("goal", engine="gemini")
+
+    message = str(exc.value)
+    assert "gemini" in message
+    for engine in cli_engine.ENGINE_SPECS:
+        assert engine in message
+
+
+def test_readme_engine_matrix_matches_registry():
+    readme = Path(__file__).resolve().parents[1] / "README.md"
+    lines = readme.read_text(encoding="utf-8").splitlines()
+    # Anchor to the engine matrix via its header row so an unrelated README table
+    # (e.g. a future 6-column table with backtick-quoted cells) can never be
+    # mis-collected into `rows` and fail this check with a confusing error.
+    header_idx = next(
+        i for i, ln in enumerate(lines)
+        if ln.startswith("|") and "--engine" in ln and "Validation status" in ln
+    )
+    rows = {}
+    for line in lines[header_idx + 2:]:  # skip the header and its |---| separator
+        if not line.startswith("| `"):
+            break  # first non-engine row (blank line / prose) ends the matrix table
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        match = re.match(r"`([^`]+)`", cells[0])
+        if match:
+            rows[match.group(1)] = cells
+
+    assert set(rows) == set(cli_engine.ENGINE_SPECS)
+    for name, spec in cli_engine.ENGINE_SPECS.items():
+        status = rows[name][5].lower()
+        if spec.validated:
+            assert status == "validated"
+            assert rows[name][2].startswith("✅")
+        else:
+            assert "unvalidated" in status
 
 
 def test_run_mission_validated_engine_proceeds_past_guards(monkeypatch):
@@ -245,6 +301,9 @@ def test_run_mission_validated_engine_proceeds_past_guards(monkeypatch):
 
 
 def test_validated_specs_declare_headless_web_search():
+    assert "codex" in {
+        name for name, spec in cli_engine.ENGINE_SPECS.items() if spec.validated
+    }
     assert all(
         spec.web_search_headless
         for spec in cli_engine.ENGINE_SPECS.values()

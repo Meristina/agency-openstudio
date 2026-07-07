@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 agency-kit is a thin routing and orchestration layer over nine departments (solve, product, marketing, finance, comms, data, ops, people, tech — the **solve-first** canonical order of `DEPT_NAMES`). It reads a mission goal, classifies which departments are needed and in what order, runs them sequentially (each reads the previous dept's output), synthesises one cross-department deliverable, and inspects it.
 
-Missions execute through a **local agent CLI engine** (Claude Code / Codex / Gemini) via subprocess — **no API key, no SDK, no `pip` dependencies**. Each CLI uses its own authenticated session and its own live web search. There are no installable department "kits"; every department is played by the engine model, guided by the doctrine files in `agents/`.
+Missions execute through a **local agent CLI engine** (Claude Code / Codex / Antigravity / OpenCode) via subprocess — **no API key, no SDK, no `pip` dependencies**. Each CLI uses its own authenticated session and its own live web search. There are no installable department "kits"; every department is played by the engine model, guided by the doctrine files in `agents/`.
 
 ## Commands
 
@@ -26,10 +26,10 @@ pytest tests/test_router.py -q      # keyword router
 agency check
 
 # CLI — pick the engine with --engine (default: claude-code)
-# Only VALIDATED engines run missions: claude-code is validated; codex/gemini are
-# registered but refused (EngineNotValidated) until validated end-to-end.
+# Only VALIDATED engines run missions: claude-code and codex are validated;
+# antigravity/opencode are registered but refused until validated end-to-end.
 agency init [path] [--agent claude|codex|cursor|copilot|gemini|opencode]
-agency run "goal" [--dry-run] [--engine claude-code]   # codex/gemini refused until validated
+agency run "goal" [--dry-run] [--engine claude-code]   # candidates refused until validated
 agency run "goal" [--no-escalation] [--escalation-budget N]
 agency run "goal" [--min-sources N] [--resolve-sources]
 agency missions
@@ -92,12 +92,13 @@ Departments are sovereign (Art. IV): the engine passes the full previous output 
 ```python
 ENGINE_SPECS = {
     "claude-code": EngineSpec(..., web_search_headless=True, validated=True),
-    "codex":       EngineSpec(..., web_search_headless=True, validated=False),
-    "gemini":      EngineSpec(..., web_search_headless=True, validated=False),
+    "codex":       EngineSpec(..., web_search_headless=True, validated=True),
+    "antigravity": EngineSpec(..., web_search_headless=False, validated=False),
+    "opencode":    EngineSpec(..., web_search_headless=False, validated=False),
 }
 ```
 
-`_call(cmd, prompt)` shells out through the subprocess boundary. Adding an engine = one `EngineSpec` plus contract tests; the engine must guarantee headless web search, and it stays `validated=False` until it passes end-to-end validation. Registered but unvalidated engines (`codex`, `gemini`) refuse production missions with `EngineNotValidated`.
+`_call(cmd, prompt)` shells out through the subprocess boundary. Adding an engine = one `EngineSpec` plus contract tests; the engine must guarantee headless web search, and it stays `validated=False` until it passes end-to-end validation. Registered but unvalidated engines (`antigravity`, `opencode`) refuse production missions with `EngineNotValidated`.
 
 ### Single source of truth for department names
 
@@ -145,9 +146,10 @@ All source files under `agents/` are mirrored to `payload/agents/`. The drift gu
 agency-kit reads **no** environment variables for execution. Each engine CLI handles its own auth and model selection:
 - **claude-code** — `claude` CLI session (run `claude` once to authenticate)
 - **codex** — `codex` CLI session
-- **gemini** — `gemini` CLI session
+- **antigravity** — `agy` CLI session; tool-driven search is unproven until live validation
+- **opencode** — `opencode` CLI session; Exa search is config-gated via `OPENCODE_ENABLE_EXA`
 
-Pick the engine per run with `--engine` (default `claude-code`). Only `claude-code` is validated and will run a mission; `codex`/`gemini` are registered but refused (`EngineNotValidated`) until validated end-to-end.
+Pick the engine per run with `--engine` (default `claude-code`). `claude-code` and `codex` are validated and will run a mission; `antigravity`/`opencode` are registered but refused (`EngineNotValidated`) until validated end-to-end.
 
 ## Test architecture
 
