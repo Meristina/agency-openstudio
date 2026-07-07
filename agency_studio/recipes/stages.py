@@ -15,6 +15,7 @@ fabricated result (Principle III):
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 _COMPOSITION_PROMPT_CHARS = 2000
@@ -75,6 +76,52 @@ def run_compose(handler, result_box: dict, cancel_event) -> "dict | None":
     dossier.setdefault("assets", []).append(entry)
     store.save(dossier)  # persist so the video is in the deliverable + every export path
     return entry
+
+
+def run_pipeline_stage(handler, recipe, subject: str, cancel_event) -> "tuple[dict, dict | None]":
+    """Drive one OpenMontage production pipeline (``om_bridge``, subprocess) and land its finished
+    video in a **lightweight deliverable record** so it is retrievable through the existing
+    library/export path (FR-018/FR-019). Unlike a composed recipe there is no upstream mission
+    dossier, so this mints its own record: the subject is the label, the produced video is the
+    attached asset. Returns ``(result_box, asset_entry)`` — ``result_box`` carries a
+    ``MissionResult`` so the terminal ``done`` frame renders it exactly like a mission run.
+
+    Principle III: the record is written only AFTER ``om_bridge`` returns a real artifact; an
+    unavailable capability or an honest agent failure propagates (→ 501 / error frame) and no record
+    is fabricated."""
+    from pathlib import Path as _Path
+    from agency_kit import store
+    from agency_cli.runner_bridge import MissionResult
+    from agency_studio.server import _media_url
+    from .om_bridge import run_pipeline
+
+    pipeline = recipe.pipeline or recipe.id
+    assets_root = _Path(handler.server.assets_root).resolve()
+    mission_id = store.new_mission_id(subject)
+    media_dir = assets_root / "missions" / mission_id
+    work_dir = media_dir / ".om-work"
+    out_path = media_dir / f"{pipeline}.mp4"
+    try:
+        run_pipeline(pipeline, subject, work_dir=work_dir, out_path=out_path,
+                     should_cancel=cancel_event.is_set)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+    entry = {"type": "video", "status": "ok", "url": _media_url(assets_root, out_path)}
+    dossier = {
+        "mission_id": mission_id,
+        "goal": subject,
+        "project_root": store.canonical_project_root(handler.server.project_root),
+        "kind": "production",
+        "pipeline": pipeline,
+        "route": [],
+        "delivered": (f"Produced by the OpenMontage **{pipeline}** production pipeline.\n\n"
+                      f"Subject: {subject}"),
+        "assets": [entry],
+        "verdicts": [],
+    }
+    saved = store.save(dossier)
+    return {"result": MissionResult(path=saved or media_dir, dossier=dossier)}, entry
 
 
 def run_export(handler, result_box: dict) -> "dict | None":

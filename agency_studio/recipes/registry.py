@@ -62,6 +62,31 @@ def read_pipeline_metadata(path: Path) -> dict[str, object]:
     }
 
 
+def read_orchestration(path: Path) -> dict[str, str]:
+    """Read a pipeline's ``orchestration`` block as **inert data** (never an in-process import of
+    ``openmontage/``): the executive-producer skill the agentic runner drives, its default budget,
+    and the wall-time cap. Scoped to the ``orchestration:`` block so a stage's own ``skill:`` (each
+    stage under ``stages:`` carries one) can never leak in as the orchestration skill. Returns empty
+    strings for a manifest with no orchestration block (e.g. the framework-smoke contract fixture),
+    so the runner probe fails honestly rather than driving a non-existent skill."""
+    block: list[str] = []
+    inside = False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("orchestration:"):
+            inside = True
+            continue
+        if inside:
+            if line and not line[0].isspace():  # a dedent to a new top-level key ends the block
+                break
+            block.append(line)
+    text = "\n".join(block)
+    return {
+        "skill": _field(text, "skill"),
+        "budget": _field(text, "budget_default_usd"),
+        "wall_minutes": _field(text, "max_wall_time_minutes"),
+    }
+
+
 def _production() -> dict[str, Recipe]:
     recipes: dict[str, Recipe] = {}
     if not _PIPELINE_DIR.exists():

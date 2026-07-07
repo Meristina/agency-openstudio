@@ -113,24 +113,134 @@ def test_production_recipe_requires_cloud_optin(tmp_path):
         httpd.shutdown()
 
 
-def test_production_recipe_does_not_fabricate(monkeypatch, tmp_path):
-    # Principle III: with the OpenMontage runner unwired, a production run must fail honestly
-    # (error frame) rather than fabricate a PASS verdict / "completed" dossier.
+def _post_recipe(host, port, **body):
+    conn = http.client.HTTPConnection(host, port)
+    conn.request("POST", "/api/recipe", body=json.dumps(body),
+                 headers={"Content-Type": "application/json"})
+    return conn.getresponse()
+
+
+def test_production_recipe_501_when_runtime_absent(monkeypatch, tmp_path):
+    # An absent OpenMontage runtime (no Node) degrades to an honest error frame + install hint —
+    # never a fabricated dossier (Principle III). The probe fires the moment the pipeline stage runs.
     from agency_studio.recipes import om_bridge
 
-    monkeypatch.setattr(om_bridge.shutil, "which", lambda b: "/usr/local/bin/" + b)
+    monkeypatch.setattr(om_bridge.shutil, "which", lambda b: None)  # nothing on PATH
     httpd, host, port = _start(tmp_path)
     try:
-        conn = http.client.HTTPConnection(host, port)
-        body = json.dumps({"recipe_id": "cinematic", "subject": "a teaser", "cloud_optins": ["pipeline"]})
-        conn.request("POST", "/api/recipe", body=body, headers={"Content-Type": "application/json"})
-        resp = conn.getresponse()
+        resp = _post_recipe(host, port, recipe_id="cinematic", subject="a teaser",
+                            cloud_optins=["pipeline"])
         events = _read_sse(resp)
         assert resp.status == 200
         assert events[-1]["phase"] == "error"
-        assert "not available" in events[-1]["message"]
+        assert "Node.js" in events[-1]["message"]
     finally:
         httpd.shutdown()
+
+
+def test_production_pipeline_produces_and_records_deliverable(monkeypatch, tmp_path):
+    # The real done-when for a production recipe: one run drives the pipeline's executive-producer
+    # skill over the subprocess boundary, produces a video, and lands a lightweight deliverable
+    # record retrievable via the library/export path (FR-018). The one impure surface — the CLI-agent
+    # spawn — is monkeypatched (no CLI, no Node), everything else is real.
+    from agency_kit import store
+    from agency_studio.recipes import om_bridge
+
+    store_dir = tmp_path / ".store"
+    store_dir.mkdir()
+    monkeypatch.setattr(store, "missions_dir", lambda: store_dir)  # isolate from ~/.agency
+    monkeypatch.setattr(om_bridge.shutil, "which", lambda b: "/usr/local/bin/" + b)
+
+    def fake_spawn(cmd, cwd, timeout, should_cancel=None):
+        work = Path(cmd[cmd.index("--add-dir") + 1])  # the renderer-fixed writable dir
+        work.mkdir(parents=True, exist_ok=True)
+        art = work / "final.mp4"
+        art.write_bytes(b"\x00\x00\x00\x18ftypmp42")  # a stand-in mp4
+        return f"OM_ARTIFACT={art}\n"
+
+    monkeypatch.setattr(om_bridge, "_spawn_agent", fake_spawn)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp = _post_recipe(host, port, recipe_id="cinematic", subject="a teaser",
+                            cloud_optins=["pipeline"])
+        events = _read_sse(resp)
+        assert resp.status == 200
+        # A real pipeline asset frame (a produced video, not a fabricated one).
+        assets = [e for e in events if e.get("stage") == "pipeline" and e.get("phase") == "asset"]
+        assert assets and assets[0]["status"] == "ok"
+        done = events[-1]
+        assert done["phase"] == "done"
+        assert any(a.get("type") == "video" and a.get("status") == "ok" for a in done["assets"])
+        # The lightweight deliverable record is persisted and retrievable (FR-018).
+        recorded = store.load(done["mission_id"])
+        assert recorded["pipeline"] == "cinematic"
+        assert recorded["kind"] == "production"
+        assert recorded["assets"][0]["type"] == "video"
+    finally:
+        httpd.shutdown()
+
+
+def test_production_pipeline_honest_failure_no_record(monkeypatch, tmp_path):
+    # Principle III: when the agent cannot produce a video it prints OM_ERROR — the run reports an
+    # honest error frame and writes NO deliverable record (nothing fabricated).
+    from agency_kit import store
+    from agency_studio.recipes import om_bridge
+
+    store_dir = tmp_path / ".store"
+    monkeypatch.setattr(store, "missions_dir", lambda: store_dir)
+    monkeypatch.setattr(om_bridge.shutil, "which", lambda b: "/usr/local/bin/" + b)
+    monkeypatch.setattr(om_bridge, "_spawn_agent",
+                        lambda cmd, cwd, timeout, should_cancel=None: "OM_ERROR=no local footage\n")
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp = _post_recipe(host, port, recipe_id="cinematic", subject="a teaser",
+                            cloud_optins=["pipeline"])
+        events = _read_sse(resp)
+        assert resp.status == 200
+        assert events[-1]["phase"] == "error"
+        assert "no local footage" in events[-1]["message"]
+        assert not store_dir.exists() or not list(store_dir.glob("*/dossier.json"))
+    finally:
+        httpd.shutdown()
+
+
+def test_om_bridge_rejects_artifact_outside_work_dir(monkeypatch, tmp_path):
+    # Security: the agent's OM_ARTIFACT must live inside the renderer-fixed work dir. A path that
+    # escapes it (an attempt to pull an arbitrary local file into the deliverable) is rejected.
+    from agency_studio.recipes import om_bridge
+
+    monkeypatch.setattr(om_bridge.shutil, "which", lambda b: "/usr/local/bin/" + b)
+    outside = tmp_path / "secret.mp4"
+    outside.write_bytes(b"x")
+    monkeypatch.setattr(om_bridge, "_spawn_agent",
+                        lambda cmd, cwd, timeout, should_cancel=None: f"OM_ARTIFACT={outside}\n")
+    work = tmp_path / "work"
+    out = tmp_path / "out.mp4"
+    import pytest
+    with pytest.raises(RuntimeError, match="outside its work dir"):
+        om_bridge.run_pipeline("cinematic", "a teaser", work_dir=work, out_path=out,
+                               should_cancel=lambda: False)
+
+
+def test_om_bridge_fallback_ignores_symlink_escape(tmp_path):
+    # Security (CodeRabbit): the no-sentinel fallback must not follow a `*.mp4` symlink out of the
+    # work dir — `.is_file()` follows links, so a link to an outside file could otherwise be moved
+    # into the deliverable. Such a work dir yields an honest "no video" failure, not the escape.
+    from agency_studio.recipes import om_bridge
+    import pytest
+
+    work = tmp_path / "work"
+    work.mkdir()
+    outside = tmp_path / "real.mp4"
+    outside.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    try:
+        (work / "link.mp4").symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not creatable on this platform/privilege level")
+    with pytest.raises(RuntimeError, match="without producing a video"):
+        om_bridge._resolve_artifact("", work)
 
 
 def test_second_run_blocked_while_active(tmp_path):

@@ -43,10 +43,19 @@ def run(handler, recipe: Recipe, *, run_id: str, subject: str, cloud_optins: set
             if "result" not in result_box:
                 return result_box  # cancelled / error / veto — mission already persisted state
         elif stage.kind == "pipeline":
-            from .om_bridge import run_pipeline
-            result_box = {"result": run_pipeline(
-                recipe.pipeline or recipe.id, subject,
-                handler.server.project_root, cancel_event.is_set)}
+            from .stages import run_pipeline_stage
+            try:
+                result_box, entry = run_pipeline_stage(handler, recipe, subject, cancel_event)
+            except Exception:
+                # A cancel surfaces as a raised RuntimeError from the subprocess drive; report it as
+                # a clean cancelled run (not an error), like the mission stage does. A genuine
+                # failure / unavailable capability propagates to the endpoint's honest error frame.
+                if cancel_event.is_set():
+                    return {"cancelled": True}
+                raise
+            if entry is not None:
+                handler._write_sse({"phase": "asset", "stage": "pipeline", "kind": "video",
+                                    "status": entry.get("status"), "url": entry.get("url")})
         elif stage.kind == "compose":
             entry = run_compose(handler, result_box, cancel_event)
             outputs["compose"] = entry
