@@ -24,8 +24,8 @@
 - `codex exec [OPTIONS] [PROMPT]` — **`exec` is a subcommand and MUST come first**.
 - `--search` is a **global** flag (before the subcommand) → sets `web_search="live"` (codex also has web search on by default in *cached* mode). Satisfies the Art. I precondition.
 - `--sandbox` / `--color` / `-o/--output-last-message` / `--json` are **`exec` options** (after the subcommand). `--color` **errors at the top level** (`error: unexpected argument '--color' found`).
-- **Proposed run**: `codex --search exec --color never --sandbox read-only -- "<prompt>"` — parses OK (verified).
-- **Proposed route**: `codex --search exec --color never --sandbox read-only -- "<prompt>"` (same shape).
+- **Proposed run**: `codex --search exec --color never --sandbox read-only --skip-git-repo-check -- "<prompt>"` — parses OK (verified).
+- **Proposed route**: `codex exec --color never --sandbox read-only --skip-git-repo-check -- "<prompt>"` — **no `--search`** (routing must not spend a live web search).
 - ⚠️ **Current registry BUG**: the existing `route_cmd = ("codex", "--color", "never", "--sandbox", "read-only", "--")` has **no `exec` subcommand** → forwards to the **interactive** CLI (hangs headless until timeout, then keyword fallback), and `--color` is invalid at the top level. Must be fixed as part of validating codex. Existing `run_cmd` (`codex --search exec ...`) parses but should be re-confirmed.
 
 ### antigravity (`agy`) — new candidate, replaces gemini

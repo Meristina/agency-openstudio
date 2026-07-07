@@ -20,7 +20,7 @@ For every spec, both `run_cmd` and `route_cmd` invoke the engine non-interactive
 
 `run_mission_cli(engine=E)` for any registered `E` with `validated=False` raises `EngineNotValidated` **before** any binary lookup or subprocess, naming `E`, "NOT validated", and the validated alternative(s).
 
-- **Test** (extends existing parametrized refusal test): parametrize over `["codex", "antigravity", "opencode"]` (pre-live-test state). `_call` is monkeypatched to fail if invoked. Assert message contains the engine name, `"NOT validated"`, and `"claude-code"`.
+- **Test** (extends existing parametrized refusal test): parametrize over the registry's unvalidated set, which after the codex flip is `["antigravity", "opencode"]` (the test derives it dynamically as `[n for n, s in ENGINE_SPECS.items() if not s.validated]`, so it stays correct if a live-test later promotes one). `_call` is monkeypatched to fail if invoked. Assert message contains the engine name, `"NOT validated"`, and `"claude-code"`.
 
 ## C4 — Unknown / removed engine
 

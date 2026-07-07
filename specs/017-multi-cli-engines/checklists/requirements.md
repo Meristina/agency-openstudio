@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Real Multi-CLI — Validate codex & gemini, Add opencode, Publish Compatibility Matrix
+# Specification Quality Checklist: Real Multi-CLI — Validate codex, Replace gemini with antigravity, Add opencode, Publish Compatibility Matrix
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-07-07
@@ -32,7 +32,7 @@
 ## Notes
 
 - This is an engine-infrastructure brick, so the specification necessarily names the
-  concrete engines (`claude-code`, `codex`, `gemini`, `opencode`) and the README
+  concrete engines (`claude-code`, `codex`, `antigravity`, `opencode`) and the README
   compatibility matrix as user-facing surfaces — these are product nouns and
   deliverables, not
   implementation choices, so they are retained deliberately. Registry/API mechanics
