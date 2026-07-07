@@ -2,6 +2,15 @@ import type { CatalogKey } from "../../i18n/catalog";
 
 export type DeliverableType = "research" | "strategy" | "video";
 
+// The brief's deliverable-type step also offers "recipe" — NOT a mission deliverable type but a
+// hand-off out of the mission brief into the recipe catalog (one entry point per FR-002). It is
+// intercepted in the flow, so it never becomes an `activeType`/`questionSets` key.
+export const RECIPE_DELIVERABLE = "recipe";
+
+export function isDeliverableType(value: unknown): value is DeliverableType {
+  return value === "research" || value === "strategy" || value === "video";
+}
+
 export type Answer =
   | string
   | boolean
@@ -75,6 +84,7 @@ const deliverableType: Question = {
     { id: "research", labelKey: "brief.choice.research" },
     { id: "strategy", labelKey: "brief.choice.strategy" },
     { id: "video", labelKey: "brief.choice.video" },
+    { id: RECIPE_DELIVERABLE, labelKey: "brief.choice.recipe" },
   ],
   compose: { kind: "line", labelKey: "brief.question.deliverableType" },
 };

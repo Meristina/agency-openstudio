@@ -195,6 +195,7 @@ export const en: Record<CatalogKey, string> = {
   "brief.choice.research": "Research",
   "brief.choice.strategy": "Strategy",
   "brief.choice.video": "Video",
+  "brief.choice.recipe": "Recipe (mission → production)",
   "brief.sector.general": "General",
   "brief.sector.food": "Food and beverage",
   "brief.sector.sport": "Sport",

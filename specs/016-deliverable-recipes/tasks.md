@@ -114,7 +114,7 @@ install hint and other recipes stay usable.
 - [X] T027 [US2] Wire `GET /api/recipes` in `agency_studio/server.py` to serialize the registry (keys only, immediate — no probe on list)
 - [X] T028 [P] [US2] Implement `catalogView()` + Composed/Production grouping in `app/studio/src/screens/recipes/recipesModel.ts` (localized, no raw ids/slugs as operator content)
 - [ ] T029 [US2] Implement `RecipeCatalog.tsx` in `app/studio/src/screens/recipes/` — plain-language rows (name / produces / needs), honest "needs install" note for an unavailable recipe, launch entry into `RecipeLaunch`
-- [X] T030 [US2] Add the additive "start from a recipe" entry on Home (`app/studio/src/screens/home/`) and the recipes deliverable-type path in the Guided Brief (`app/studio/src/screens/brief/`) — existing behavior intact
+- [X] T030 [US2] Add the additive "start from a recipe" entry on Home (`app/studio/src/screens/home/`) and the recipes deliverable-type path in the Guided Brief (`app/studio/src/screens/brief/`) — the brief's deliverable-type step offers "recipe" (EN/FR), which hands off to the `#/recipes` catalog instead of composing a mission (guarded so it never indexes `questionSets`; leaves no phantom draft). Existing mission behavior intact; tested in `GuidedBrief.test.tsx`
 - [X] T031 [P] [US2] Fill EN + FR strings for every `recipes.*` key in `app/studio/src/i18n/en.ts` and `fr.ts` (parity)
 - [X] T032 [P] [US2] Frontend test `app/studio/src/screens/recipes/RecipeCatalog.test.tsx` — renders composed + production recipes in EN + FR with plain-language tier badges (no raw ids/slugs); launch reaches the run surface (the honest 'needs install' note is a launch-time 501 error frame on the timeline, not a catalog probe)
 

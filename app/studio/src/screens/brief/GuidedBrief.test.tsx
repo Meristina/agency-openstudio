@@ -211,4 +211,15 @@ describe("GuidedBrief draft flow (US5)", () => {
     await screen.findByText(/Mission launched/);
     expect(localStorage.getItem("studio.briefDraft.v1")).toBeNull();
   });
+
+  it("hands off to the recipe catalog when the 'Recipe' deliverable type is chosen (FR-002)", () => {
+    window.location.hash = "";
+    renderBrief("intent=Full%20campaign");
+    next();  // intent → deliverableType step
+    fireEvent.click(screen.getByRole("radio", { name: /Recipe/ }));
+    next();  // choosing recipe routes to the catalog instead of composing a mission
+    expect(window.location.hash).toBe("#/recipes");
+    expect(runMission).not.toHaveBeenCalled();
+    expect(localStorage.getItem("studio.briefDraft.v1")).toBeNull();  // no phantom mission draft left
+  });
 });
