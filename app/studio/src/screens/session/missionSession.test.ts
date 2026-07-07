@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runMission } from "../../api";
+import { resumeRecipe, startRecipe } from "../recipes/recipesApi";
 import { missionSession } from "./missionSession";
 
 vi.mock("../../api", () => ({
@@ -9,7 +10,16 @@ vi.mock("../../api", () => ({
   cancelMission: vi.fn(async () => true),
 }));
 
-afterEach(() => missionSession.reset());
+vi.mock("../recipes/recipesApi", () => ({
+  startRecipe: vi.fn(async (_id: string, _subject: string, onEvent: (e: { phase: "run"; run_id: string }) => void) => {
+    onEvent({ phase: "run", run_id: "rc0" });
+  }),
+  resumeRecipe: vi.fn(async (_runId: string, onEvent: (e: { phase: "run"; run_id: string }) => void) => {
+    onEvent({ phase: "run", run_id: "rc1" });
+  }),
+}));
+
+afterEach(() => { missionSession.reset(); vi.clearAllMocks(); });
 
 describe("missionSession", () => {
   it("captures the run id and buffers events", async () => {
@@ -35,6 +45,21 @@ describe("missionSession", () => {
     await missionSession.resume("r0");
     // Empty goal so the server reconstructs it from the checkpoint (a non-empty mismatching goal 409s).
     expect(runMission).toHaveBeenCalledWith("", expect.any(Function), expect.objectContaining({ resumeFrom: "r0" }));
+  });
+
+  it("dispatches a resume to the recipe endpoint after a recipe run (not the mission path)", async () => {
+    await missionSession.launchRecipe("full-campaign", "coffee", []);
+    await missionSession.resume("rc1");
+    expect(resumeRecipe).toHaveBeenCalledWith("rc1", expect.any(Function), expect.anything());
+    // Never the mission resume path — that would 404 on a recipe checkpoint.
+    expect(runMission).not.toHaveBeenCalled();
+    expect(missionSession.snapshot()).toMatchObject({ status: "done", runId: "rc1" });
+  });
+
+  it("routes launchRecipe through the recipe start endpoint", async () => {
+    await missionSession.launchRecipe("cinematic", "a teaser", ["pipeline"]);
+    expect(startRecipe).toHaveBeenCalledWith("cinematic", "a teaser", expect.any(Function),
+      expect.objectContaining({ cloudOptins: ["pipeline"] }));
   });
 
   it("reset aborts the in-flight run and stays idle over the late rejection", async () => {
