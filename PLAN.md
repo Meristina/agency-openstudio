@@ -136,9 +136,15 @@ never opt-in, cloud opt-in default-off; empty subject never launches). Frontend 
 green, tsc clean. (Frontend is not in CI — pytest + CodeRabbit are the gates — so it is
 validated locally.)
 
-**Still deferred** (tracked in #21): the Guided-Brief deliverable-type entry (rest of
-T030) and the frontend **resume affordance** (rest of T045 — catch an error frame's
-`checkpoint`, re-POST `/api/recipe {resume_from}`; the backend resume already landed in #23).
+**Resume affordance wired** (`#25`, issue #21 · T045): a recipe run that fails at a
+post-mission stage now resumes from the UI — `missionSession.resume` dispatches on the
+tracked run kind to `POST /api/recipe {resume_from}` (via `recipesApi.resumeRecipe`), so the
+existing timeline resume button works for recipes with no change to the shared
+timeline/TerminalPanel. Immediate same-session resume works; a reload-then-resume (in-memory
+kind lost) is a noted small follow-up.
+
+**Still deferred** (tracked in #21): only the Guided-Brief deliverable-type entry (rest of
+T030) remains.
 
 ## Brick 9 — Real multi-CLI
 
