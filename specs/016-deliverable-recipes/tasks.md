@@ -83,7 +83,7 @@ together from the existing library/export.
 - [X] T016 [US1] Wire `POST /api/recipe` in `agency_studio/server.py` to launch the orchestrator and stream SSE (reuse the mission SSE header + drain loop); reject a missing required input with a localized 400
 - [X] T017 [P] [US1] Implement `startRecipe()` (SSE, mission-stream shape) plus `listRecipes()`/`cancelRecipe()` in `app/studio/src/screens/recipes/recipesApi.ts`
 - [ ] T018 [US1] Implement `RecipeLaunch.tsx` in `app/studio/src/screens/recipes/` — collect the subject via the guided brief (`screens/brief/composeMission`), POST `/api/recipe`, and hand the stream to the existing `screens/missions/MissionTimeline`
-- [ ] T019 [P] [US1] Frontend test `app/studio/src/screens/recipes/RecipeLaunch.test.tsx` — launching `full-campaign` posts the subject and renders the run via `MissionTimeline` (SSE frames replayed through `timeline.ts::groupTimeline`)
+- [X] T019 [P] [US1] Frontend test `app/studio/src/screens/recipes/RecipeLaunch.test.tsx` — launching a recipe posts the subject (+ chosen opt-ins) via `missionSession.launchRecipe` and hands off to the `#/missions` unified timeline; an empty subject does not launch
 
 **Checkpoint**: MVP — the done-when is met; dossier + creatives collected in one run.
 
@@ -116,7 +116,7 @@ install hint and other recipes stay usable.
 - [ ] T029 [US2] Implement `RecipeCatalog.tsx` in `app/studio/src/screens/recipes/` — plain-language rows (name / produces / needs), honest "needs install" note for an unavailable recipe, launch entry into `RecipeLaunch`
 - [X] T030 [US2] Add the additive "start from a recipe" entry on Home (`app/studio/src/screens/home/`) and the recipes deliverable-type path in the Guided Brief (`app/studio/src/screens/brief/`) — existing behavior intact
 - [X] T031 [P] [US2] Fill EN + FR strings for every `recipes.*` key in `app/studio/src/i18n/en.ts` and `fr.ts` (parity)
-- [ ] T032 [P] [US2] Frontend test `app/studio/src/screens/recipes/RecipeCatalog.test.tsx` — renders all 17 in EN + FR, launch reachable from Home + Brief, an unavailable recipe shows the honest note
+- [X] T032 [P] [US2] Frontend test `app/studio/src/screens/recipes/RecipeCatalog.test.tsx` — renders composed + production recipes in EN + FR with plain-language tier badges (no raw ids/slugs); launch reaches the run surface (the honest 'needs install' note is a launch-time 501 error frame on the timeline, not a catalog probe)
 
 **Checkpoint**: The full menu is browsable and launchable.
 
@@ -140,7 +140,7 @@ cloud and confirm the choice is required and visible before launch.
 - [ ] T034 [US3] Resolve each stage's `tier` in `agency_studio/recipes/stages.py` — mission/compose via the existing `IMAGE_MODELS`/`VIDEO_MODELS` local selection, and a `pipeline` stage's tier from its manifest; a `cloud` stage runs cloud only when `RecipeRun.cloud_optins` includes it (keys read from env only)
 - [X] T035 [US3] Honor `cloud_optins` in `POST /api/recipe` (`agency_studio/server.py`) — never accept a key field; ignore/reject any secret present in the body
 - [ ] T036 [P] [US3] Implement `stageTierBadges()` in `app/studio/src/screens/recipes/recipesModel.ts` and the explicit cloud opt-in toggles (default off) in `RecipeLaunch.tsx`
-- [ ] T037 [P] [US3] Frontend test `app/studio/src/screens/recipes/tier-optin.test.tsx` — tier badges show local(free)/cloud; launch stays local by default; opting a stage into cloud is required + visible before launch
+- [X] T037 [P] [US3] Tier-opt-in coverage folded into `RecipeLaunch.test.tsx` — tier badges show local(free)/cloud; a local stage is never opt-in-able and the cloud opt-in defaults off (a default launch stays local); opting a stage into cloud is explicit + visible before launch
 
 **Checkpoint**: Cost/privacy control is visible and default-safe.
 
@@ -167,7 +167,7 @@ with no orphan; a failure offers resume-from-failed-stage without re-running the
 - [X] T042 [US4] Wire `POST /api/recipe/{id}/cancel` in `agency_studio/server.py` reusing `_handle_cancel_mission` semantics (explicit + cancel events, kill-tree); 404 on unknown/finished run
 - [X] T043 [US4] Implement the recipe-run checkpoint envelope in `agency_studio/recipes/checkpoint.py` (`completed_stages` + `outputs`, reusing the mission `_write_checkpoint`/`_load_checkpoint`/`_checkpoint_path` seam; distinguished by `kind`) and resume handling in `agency_studio/recipes/orchestrator.py` + `POST /api/recipe` `resume_from` (replay completed stages, reload the mission dossier instead of re-running it, restart at the failed stage; a fatal post-mission stage writes the checkpoint and returns an error result carrying the resume affordance). Only checkpoints when the mission is complete (nothing to skip otherwise).
 - [X] T044 [US4] Emit the thin per-stage `stage` framing on the SSE stream in `agency_studio/recipes/orchestrator.py` so the existing `timeline.ts::groupTimeline` / `MissionTimeline` render the whole chain as one unified timeline; carry the resume affordance (`resumable`/`checkpoint`) on error terminal frames (replayed stages flagged `replayed`)
-- [ ] T045 [P] [US4] Frontend test `app/studio/src/screens/recipes/timeline-reuse.test.tsx` — the run view reuses `MissionTimeline`; a 2nd launch is blocked with a plain-language message; a failure surfaces a resume affordance
+- [~] T045 [P] [US4] Timeline-reuse covered in `RecipeLaunch.test.tsx` (the run hands off to the `#/missions` MissionTimeline). Still deferred: the frontend **resume affordance** — catching an error frame's `checkpoint` and re-POSTing `/api/recipe {resume_from}` (the backend resume landed in #23); and the 2nd-launch blocked-message UI (backend 409 already enforced)
 
 **Checkpoint**: Full run model — one timeline, one active run, cancel, resume.
 
