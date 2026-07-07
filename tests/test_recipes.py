@@ -75,6 +75,92 @@ def test_full_campaign_produces_video_and_attaches_it(monkeypatch, tmp_path):
         httpd.shutdown()
 
 
+def test_recipe_resume_from_failed_compose(monkeypatch, tmp_path):
+    # Per-stage resume (T043/T039): a run that fails at a POST-mission stage (compose) offers a
+    # checkpoint; resuming replays the completed mission (the veto-gated mission does NOT re-run) and
+    # restarts at the failed stage. The expensive stage's minutes/tokens are never re-spent.
+    from agency_kit import store
+    from agency_studio import openmontage_backend as omb
+
+    store_dir = tmp_path / ".store"
+    store_dir.mkdir()
+    monkeypatch.setattr(store, "missions_dir", lambda: store_dir)
+
+    mission_calls = []
+
+    def fake_run(**kwargs):
+        mission_calls.append(1)
+        mid = store.new_mission_id("launch coffee")
+        dossier = {
+            "mission_id": mid, "goal": "launch coffee",
+            "project_root": store.canonical_project_root(str(tmp_path)),
+            "route": ["marketing"], "delivered": "# Strategy\n\nLaunch it.",
+            "assets": [], "verdicts": [{"verdict": "PASS"}],
+        }
+        store.save(dossier)
+        return runner_bridge.MissionResult(path=store_dir / mid / "dossier.json", dossier=dossier)
+
+    compose_calls = []
+
+    def flaky_render(prompt, out_path, should_cancel=None):
+        compose_calls.append(1)
+        if len(compose_calls) == 1:
+            raise RuntimeError("compose boom")  # fatal on the first attempt
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+
+    monkeypatch.setattr(runner_bridge, "run", fake_run)
+    monkeypatch.setattr(omb, "render_composition", flaky_render)
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        # First run: mission succeeds, compose fails → an error frame naming a resumable checkpoint.
+        events = _read_sse(_post_recipe(host, port, recipe_id="full-campaign", subject="launch coffee"))
+        err = events[-1]
+        assert err["phase"] == "error" and err["resumable"]
+        cid = err["checkpoint"]
+        assert cid and len(mission_calls) == 1
+
+        # Resume: mission is replayed (not re-run), compose is retried → the run completes.
+        events2 = _read_sse(_post_recipe(host, port, recipe_id="full-campaign",
+                                         subject="launch coffee", resume_from=cid))
+        assert events2[-1]["phase"] == "done"
+        assert len(mission_calls) == 1   # the veto-gated mission did NOT re-run
+        assert len(compose_calls) == 2   # compose was retried
+        # The replayed mission stage is marked as such on the resume stream.
+        assert any(e.get("stage") == "mission" and e.get("replayed") for e in events2)
+    finally:
+        httpd.shutdown()
+
+
+def test_recipe_checkpoint_not_leaked_into_mission_paths(tmp_path):
+    # CodeRabbit (Major): recipe checkpoints share the checkpoints dir + id namespace with missions,
+    # so the mission listing/resume MUST skip them (they carry no mission goal/flags). A recipe
+    # checkpoint never surfaces as a mission checkpoint nor drives a mission run.
+    from agency_studio.recipes import checkpoint
+
+    docs_root = tmp_path / ".agency-studio"
+    cid = "reciperun1"
+    checkpoint.write(docs_root, checkpoint.envelope(
+        run_id=cid, recipe_id="full-campaign", subject="x", cloud_optins=[],
+        completed_stages=["mission"], outputs={"mission": {"mission_id": "m1"}}))
+    assert checkpoint.load(docs_root, cid) is not None  # it IS a valid recipe checkpoint
+
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("GET", "/api/checkpoints")
+        listed = json.loads(conn.getresponse().read())["checkpoints"]
+        assert all(c.get("id") != cid for c in listed)  # not listed as a mission checkpoint
+        # Never resumed as a mission (would rebuild a mission with no goal/flags): any non-200.
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("POST", "/api/mission", body=json.dumps({"resume_from": cid, "goal": ""}),
+                     headers={"Content-Type": "application/json"})
+        assert conn.getresponse().status != 200
+    finally:
+        httpd.shutdown()
+
+
 def test_recipe_run_rejects_nested_secret(tmp_path):
     # Keys are env-only: a secret smuggled inside the nested `inputs` container must be rejected
     # too, not just top-level fields (CodeRabbit finding).
