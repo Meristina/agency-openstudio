@@ -129,9 +129,16 @@ veto-gated mission — and restarts at the failed stage. `POST /api/recipe` acce
 `resume_from`; the mission listing/resume paths skip recipe checkpoints so the two resume
 lanes stay isolated. Additive: without `resume_from`, behavior is byte-identical.
 
+**Recipe frontend tests landed** (`#24`, issue #21 · T019/T032/T037 + T045 timeline-reuse):
+vitest coverage for the catalog (composed + production, EN/FR, plain-language tier badges)
+and launch (posts subject + opt-ins, hands off to the `#/missions` timeline; local stage
+never opt-in, cloud opt-in default-off; empty subject never launches). Frontend suite 290
+green, tsc clean. (Frontend is not in CI — pytest + CodeRabbit are the gates — so it is
+validated locally.)
+
 **Still deferred** (tracked in #21): the Guided-Brief deliverable-type entry (rest of
-T030) and the remaining frontend tests (T019/T032/T037/T045, incl. the recipe resume
-affordance wiring in `RecipeLaunch`).
+T030) and the frontend **resume affordance** (rest of T045 — catch an error frame's
+`checkpoint`, re-POST `/api/recipe {resume_from}`; the backend resume already landed in #23).
 
 ## Brick 9 — Real multi-CLI
 
