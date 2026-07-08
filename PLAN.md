@@ -155,13 +155,18 @@ for the production runner under untrusted input. Brick 8 is now complete end-to-
 production pipelines really run (subprocess CLI-agent), recipes resume per stage, and every
 surface is reachable and tested.
 
-## Brick 9 — Real multi-CLI
+## Brick 9 — Real multi-CLI *(done — `1ac3eda`)*
 
-codex and gemini validated end-to-end against the Brick 1 contract (headless web
-search verified per engine), opencode added; an engines × capabilities compatibility
-matrix published in the README.
+codex validated end-to-end against the Brick 1 contract (headless web search via
+`--search`, sources resolved per the live-test report); the deprecated gemini slot
+replaced by antigravity (Gemini CLI → Antigravity CLI upstream, binary `agy`) and
+opencode added — both registered as refused candidates until their own live-test
+proves headless web search (antigravity tool-driven, opencode Exa/`OPENCODE_ENABLE_EXA`,
+neither proven); an engines × capabilities compatibility matrix published in
+`agencykit/README.md`, guarded by a matrix-vs-registry consistency test.
 **Done when**: the same mission passes on two engines with comparable dossiers and
-verified sources (Brick 3) on each.
+verified sources (Brick 3) on each. ✅ claude-code + codex (offline suite green;
+`--engine gemini` now errors as unknown, no silent substitution).
 
 ---
 
