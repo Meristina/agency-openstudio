@@ -168,11 +168,12 @@ neither proven); an engines × capabilities compatibility matrix published in
 verified sources (Brick 3) on each. ✅ claude-code + codex (offline suite green;
 `--engine gemini` now errors as unknown, no silent substitution).
 
-### Deferred follow-ups *(closed #30/#31 — not on the critical path)*
+### Deferred follow-ups *(closed #28/#30/#31 — not on the critical path)*
 
-Two Brick 9 tracking issues were closed as documented deferrals, not abandoned. Each is
-blocked on an **external** dependency, not repo effort, so an open ticket would have implied
-pending code that doesn't exist. Reopen (or file a fresh scoped issue) when the trigger is met.
+Three tracking issues were closed as documented deferrals, not abandoned. Each is blocked on
+an **external** dependency (a CLI/network environment, an official-docs fact) or is speculative
+against a deployment that does not exist — so an open ticket would have implied pending code
+that doesn't exist. Reopen (or file a fresh scoped issue) when the trigger is met.
 
 **Live-validate antigravity & opencode** (`#30`): both engines already ship in the correct
 fail-safe posture (`validated=False` / `web_search_headless=False` → refused, no silent
@@ -196,6 +197,20 @@ register it in `_ADAPTERS`, add `"antigravity"` to `SUPPORTED`, update the `--ag
 `gemini` as a legacy adapter (still writes valid `.gemini/commands/agency/*.toml`); remove
 only as a deliberate separate change. **Reopen trigger:** Antigravity's command format is
 confirmed from official docs.
+
+**OpenMontage runner OS/container sandbox** (`#28`, from Brick 8): the production runner
+(`agency_studio/recipes/om_bridge.py`) drives a broad-tool CLI agent whose `subject` is
+prompt-controlled. This is deliberately **trusted-operator-only** and safe under the current
+model — the studio binds `127.0.0.1` (no CORS `*`), single-operator + local-first, so the
+`subject` comes from the same operator whose machine/credentials the agent already runs as;
+no remote attacker, keys env-only, confinement (cwd = vendored subtree, per-run `--add-dir`,
+bounded artifact) is defence-in-depth already in place (see the "Trust boundary" note at
+`om_bridge.py:28-40`). The hardening — curated `env` allowlist + OS/container mount scope +
+egress deny, gated behind an explicit "untrusted input" mode — exists only for a multi-tenant
+/ network-exposed deployment that does not exist; building it now would be speculative and
+risks breaking OpenMontage tools that legitimately read env (YAGNI / additive-over-invasive).
+**Reopen trigger:** a future untrusted-input / multi-tenant / network-exposed deployment of
+the production runner.
 
 ---
 
