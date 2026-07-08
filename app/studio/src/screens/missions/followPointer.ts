@@ -6,6 +6,9 @@ export interface FollowPointer {
   missionId?: string | null;
   resumable?: boolean;
   checkpoint?: string | null;
+  // Which endpoint owns this run's checkpoint, persisted so a resume survives a full page reload —
+  // the in-memory session kind resets to "mission" on reload, which would 404 a recipe checkpoint.
+  resumeKind?: "mission" | "recipe";
   updatedAt: number;
 }
 

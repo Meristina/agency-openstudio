@@ -41,7 +41,9 @@ export default function TerminalPanel({ terminal, pointer }: { terminal: Termina
   async function resume() {
     if (pointer?.runId) {
       clear();
-      await missionSession.resume(pointer.runId);
+      // Pass the persisted run kind so a reload-then-resume dispatches to the right endpoint —
+      // after a reload the live session kind is gone, so the pointer is the only source of truth.
+      await missionSession.resume(pointer.runId, pointer.resumeKind);
     }
   }
 
