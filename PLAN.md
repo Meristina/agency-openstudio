@@ -220,6 +220,37 @@ risks breaking OpenMontage tools that legitimately read env (YAGNI / additive-ov
 **Reopen trigger:** a future untrusted-input / multi-tenant / network-exposed deployment of
 the production runner.
 
+### Post-Brick-9 hardening *(from live-run validation)*
+
+Running real missions end-to-end (validated `claude-code` engine, live web search) — not
+just the offline suite — surfaced two engine-layer gaps the mocked tests could not. Both
+shipped as scoped, Art. IX-safe fixes.
+
+**Inspector verdict mis-extraction** (`#36`): ✅ **shipped** (`#37`, `206c49a`).
+`_short_verdict` scanned the inspector's whole prose and returned `VETO` whenever the word
+"veto" appeared anywhere — including negated mentions ("non un veto", "aucune raison de
+VETO"). A live café-positioning mission concluded `PASS-WITH-FIXES` in all three inspector
+iterations, yet two were recorded as `VETO`, understating a cleared deliverable and stamping
+the mission `VETO`. Fix: read the token from the last explicit `## VERDICT:` line, falling
+back to the whole-text scan only when none exists; severity ordering preserved via a shared
+`_verdict_token` helper. Extraction only — the veto loop's iterate-on-`(VETO|PASS-WITH-FIXES)`
+behavior is byte-identical. Regression test built from the three real inspector conclusions.
+
+**CLI crash-recovery checkpoints** (`#38`, `7d32d70`): ✅ **shipped**. The mission loop emits a
+JSON checkpoint after routing / each department / each synth→inspect cycle, but only when a
+caller wires an `on_checkpoint` sink — the Studio server did, the plain `agency run` CLI
+didn't, so a mission killed mid-flight lost all completed work (observed live: a 3-department
+run stopped during synthesis after ~35 min). New `agency_cli/checkpoints.py` — a durable,
+atomically-written, corrupt-tolerant store under `~/.agency/checkpoints/` keyed by
+`(project_root, engine, goal)`. `agency run` now persists each boundary and, on a re-run of
+the same goal, **resumes from the last checkpoint** (skipping completed departments) after
+`_validate_resume_state`; a stale/corrupt envelope degrades to a fresh run; `--fresh` forces a
+clean start; the checkpoint is deleted once the durable dossier is saved. Additive
+(`on_checkpoint=None` ⇒ prior behavior byte-identical) and Art. IX-safe by construction (the
+engine only snapshots already-inspected state). Demonstrated live: a mission killed at 2/3
+departments resumed via `agency run`, skipped `solve`+`product`, and completed with a clean
+`PASS`.
+
 ---
 
 ## Invariants (all bricks)
