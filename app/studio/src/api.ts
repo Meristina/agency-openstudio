@@ -13,6 +13,7 @@ import type {
   MissionSummary,
   ModelsStatus,
   SpeechResult,
+  VideoResult,
   SystemInfo,
   Attribution,
   TaxonomyTree,
@@ -253,6 +254,21 @@ export async function generateImage(
   });
   if (!res.ok) throw new Error(await errorText(res, "POST /api/image"));
   return (await res.json()) as ImageResult;
+}
+
+/** Render a short video from a prompt (POST /api/video). Omitting `model` lets the server use
+ * its configured backend ($AGENCY_STUDIO_VIDEO_BACKEND: local Remotion or cloud Seedance). */
+export async function generateVideo(
+  prompt: string,
+  opts: { model?: string } = {},
+): Promise<VideoResult> {
+  const res = await fetch("/api/video", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, ...opts }),
+  });
+  if (!res.ok) throw new Error(await errorText(res, "POST /api/video"));
+  return (await res.json()) as VideoResult;
 }
 
 /** Synthesize speech from text (POST /api/tts). */

@@ -1,4 +1,4 @@
-// Session gallery of locally-generated assets (images + audio). Items are served
+// Session gallery of locally-generated assets (images, audio, video). Items are served
 // by the Studio server under /media; this holds only the in-session list.
 
 import type { GalleryItem } from "../types";
@@ -13,6 +13,8 @@ export default function Gallery({ items }: { items: GalleryItem[] }) {
         <figure key={item.url} className="gallery-item">
           {item.kind === "image" ? (
             <img src={item.url} alt={item.label} loading="lazy" />
+          ) : item.kind === "video" ? (
+            <video controls src={item.url} />
           ) : (
             <audio controls src={item.url} />
           )}

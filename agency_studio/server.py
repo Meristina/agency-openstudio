@@ -18,6 +18,7 @@ Endpoints:
   GET  /api/taxonomy          client/project/campaign tree for the current workspace
   GET  /api/mission/{id}      load one saved dossier (JSON)
   DELETE /api/mission/{id}    permanently delete a saved mission (204; 404 unknown/out-of-scope)
+  POST /api/image · /api/video · /api/tts · /api/stt   direct media generation (Console tools)
   POST /api/mission/{id}/assign set/clear a taxonomy override
   GET  /api/mission/{id}/pdf  export the deliverable as PDF ([pdf] extra)
   GET  /api/checkpoints       list resumable mission checkpoints (crash-recovery)
@@ -906,6 +907,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_run_mission()
         if path == "/api/image":
             return self._handle_generate_image()
+        if path == "/api/video":
+            return self._handle_generate_video()
         if path == "/api/tts":
             return self._handle_synthesize()
         if path == "/api/stt":
@@ -2254,6 +2257,39 @@ class StudioHandler(BaseHTTPRequestHandler):
         self._send_json({
             "url": url, "prompt": result.prompt,
             "seed": result.seed, "seconds": result.seconds, "model": result.model,
+        })
+
+    def _handle_generate_video(self) -> None:
+        """Render one short video from a prompt (POST /api/video), the direct-tools twin of
+        /api/image. The configured backend (``$AGENCY_STUDIO_VIDEO_BACKEND``: cloud seedance
+        default or local OpenMontage Remotion) is invoked through the media manager. Backend
+        probes still gate it — a missing [media] extra, an absent cloud key, or an
+        un-``npm install``\\ ed remotion-composer raises a MediaUnavailable subclass (→ 501),
+        so calling this directly never bypasses those preconditions."""
+        payload = self._read_json_body()
+        if payload is None:
+            return
+        prompt = _str_field(payload, "prompt")
+        if not prompt:
+            return self._send_error_json(400, "missing 'prompt'")
+        from agency_studio import capabilities, seedance
+        try:
+            model = payload.get("model") or capabilities.resolve("video")
+            seedance.video_model(model)  # unknown id → ValueError → 400
+        except (ValueError, TypeError) as exc:
+            return self._send_error_json(400, str(exc))
+        try:
+            result = self._media_manager().generate_video(prompt, model=model)
+            url = self._media_url(result.path)
+        except ImportError as exc:  # MediaUnavailable / Seedance / OpenMontage unavailable → 501
+            return self._send_error_json(501, str(exc))
+        except Exception:  # render/model-fetch failure — clean 500, never a 400 leak
+            import traceback
+            traceback.print_exc()
+            return self._send_error_json(500, "video generation failed")
+        self._send_json({
+            "url": url, "prompt": result.prompt,
+            "seconds": result.seconds, "model": result.model,
         })
 
     def _handle_synthesize(self) -> None:
