@@ -61,11 +61,13 @@ describe("Home", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resume draft" }));
     expect(window.location.hash).toBe("#/brief");
     await waitFor(() => expect(screen.queryByText("Six")).toBeNull());
-    fireEvent.click(screen.getByRole("button", { name: /Live work/ }));
+    // Anchor at start so these match the item's OPEN button (name = "<label> <status>"),
+    // not the per-item delete button (name = "Delete — <label>").
+    fireEvent.click(screen.getByRole("button", { name: /^Live work/ }));
     expect(window.location.hash).toBe("#/missions");
-    fireEvent.click(screen.getByRole("button", { name: /Finished work/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Finished work/ }));
     expect(window.location.hash).toBe("#/library?deliverable=m2");
-    fireEvent.click(screen.getByRole("button", { name: /Needs care/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Needs care/ }));
     expect(window.location.hash).toBe("#/library?deliverable=m3");
     fireEvent.click(screen.getByRole("button", { name: "See all work" }));
     expect(window.location.hash).toBe("#/library");

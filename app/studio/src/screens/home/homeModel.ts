@@ -11,6 +11,9 @@ export interface RecentMissionItem {
   untitled: boolean;
   statusKey: CatalogKey;
   target: string;
+  /** True for a saved (terminal) mission that can be deleted; false for the live-followed run,
+   * which is managed via cancel/resume, not deleted (FR-008). */
+  deletable: boolean;
 }
 
 export interface ContextParts {
@@ -43,6 +46,7 @@ export function recentMissionsView(missions: MissionSummary[], pointer: FollowPo
       untitled: goal.untitled,
       statusKey: mission.delivered ? "home.recent.delivered" : TERMINAL_FAIL.has(verdict) ? "home.recent.failedVerdict" : "home.recent.inProgress",
       target: live ? "#/missions" : `#/library?deliverable=${encodeURIComponent(mission.mission_id)}`,
+      deletable: !live,
     };
   });
 }

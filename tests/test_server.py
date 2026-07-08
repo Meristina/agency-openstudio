@@ -2587,3 +2587,101 @@ def test_visual_store_lives_under_docs_root_not_assets_root(tmp_path):
     finally:
         retriever._store.close()
         httpd.shutdown()
+
+
+# ── DELETE /api/mission/{id} — permanent delete, scoped + traversal-safe ─────
+
+def _iso_missions(monkeypatch, tmp_path):
+    """Redirect the global mission store to a temp dir on EVERY OS, and return it.
+
+    ``monkeypatch.setenv("HOME", …)`` does NOT isolate the store on Windows —
+    ``Path.home()`` there reads ``USERPROFILE``, not ``HOME`` — so patch
+    ``store.missions_path`` directly. The server thread imports the same ``store``
+    module object, so it, ``store.save`` and ``store.delete`` all see the redirected
+    dir; ``missions_dir()`` creates it on first use.
+    """
+    root = tmp_path / "store"
+    monkeypatch.setattr("agency_kit.store.missions_path", lambda: root)
+    return root
+
+
+def test_delete_mission_removes_and_returns_204(monkeypatch, tmp_path):
+    _iso_missions(monkeypatch, tmp_path)
+    _save_dossier("20260101-000000-alpha", tmp_path, goal="throwaway")
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, _ = _delete(host, port, "/api/mission/20260101-000000-alpha")
+        assert resp.status == 204
+        # Gone from the listing the home + Library both read.
+        _, body = _get(host, port, "/api/missions")
+        ids = [m["mission_id"] for m in json.loads(body)["missions"]]
+        assert "20260101-000000-alpha" not in ids
+    finally:
+        httpd.shutdown()
+
+
+def test_delete_mission_unknown_is_404_and_idempotent(monkeypatch, tmp_path):
+    _iso_missions(monkeypatch, tmp_path)
+    _save_dossier("20260101-000000-alpha", tmp_path, goal="throwaway")
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, _ = _delete(host, port, "/api/mission/20260101-000000-nope")
+        assert resp.status == 404
+        # First real delete → 204; deleting the now-absent mission again → 404 (client treats
+        # both as "gone"), and must not crash the connection.
+        resp, _ = _delete(host, port, "/api/mission/20260101-000000-alpha")
+        assert resp.status == 204
+        resp, _ = _delete(host, port, "/api/mission/20260101-000000-alpha")
+        assert resp.status == 404
+    finally:
+        httpd.shutdown()
+
+
+def test_delete_mission_rejects_path_traversal(monkeypatch, tmp_path):
+    _iso_missions(monkeypatch, tmp_path)
+    _save_dossier("20260101-000000-alpha", tmp_path, goal="keep me")
+
+    def _must_not_delete(_mission_id):
+        raise AssertionError("store.delete must not be called for a traversal id")
+
+    monkeypatch.setattr("agency_kit.store.delete", _must_not_delete)
+    httpd, host, port = _start(tmp_path)
+    try:
+        conn = http.client.HTTPConnection(host, port)
+        conn.request("DELETE", "/api/mission/../../../../etc/passwd")
+        resp = conn.getresponse()
+        resp.read()
+        assert resp.status == 404
+    finally:
+        httpd.shutdown()
+
+
+def test_delete_mission_from_another_project_is_404(monkeypatch, tmp_path):
+    # A confined server (--path projA) must not delete projB's mission.
+    store_dir = _iso_missions(monkeypatch, tmp_path)
+    _save_dossier("20260101-000000-foreign", tmp_path / "projB", goal="not yours")
+    httpd, host, port = _start(tmp_path / "projA")
+    try:
+        resp, _ = _delete(host, port, "/api/mission/20260101-000000-foreign")
+        assert resp.status == 404
+        # Still present in the store from its own project's perspective (not deleted).
+        assert (store_dir / "20260101-000000-foreign").is_dir()
+    finally:
+        httpd.shutdown()
+
+
+def test_deleted_mission_absent_from_every_listing(monkeypatch, tmp_path):
+    # US3 consistency: delete one of two missions → GET /api/missions (the same listing the
+    # Library reads) returns only the survivor, with no separate index to keep in sync.
+    _iso_missions(monkeypatch, tmp_path)
+    _save_dossier("20260101-000000-alpha", tmp_path, goal="delete me")
+    _save_dossier("20260101-000000-beta", tmp_path, goal="keep me")
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, _ = _delete(host, port, "/api/mission/20260101-000000-alpha")
+        assert resp.status == 204
+        _, body = _get(host, port, "/api/missions")
+        goals = {m["goal"] for m in json.loads(body)["missions"]}
+        assert goals == {"keep me"}
+    finally:
+        httpd.shutdown()

@@ -343,6 +343,14 @@ export async function deleteDoc(id: string): Promise<void> {
   if (!res.ok) throw new Error(await errorText(res, "DELETE /api/docs"));
 }
 
+/** Permanently delete a saved mission (DELETE /api/mission/{id}). A `404` is treated as
+ * success — the mission is gone either way (idempotent), which also covers deleting an item a
+ * stale list still shows. Any other non-OK status throws a user-facing error. */
+export async function deleteMission(id: string): Promise<void> {
+  const res = await fetch(`/api/mission/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) throw new Error(await errorText(res, "DELETE /api/mission"));
+}
+
 // ── Wave 6 — visual RAG (PixelRAG): images captioned by a vision model, then retrieved ──
 /** List the ingested images (GET /api/visual). Works without the [visual] extra (an un-built
  * store just lists empty). */

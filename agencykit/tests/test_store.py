@@ -95,3 +95,33 @@ def test_last_verdict_token_handles_missing_and_malformed(tmp_path):
     assert store.last_verdict_token({"verdicts": [{"verdict": "PASS"}]}) == "PASS"
     assert store.last_verdict_token({"verdicts": [{}]}) == "—"
     assert store.last_verdict_token({"verdicts": ["oops"]}) == "—"
+
+
+# ── store.delete — permanent removal, idempotent, traversal-safe ─────────────
+
+def test_delete_removes_mission_dir(monkeypatch, tmp_path):
+    missions = tmp_path / "missions"
+    _save(monkeypatch, missions, "001-a", "in A")
+    assert (missions / "001-a").is_dir()
+    assert store.delete("001-a") is True
+    assert not (missions / "001-a").exists()
+
+
+def test_delete_is_idempotent_for_missing_mission(monkeypatch, tmp_path):
+    missions = tmp_path / "missions"
+    _save(monkeypatch, missions, "001-a", "in A")   # creates + monkeypatches missions_dir
+    assert store.delete("001-a") is True
+    # Second delete of the now-absent mission must not raise; returns False (already gone).
+    assert store.delete("001-a") is False
+
+
+def test_delete_refuses_traversal_id_and_touches_nothing(monkeypatch, tmp_path):
+    missions = tmp_path / "missions"
+    _save(monkeypatch, missions, "001-a", "in A")   # monkeypatches missions_dir → missions
+    outside = tmp_path / "secret.txt"
+    outside.write_text("keep me", encoding="utf-8")
+    for bad in ("../secret.txt", "..", ".", "a/b", "/etc", "001-a/../001-a", ""):
+        assert store.delete(bad) is False
+    # Neither the sibling file nor the real mission was touched.
+    assert outside.read_text(encoding="utf-8") == "keep me"
+    assert (missions / "001-a").is_dir()
