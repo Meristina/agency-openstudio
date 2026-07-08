@@ -1,7 +1,7 @@
 # AGENTS.md — Agency OpenStudio ("Agency 360")
 
 Canonical agent context for this repository. `CLAUDE.md` is a symlink to this file;
-other agent CLIs (codex, gemini, opencode…) read this file directly. Phase-gated
+other agent CLIs (codex, antigravity, opencode…) read this file directly. Phase-gated
 governance lives in the spec-kit constitution (`.specify/memory/constitution.md`) once
 ratified — this file must never contradict it.
 
@@ -13,7 +13,7 @@ three vendored pillars:
 
 | Pillar | Where | Role |
 |---|---|---|
-| **agency-kit (studio fork)** | `agencykit/` | The brain: route → 9 departments → synthesize → inspect (veto). Multi-engine (`ENGINES` dict: claude-code / codex / gemini). Mandatory internet research (its constitution Art. I). |
+| **agency-kit (studio fork)** | `agencykit/` | The brain: route → 9 departments → synthesize → inspect (veto). Multi-engine (`ENGINES` dict: claude-code / codex / antigravity / opencode). Mandatory internet research (its constitution Art. I). |
 | **OpenMontage** | `openmontage/` | Video/image production: 122 tools (LOCAL / LOCAL_GPU / API tiers), 13 pipelines, Remotion + HyperFrames rendering. |
 | **The studio** | `agency_studio/` + `app/studio/` | The stdlib HTTP/SSE server, local multimodal engines (image/STT/TTS/RAG/video), and the web GUI — evolving into the "magic box" for non-technical users. |
 
@@ -85,5 +85,5 @@ archived in `docs/legacy/`. The OpenMontage fusion decision record is
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/016-deliverable-recipes/plan.md
+at specs/017-multi-cli-engines/plan.md
 <!-- SPECKIT END -->

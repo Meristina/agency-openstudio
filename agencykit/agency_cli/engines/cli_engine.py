@@ -1,20 +1,18 @@
-"""cli_engine — run missions via a local agent CLI (Claude Code / Codex / Gemini).
+"""cli_engine — run missions via a local agent CLI.
 
 Uses subprocess instead of any LLM SDK or API key: each CLI tool uses its own
 authenticated session and its own live web search.
 
-Registered engines (all declare live headless web search — facts must come from real
-searched sources, never invented). Only VALIDATED engines may drive a production
-mission; unvalidated ones stay registered but are refused (EngineNotValidated) until
-they pass end-to-end validation:
+Registered engines:
   claude-code   claude --allowedTools WebSearch -p "<prompt>"     [validated]
-  codex         codex --search exec --color never --sandbox read-only -- "<prompt>"  [unvalidated]
-  gemini        gemini -p "<prompt>"        (google_web_search built-in)  [unvalidated]
+  codex         codex --search exec --color never --sandbox read-only --skip-git-repo-check -- "<prompt>"  [validated]
+  antigravity   agy --print "<prompt>"       [unvalidated; tool-driven search unproven]
+  opencode      opencode run "<prompt>"      [unvalidated; Exa search config-gated]
 
-Extension point: other agent CLIs (cursor-agent, opencode, copilot) can be added
-via register_engine(EngineSpec(...)), but only once they can guarantee live web
-search headlessly — without it a mission would fabricate data. A new engine stays
-validated=False until it is validated end-to-end.
+Only VALIDATED engines may drive a production mission; unvalidated ones stay
+registered but are refused (EngineNotValidated) until they pass end-to-end
+validation with genuine headless web search. A new engine is one EngineSpec plus
+contract tests.
 """
 
 from dataclasses import dataclass
@@ -89,16 +87,42 @@ ENGINE_SPECS: dict[str, EngineSpec] = {
     ),
     "codex": EngineSpec(
         name="codex",
-        run_cmd=("codex", "--search", "exec", "--color", "never", "--sandbox", "read-only", "--"),
-        route_cmd=("codex", "--color", "never", "--sandbox", "read-only", "--"),
+        run_cmd=(
+            "codex",
+            "--search",
+            "exec",
+            "--color",
+            "never",
+            "--sandbox",
+            "read-only",
+            "--skip-git-repo-check",
+            "--",
+        ),
+        route_cmd=(
+            "codex",
+            "exec",
+            "--color",
+            "never",
+            "--sandbox",
+            "read-only",
+            "--skip-git-repo-check",
+            "--",
+        ),
         web_search_headless=True,
+        validated=True,
+    ),
+    "antigravity": EngineSpec(
+        name="antigravity",
+        run_cmd=("agy", "--print"),
+        route_cmd=("agy", "--print"),
+        web_search_headless=False,
         validated=False,
     ),
-    "gemini": EngineSpec(
-        name="gemini",
-        run_cmd=("gemini", "-p"),
-        route_cmd=("gemini", "-p"),
-        web_search_headless=True,
+    "opencode": EngineSpec(
+        name="opencode",
+        run_cmd=("opencode", "run"),
+        route_cmd=("opencode", "run"),
+        web_search_headless=False,
         validated=False,
     ),
 }
@@ -291,7 +315,7 @@ def _call(
     except FileNotFoundError:
         raise RuntimeError(
             f"engine CLI '{binary}' not found on PATH — install it and authenticate "
-            f"(e.g. Claude Code / Codex CLI / Gemini CLI)."
+            f"(e.g. Claude Code / Codex CLI / Antigravity CLI / opencode)."
         )
 
     streams: dict = {}

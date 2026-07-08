@@ -1,6 +1,6 @@
 # Agency-Kit
 
-The **meta-orchestrator** of the AI Agency. Agency-Kit routes a mission goal across nine departments — **solve**, **product**, **marketing**, **finance**, **comms**, **data**, **ops**, **people**, and **tech** — and has a local agent CLI engine (Claude Code / Codex / Gemini) play each one in turn. It runs single-department missions as well as cross-department pipelines (e.g. *solve → product → marketing*) behind a single CLI, so you describe the outcome once and the agency figures out who does what, in what order. No API key, no SDK.
+The **meta-orchestrator** of the AI Agency. Agency-Kit routes a mission goal across nine departments — **solve**, **product**, **marketing**, **finance**, **comms**, **data**, **ops**, **people**, and **tech** — and has a local agent CLI engine (Claude Code / Codex / Antigravity / OpenCode) play each one in turn. It runs single-department missions as well as cross-department pipelines (e.g. *solve → product → marketing*) behind a single CLI, so you describe the outcome once and the agency figures out who does what, in what order. No API key, no SDK.
 
 ---
 
@@ -23,7 +23,7 @@ Agency Commander  (one engine model plays every role, guided by agents/ doctrine
 
 There are no installable kits and no `commander_<dept>` symbols. Every role —
 router, each of the nine departments, and the inspector — is played by the single
-**engine model** you choose with `--engine` (Claude Code / Codex / Gemini), guided
+**engine model** you choose with `--engine` (Claude Code / Codex / Antigravity / OpenCode), guided
 by the doctrine files in `agents/`. The router classifies the goal to the minimum
 ordered department set; the engine then plays only those departments, in order. The
 engine uses its own model selection and auth.
@@ -77,11 +77,12 @@ pip install -e ".[tui]"          # + terminal UI
 
 Then install **at least one** agent CLI engine and authenticate it once:
 
-| Engine (`--engine`) | CLI | Web search |
-|---|---|---|
-| `claude-code` (default) | [Claude Code](https://code.claude.com) (`claude`) | ✅ `--allowedTools WebSearch` |
-| `codex` | [Codex CLI](https://developers.openai.com/codex/cli) (`codex`) | ✅ `--search` |
-| `gemini` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini`) | ✅ built-in |
+| Engine (`--engine`) | Run / Route | Headless web search (+ config note) | MCP `--mcp-config` | Kill-tree on cancel | Validation status |
+|---|---|---|---|---|---|
+| `claude-code` | `claude --allowedTools WebSearch -p` / `claude -p` | ✅ `--allowedTools WebSearch` | ✅ supported | ✅ yes | validated |
+| `codex` | `codex --search exec --color never --sandbox read-only --skip-git-repo-check --` / `codex exec --color never --sandbox read-only --skip-git-repo-check --` | ✅ `--search` on run only | ❌ no | ✅ yes | validated |
+| `antigravity` | `agy --print` / `agy --print` | ⚠️ tool-driven (unproven) | ❌ no | ✅ yes | candidate (unvalidated) |
+| `opencode` | `opencode run` / `opencode run` | ⚠️ config-gated via `OPENCODE_ENABLE_EXA` (unproven) | ❌ no | ✅ yes | candidate (unvalidated) |
 
 Each CLI uses its own authenticated session and its own live web search — agency-kit
 never sees a key. Live web search is required (Art. I: never invent data), which is
@@ -97,7 +98,7 @@ auth belong to the engine CLI you pick:
 ```bash
 claude          # authenticate Claude Code once (interactive)
 agency run "Launch our new B2B analytics product"            # uses claude-code
-agency run --engine gemini "Diagnose our churn and relaunch" # uses gemini
+agency run --engine codex "Diagnose our churn and relaunch"  # uses codex
 ```
 
 `agency check` verifies the constitution is present and at least one engine CLI is on
@@ -121,9 +122,9 @@ agency init
 # Run a headless mission (router decides the route, then runs each dept via the engine)
 agency run "Launch our new B2B analytics product"
 
-# Pick a different engine
+# Pick a different engine (validated: claude-code, codex)
 agency run --engine codex "Take this feature end-to-end"
-agency run --engine gemini "Full go-to-market plan"
+# antigravity and opencode are registered but refused until validated (see the engine matrix)
 
 # Classify the goal and show the planned route — no engine call
 agency run --dry-run "Pitch investors for Series A"
@@ -164,7 +165,7 @@ print(dossier["delivered"])   # the synthesised cross-department deliverable
 
 # Full headless path (saves to ~/.agency + writes missions/<id>/):
 from agency_cli import runner_bridge
-out = runner_bridge.run("Take this feature end-to-end", engine="gemini")
+out = runner_bridge.run("Take this feature end-to-end", engine="codex")
 ```
 
 The mission loop is `ROUTE → EXECUTE (per dept) → SYNTHESIZE → INSPECT`, all run

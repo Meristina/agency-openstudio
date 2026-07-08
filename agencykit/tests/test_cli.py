@@ -661,10 +661,10 @@ def test_cmd_run_forwards_engine(monkeypatch, tmp_path):
         return MissionResult(path=tmp_path / "001-result", dossier={})
 
     monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
-    rc = _cmd_run(Namespace(goal="ship it", path=str(tmp_path), engine="gemini", dry_run=False,
+    rc = _cmd_run(Namespace(goal="ship it", path=str(tmp_path), engine="codex", dry_run=False,
                             no_escalation=False, escalation_budget=8))
     assert rc == 0
-    assert calls.get("engine") == "gemini", "--engine not forwarded to runner_bridge.run"
+    assert calls.get("engine") == "codex", "--engine not forwarded to runner_bridge.run"
     assert calls["escalation"] == {"budget": 8}
 
 

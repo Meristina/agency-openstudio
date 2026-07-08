@@ -1,6 +1,6 @@
 """Tests for the CLI-engine mission path (`agency_cli/engines/cli_engine.py`).
 
-The engine shells out to a local agent CLI (claude/codex/gemini). Tests stub the
+The engine shells out to a local agent CLI. Tests stub the
 `_call` subprocess wrapper so they run offline with no CLI installed.
 """
 
@@ -14,9 +14,10 @@ from agency_cli.escalation import EscalationConfig
 from agency_cli.verification import VerificationConfig
 
 
-def test_engines_registry_has_three_web_search_engines():
-    assert {"claude-code", "codex", "gemini"} <= set(cli_engine.ENGINES)
-    assert {"claude-code", "codex", "gemini"} <= set(cli_engine._ROUTE_CMD)
+def test_engines_registry_has_current_roster():
+    expected = {"claude-code", "codex", "antigravity", "opencode"}
+    assert expected <= set(cli_engine.ENGINES)
+    assert expected <= set(cli_engine._ROUTE_CMD)
 
 
 def test_route_via_cli_parses_json_array(monkeypatch):

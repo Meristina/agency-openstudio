@@ -345,7 +345,8 @@ def run(
     """Headless run: drive a local agent CLI engine, then serialize the dossier.
 
     engine="claude-code" — `claude -p "..." --allowedTools WebSearch`  (default, validated)
-    engine="codex" / "gemini" — registered but NOT validated: run_mission_cli refuses them
+    engine="codex" — `codex --search exec ...`  (validated end-to-end)
+    engine="antigravity" / "opencode" — registered but NOT validated: run_mission_cli refuses them
         with EngineNotValidated until they are validated end-to-end (no silent substitution).
     No API key required: each CLI uses its own authenticated session + web search.
 
