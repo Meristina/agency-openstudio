@@ -61,8 +61,16 @@ run_mission_cli(goal, engine)
 
 `runner_bridge.run` wraps this: it assigns a `mission_id`, saves to the `~/.agency`
 store (so `agency missions/resume/export` see it), and writes the project-local
-`missions/<id>/{dossier,deliverable}.md`. The engine is single-shot — there is no
-quota/rate-limit checkpoint; `agency resume` re-runs the saved goal.
+`missions/<id>/{dossier,deliverable}.md`. Each engine call is single-shot — there is
+no mid-step quota/rate-limit checkpoint; `agency resume <id>` re-runs a *completed*
+mission's saved goal from scratch. **Crash recovery** is separate: `agency run` wires
+an `on_checkpoint` sink (`agency_cli/checkpoints.py`, `~/.agency/checkpoints/`) that
+persists the engine's per-boundary snapshot (after routing / each department / each
+synth→inspect cycle), so a run of the same goal interrupted mid-flight resumes
+automatically — skipping completed departments — unless `--fresh` is passed. The
+checkpoint is deleted once the durable dossier is saved. Art. IX holds by
+construction: the engine only snapshots already-inspected state, and
+`_validate_resume_state` rejects any envelope whose invariants don't hold.
 
 ### Cross-department dossier
 
