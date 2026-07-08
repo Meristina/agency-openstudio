@@ -819,3 +819,94 @@ def test_batch_runner_clear_removes_done(tmp_path, monkeypatch):
     goals = [r["goal"] for r in remaining]
     assert "keep this" in goals
     assert "remove this" not in goals
+
+
+# ---- CLI checkpoint wiring (`agency run` crash recovery) --------------------
+# The engine emits checkpoints (route / each dept / each cycle) only when a caller
+# wires an on_checkpoint sink. These verify the CLI now wires one, resumes an
+# interrupted run of the same goal, honours --fresh, and cleans up on success.
+
+def _dept_snapshot(goal, engine="claude-code"):
+    # Valid "dept" checkpoint: every routed department done, no cycle yet — the shape
+    # a mission killed mid-synthesis leaves behind (skips 3 depts on resume).
+    return {
+        "version": 1, "phase": "dept", "goal": goal, "engine": engine,
+        "route": ["solve", "product", "marketing"],
+        "dept_outputs": {"solve": "s", "product": "p", "marketing": "m"},
+        "delivered": "", "verdicts": [], "iteration": 0, "fixes": None,
+    }
+
+
+def _run_args(goal, path, extra=None):
+    from agency_cli.cli import build_parser
+    return build_parser().parse_args(["run", goal, path] + (extra or []))
+
+
+def _fake_result():
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        path="/tmp/mission",
+        dossier={"mission_id": "001", "verdicts": [{"verdict": "PASS"}], "delivered": "ok"},
+    )
+
+
+def test_run_resumes_from_saved_checkpoint_and_clears_on_success(tmp_path, monkeypatch):
+    from agency_cli import checkpoints, cli
+    from agency_kit import store
+    monkeypatch.setattr(store, "agency_dir", lambda: tmp_path)
+    goal, engine, path = "diagnose our churn", "claude-code", str(tmp_path)
+    checkpoints.write(goal, engine, path, _dept_snapshot(goal, engine))
+
+    seen = {}
+    def _fake_run(g, **kw):
+        seen.update(kw)
+        return _fake_result()
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
+
+    assert cli._cmd_run(_run_args(goal, path)) == 0
+    assert set(seen["resume_state"]["dept_outputs"]) == {"solve", "product", "marketing"}
+    assert checkpoints.read(goal, engine, path) is None  # durable dossier supersedes it
+
+
+def test_run_fresh_ignores_a_saved_checkpoint(tmp_path, monkeypatch):
+    from agency_cli import checkpoints, cli
+    from agency_kit import store
+    monkeypatch.setattr(store, "agency_dir", lambda: tmp_path)
+    goal, engine, path = "diagnose our churn", "claude-code", str(tmp_path)
+    checkpoints.write(goal, engine, path, _dept_snapshot(goal, engine))
+
+    seen = {}
+    monkeypatch.setattr("agency_cli.runner_bridge.run", lambda g, **kw: (seen.update(kw), _fake_result())[1])
+
+    assert cli._cmd_run(_run_args(goal, path, ["--fresh"])) == 0
+    assert seen["resume_state"] is None
+
+
+def test_run_persists_checkpoint_on_crash_and_keeps_it(tmp_path, monkeypatch):
+    from agency_cli import checkpoints, cli
+    from agency_kit import store
+    monkeypatch.setattr(store, "agency_dir", lambda: tmp_path)
+    goal, engine, path = "diagnose our churn", "claude-code", str(tmp_path)
+    snap = _dept_snapshot(goal, engine)
+
+    def _fake_run(g, on_checkpoint=None, resume_state=None, **kw):
+        on_checkpoint(snap)                 # engine emits a checkpoint...
+        raise RuntimeError("process killed")  # ...then the mission is killed
+    monkeypatch.setattr("agency_cli.runner_bridge.run", _fake_run)
+
+    assert cli._cmd_run(_run_args(goal, path)) == 2
+    assert checkpoints.read(goal, engine, path) == snap  # survived the crash, resumable
+
+
+def test_run_discards_unusable_checkpoint_and_starts_fresh(tmp_path, monkeypatch):
+    from agency_cli import checkpoints, cli
+    from agency_kit import store
+    monkeypatch.setattr(store, "agency_dir", lambda: tmp_path)
+    goal, engine, path = "diagnose our churn", "claude-code", str(tmp_path)
+    checkpoints.write(goal, engine, path, {"version": 1, "route": []})  # invalid envelope
+
+    seen = {}
+    monkeypatch.setattr("agency_cli.runner_bridge.run", lambda g, **kw: (seen.update(kw), _fake_result())[1])
+
+    assert cli._cmd_run(_run_args(goal, path)) == 0
+    assert seen["resume_state"] is None  # bad checkpoint discarded, not passed through

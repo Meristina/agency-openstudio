@@ -77,18 +77,45 @@ def _call_supported(fn, *args, **kwargs):
 def _cmd_run(args) -> int:
     if getattr(args, "dry_run", False):
         return _cmd_dry_run(args)
-    from . import runner_bridge
+    from . import checkpoints, runner_bridge
+
+    goal = args.goal
+    engine = getattr(args, "engine", "claude-code")
+    project_root = args.path
+
+    # Crash recovery: if this exact goal was interrupted mid-flight, resume from its last
+    # checkpoint (skip routing + completed departments) instead of re-paying that work.
+    # Pre-validate so a stale/incompatible envelope degrades to a fresh run, and so a bad
+    # checkpoint is never confused with a genuine run error below.
+    resume_state = None
+    if not getattr(args, "fresh", False):
+        saved = checkpoints.read(goal, engine, project_root)
+        if saved is not None:
+            from .engines.cli_engine import _validate_resume_state
+            try:
+                resume_state = _validate_resume_state(saved)
+                print(f"Resuming interrupted mission ({checkpoints.describe(saved)}); "
+                      "pass --fresh to start over.")
+            except ValueError:
+                print("warning: saved checkpoint is unusable; starting a fresh run.", file=sys.stderr)
+                checkpoints.clear(goal, engine, project_root)
+
     try:
         result = _call_supported(
             runner_bridge.run,
-            args.goal, project_root=args.path,
-            engine=getattr(args, "engine", "claude-code"),
+            goal, project_root=project_root,
+            engine=engine,
             escalation=_args_escalation(args),
             verification=_args_verification(args),
+            on_checkpoint=lambda snap: checkpoints.write(goal, engine, project_root, snap),
+            resume_state=resume_state,
         )
     except (RuntimeError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+
+    # The durable dossier now supersedes the transient checkpoint.
+    checkpoints.clear(goal, engine, project_root)
     _print_mission_result(result)
     return 0
 
@@ -248,6 +275,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="minimum counted sources per department (0 disables the blocking gate; report-only when combined with --resolve-sources)")
     pr.add_argument("--resolve-sources", action="store_true",
                     help="probe cited URLs online with HTTPS HEAD requests")
+    pr.add_argument("--fresh", action="store_true",
+                    help="ignore any saved checkpoint for this goal and start from scratch "
+                         "(otherwise an interrupted run of the same goal resumes automatically)")
     pr.set_defaults(func=_cmd_run)
 
     pm = sub.add_parser("missions", help="list saved missions from ~/.agency/missions/")
