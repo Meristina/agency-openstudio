@@ -667,6 +667,27 @@ def test_short_verdict_extracts_token():
     assert cli_engine._short_verdict("no verdict word here") == "DELIVERED"
 
 
+def test_short_verdict_ignores_negated_veto_in_prose():
+    # Regression (issue #36): a PASS-WITH-FIXES conclusion that *mentions* the word
+    # "veto" in negated prose must NOT be recorded as VETO. These are the three real
+    # inspector conclusions from the 2026-07-08 live café-positioning mission — two
+    # were mis-recorded as VETO by the old whole-text keyword scan.
+    assert cli_engine._short_verdict(
+        "## Point bloquant — non un veto, un trou d'input client\n"
+        "## VERDICT : ✅ PASS-WITH-FIXES\nLe positionnement ship."
+    ) == "PASS-WITH-FIXES"
+    assert cli_engine._short_verdict(
+        "## Verdict : ✅ PASS-WITH-FIXES (2 fixes légers)\n"
+        "Bottom line : le positionnement ships. Aucune raison de VETO."
+    ) == "PASS-WITH-FIXES"
+    # The declared VERDICT line still wins when it genuinely vetoes, even with a
+    # passing table cell earlier in the prose.
+    assert cli_engine._short_verdict(
+        "| claim | source | Verdict |\n| x | y | ✅ EXACT |\n"
+        "## VERDICT: VETO — uncited figure must be removed."
+    ) == "VETO"
+
+
 def test_extract_sources_pulls_urls_deduped_in_order():
     text = (
         "## Sources cited\n"
