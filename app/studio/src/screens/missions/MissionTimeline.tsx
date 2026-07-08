@@ -11,9 +11,10 @@ import { humanStages, type HumanStage } from "./humanStages";
 import StageList from "./StageList";
 import TerminalPanel from "./TerminalPanel";
 
-function pointerFromTerminal(runId: string, terminal: Terminal): Omit<FollowPointer, "updatedAt"> {
+function pointerFromTerminal(runId: string, terminal: Terminal, kind: "mission" | "recipe"): Omit<FollowPointer, "updatedAt"> {
   if (terminal.kind === "done") return { runId, status: "done", missionId: terminal.missionId };
-  if (terminal.kind === "error") return { runId, status: "error", resumable: terminal.resumable, checkpoint: terminal.checkpoint };
+  // Only an error pointer is resumable, so only it needs the run kind persisted (reload-safe dispatch).
+  if (terminal.kind === "error") return { runId, status: "error", resumable: terminal.resumable, checkpoint: terminal.checkpoint, resumeKind: kind };
   return { runId, status: "cancelled" };
 }
 
@@ -35,7 +36,7 @@ export default function MissionTimeline() {
 
   useEffect(() => {
     if (!session.runId) return;
-    if (terminal) setPointer(record(pointerFromTerminal(session.runId, terminal)));
+    if (terminal) setPointer(record(pointerFromTerminal(session.runId, terminal, session.kind)));
     else if (session.status === "running" || session.status === "launching") setPointer(record({ runId: session.runId, status: "running" }));
   }, [session.runId, session.status, terminal]);
 

@@ -8,14 +8,15 @@ type State = {
   runId: string | null;
   events: MissionEvent[];
   error: string | null;
+  // Which run this session is driving, so a generic resume() dispatches to the right endpoint —
+  // a recipe resumes via POST /api/recipe (mission resume would 404 on a recipe checkpoint).
+  // Exposed in the snapshot so the timeline can persist it onto the follow pointer (reload-safe).
+  kind: "mission" | "recipe";
 };
 
-const state: State = { status: "idle", runId: null, events: [], error: null };
+const state: State = { status: "idle", runId: null, events: [], error: null, kind: "mission" };
 const listeners = new Set<(state: State) => void>();
 let controller: AbortController | null = null;
-// Which run this session last drove, so a generic resume() dispatches to the right endpoint —
-// a recipe resumes via POST /api/recipe (mission resume would 404 on a recipe checkpoint).
-let lastKind: "mission" | "recipe" = "mission";
 
 function publish() {
   for (const listener of listeners) listener({ ...state, events: [...state.events] });
@@ -26,7 +27,7 @@ async function driveRecipe(apiCall: (onEvent: (event: MissionEvent) => void, sig
   if (state.status === "launching" || state.status === "running") return state;
   controller = new AbortController();
   Object.assign(state, { status: "launching", runId: null, events: [], error: null });
-  lastKind = "recipe";
+  state.kind = "recipe";
   publish();
   try {
     await apiCall((event) => {
@@ -67,7 +68,7 @@ export const missionSession = {
     if (state.status === "launching" || state.status === "running") return state;
     controller = new AbortController();
     Object.assign(state, { status: "launching", runId: null, events: [], error: null });
-    lastKind = "mission";
+    state.kind = "mission";
     publish();
     try {
       await runMission(draft.goal, (event) => {
@@ -109,11 +110,12 @@ export const missionSession = {
     // (never re-running it) and resumes downstream. Same drive loop as a fresh recipe launch.
     return driveRecipe((onEvent, signal) => resumeRecipeApi(runId, onEvent, { signal }));
   },
-  async resume(runId: string) {
+  async resume(runId: string, kind?: "mission" | "recipe") {
     // Dispatch to the endpoint that owns this checkpoint: a recipe run resumes via POST /api/recipe
-    // (the mission resume path 404s a recipe checkpoint). `lastKind` is live for the immediate
-    // resume — the common case where the failed run's "Resume" button is clicked in the same session.
-    if (lastKind === "recipe") return this.resumeRecipe(runId);
+    // (the mission resume path 404s a recipe checkpoint). Prefer the caller's persisted `kind` (the
+    // follow pointer's `resumeKind`, correct after a reload); fall back to the live session kind for
+    // the common case — the failed run's "Resume" button clicked in the same session.
+    if ((kind ?? state.kind) === "recipe") return this.resumeRecipe(runId);
     // Mission: send an EMPTY goal — the server reconstructs it from the checkpoint envelope, and a
     // non-empty goal that disagrees is rejected with 409. After a reload we don't have the original
     // goal, so empty is the only correct value here.
@@ -126,8 +128,7 @@ export const missionSession = {
   reset() {
     controller?.abort();
     controller = null;
-    lastKind = "mission";
-    Object.assign(state, { status: "idle", runId: null, events: [], error: null });
+    Object.assign(state, { status: "idle", runId: null, events: [], error: null, kind: "mission" });
     publish();
   },
 };

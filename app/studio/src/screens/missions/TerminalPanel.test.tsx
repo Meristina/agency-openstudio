@@ -47,7 +47,8 @@ describe("TerminalPanel", () => {
     const resume = vi.spyOn(missionSession, "resume").mockResolvedValueOnce(missionSession.snapshot());
     render(<I18nProvider><TerminalPanel terminal={null} pointer={{ runId: "r1", status: "error", resumable: true, checkpoint: "c", updatedAt: 1 }} /></I18nProvider>);
     fireEvent.click(screen.getByRole("button", { name: "Resume" }));
-    await waitFor(() => expect(resume).toHaveBeenCalledWith("r1"));
+    // Resume dispatches with the pointer's runId and its persisted kind (undefined here → session-kind fallback).
+    await waitFor(() => expect(resume).toHaveBeenCalledWith("r1", undefined));
     cleanup();
     render(<I18nProvider><TerminalPanel terminal={{ kind: "cancelled" }} /></I18nProvider>);
     expect(screen.getByRole("heading", { name: "Production stopped" })).toBeTruthy();

@@ -12,6 +12,11 @@ describe("followPointer", () => {
     expect(Object.keys(next).sort()).toEqual(["checkpoint", "resumable", "runId", "status", "updatedAt"].sort());
   });
 
+  it("persists resumeKind so a recipe resume survives a reload", () => {
+    record({ runId: "rc1", status: "error", resumable: true, checkpoint: "s2", resumeKind: "recipe" });
+    expect(read()).toMatchObject({ runId: "rc1", resumeKind: "recipe" });
+  });
+
   it("clears and ignores malformed records", () => {
     record({ runId: "r1", status: "done", missionId: "m1" });
     clear();

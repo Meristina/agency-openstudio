@@ -56,6 +56,14 @@ describe("missionSession", () => {
     expect(missionSession.snapshot()).toMatchObject({ status: "done", runId: "rc1" });
   });
 
+  it("resumes a recipe via the recipe endpoint after a reload (persisted kind, not the reset session kind)", async () => {
+    // Simulate a full page reload: no launch happened this session, so the live kind is the default
+    // "mission". The follow pointer's persisted resumeKind ("recipe") must still route to /api/recipe.
+    await missionSession.resume("rc1", "recipe");
+    expect(resumeRecipe).toHaveBeenCalledWith("rc1", expect.any(Function), expect.anything());
+    expect(runMission).not.toHaveBeenCalled();
+  });
+
   it("routes launchRecipe through the recipe start endpoint", async () => {
     await missionSession.launchRecipe("cinematic", "a teaser", ["pipeline"]);
     expect(startRecipe).toHaveBeenCalledWith("cinematic", "a teaser", expect.any(Function),
