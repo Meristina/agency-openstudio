@@ -8,6 +8,7 @@ import { assignMission, cancelMission, fetchTaxonomy, getGraphStats, getMission,
 import Timeline from "./components/Timeline";
 import MissionDetail from "./components/MissionDetail";
 import ImagePanel from "./components/ImagePanel";
+import VideoPanel from "./components/VideoPanel";
 import VoicePanel from "./components/VoicePanel";
 import DocsPanel from "./components/DocsPanel";
 import VisualDocsPanel from "./components/VisualDocsPanel";
@@ -16,11 +17,12 @@ import Gallery from "./components/Gallery";
 import TaxonomyBrowser from "./components/TaxonomyBrowser";
 import type { Dossier, GalleryItem, MissionEvent, MissionSummary, ModelsStatus, TaxonomyTree } from "./types";
 
-type Tab = "mission" | "image" | "voice" | "docs" | "visual" | "capabilities";
+type Tab = "mission" | "image" | "video" | "voice" | "docs" | "visual" | "capabilities";
 
 const TABS: Array<[Tab, string]> = [
   ["mission", "Mission"],
   ["image", "Image"],
+  ["video", "Video"],
   ["voice", "Voice"],
   ["docs", "Docs"],
   ["visual", "Visual"],
@@ -527,6 +529,20 @@ export default function App() {
         <section className="panel gallery-panel">
           <h2>Gallery</h2>
           <Gallery items={gallery.filter((g) => g.kind === "image")} />
+        </section>
+      </main>
+
+      <main
+        className="studio-layout"
+        id="panel-video"
+        role="tabpanel"
+        aria-labelledby="tab-video"
+        hidden={tab !== "video"}
+      >
+        <VideoPanel onGenerated={onGenerated} />
+        <section className="panel gallery-panel">
+          <h2>Gallery</h2>
+          <Gallery items={gallery.filter((g) => g.kind === "video")} />
         </section>
       </main>
 

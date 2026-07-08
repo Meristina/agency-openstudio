@@ -2685,3 +2685,64 @@ def test_deleted_mission_absent_from_every_listing(monkeypatch, tmp_path):
         assert goals == {"keep me"}
     finally:
         httpd.shutdown()
+
+
+# ── POST /api/video — direct video generation (Console Video tab) ────────────
+
+def _fake_video_mgr(assets_root):
+    """A stand-in ModelManager whose generate_video writes a tiny mp4 under assets_root
+    (so _media_url can map it) — no real Remotion/Chromium, no network."""
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    class _Mgr:
+        def generate_video(self, prompt, *, model=None):
+            p = Path(assets_root) / "videos" / "clip.mp4"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"\x00")
+            return SimpleNamespace(path=p, prompt=prompt, seconds=2.0, model=model or "remotion")
+    return _Mgr()
+
+
+def test_generate_video_renders_and_returns_media_url(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    monkeypatch.setattr("agency_studio.seedance.video_model", lambda m: SimpleNamespace(id=m))
+    httpd, host, port = _start(tmp_path)
+    httpd.media = _fake_video_mgr(httpd.assets_root)  # inject before the request (bypasses lazy build)
+    try:
+        resp, body = _post(host, port, "/api/video", json.dumps({"prompt": "a teaser", "model": "remotion"}))
+        assert resp.status == 200
+        d = json.loads(body)
+        assert d["url"].startswith("/media/") and d["url"].endswith("clip.mp4")
+        assert d["prompt"] == "a teaser" and d["model"] == "remotion"
+    finally:
+        httpd.shutdown()
+
+
+def test_generate_video_missing_prompt_is_400(tmp_path):
+    httpd, host, port = _start(tmp_path)
+    try:
+        resp, _ = _post(host, port, "/api/video", json.dumps({}))
+        assert resp.status == 400
+    finally:
+        httpd.shutdown()
+
+
+def test_generate_video_unavailable_backend_is_501(monkeypatch, tmp_path):
+    # A missing [media] extra / un-npm-installed remotion-composer / absent cloud key raises a
+    # MediaUnavailable subclass from the manager → the endpoint answers 501, not 500.
+    from types import SimpleNamespace
+    from agency_studio.engines.local_media import MediaUnavailable
+    monkeypatch.setattr("agency_studio.seedance.video_model", lambda m: SimpleNamespace(id=m))
+    httpd, host, port = _start(tmp_path)
+
+    class _Boom:
+        def generate_video(self, prompt, *, model=None):
+            raise MediaUnavailable("remotion-composer dependencies are not installed")
+    httpd.media = _Boom()
+    try:
+        resp, body = _post(host, port, "/api/video", json.dumps({"prompt": "x", "model": "remotion"}))
+        assert resp.status == 501
+        assert b"remotion-composer" in body
+    finally:
+        httpd.shutdown()

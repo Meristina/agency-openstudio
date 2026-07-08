@@ -247,6 +247,15 @@ export interface ImageResult {
   model: string;
 }
 
+/** Result of POST /api/video — a short video rendered under /media. */
+export interface VideoResult {
+  url: string;
+  prompt: string;
+  seconds: number;
+  /** The video-model / backend id the server actually used. */
+  model: string;
+}
+
 /** Result of POST /api/tts — generated speech served under /media. */
 export interface SpeechResult {
   url: string;
@@ -353,9 +362,9 @@ export interface VisualMeta {
   created: number;
 }
 
-/** One generated asset shown in the session gallery (image or audio). */
+/** One generated asset shown in the session gallery (image, audio, or video). */
 export interface GalleryItem {
-  kind: "image" | "audio";
+  kind: "image" | "audio" | "video";
   url: string;
   label: string;
   seconds: number;
