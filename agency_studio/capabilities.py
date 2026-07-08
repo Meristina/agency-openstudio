@@ -325,20 +325,38 @@ def _production_tool_entries_locked(refresh: bool) -> list[CapabilityEntry]:
         return _CATALOG_CACHE
     try:
         raw = json.loads(_spawn_catalog())
-        tools = raw.get("tools", raw if isinstance(raw, list) else [])
+        # OpenMontage's support_envelope() is a dict keyed by tool name
+        # ({"flux_image": {...}, ...}); accept the legacy {"tools": [...]} list and a bare
+        # list too. A missing/other shape yields no tools (empty family), never a crash.
+        if isinstance(raw, dict) and isinstance(raw.get("tools"), list):
+            items = raw["tools"]
+        elif isinstance(raw, dict):
+            items = list(raw.values())
+        elif isinstance(raw, list):
+            items = raw
+        else:
+            items = []
         entries = []
-        for item in tools:
+        for item in items:
             if not isinstance(item, dict):
                 continue
             tool_id = str(item.get("name") or item.get("id") or "")
             if not tool_id:
                 continue
-            tier = str(item.get("tier") or item.get("runtime") or "").lower()
+            # Cost tier: prefer the real envelope's `runtime` (api | local | hybrid); fall back
+            # to the legacy `tier` field. api ⇒ paid, hybrid ⇒ free_paid, otherwise free.
+            tier = str(item.get("runtime") or item.get("tier") or "").lower()
             cost = "free_paid" if tier == "hybrid" else "paid" if tier == "api" else "free"
+            # Honour the per-tool status the envelope reports (Brick 4: honest inventory) —
+            # a tool absent its key/binary is unavailable, not silently "available".
+            available = str(item.get("status") or "available").lower() == "available"
             entries.append(CapabilityEntry(
                 id=tool_id, label=str(item.get("label") or tool_id),
-                family="production-tools", cost=cost, availability="available",
-                tier=tier or None, note=str(item.get("description") or item.get("note") or ""),
+                family="production-tools", cost=cost,
+                availability="available" if available else "unavailable",
+                reason=None if available else ("missing_key" if tier == "api" else "missing_binary"),
+                enablement=None if available else (str(item.get("install_instructions") or "").strip() or None),
+                tier=tier or None, note=str(item.get("capability") or item.get("description") or item.get("note") or ""),
             ))
         _CATALOG_CACHE = entries
     except Exception as exc:

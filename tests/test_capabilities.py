@@ -152,6 +152,27 @@ def test_catalog_probe_failure_then_refresh(monkeypatch):
     }
 
 
+def test_catalog_parses_support_envelope_dict_shape(monkeypatch):
+    # OpenMontage's real support_envelope() is a dict KEYED BY TOOL NAME, each value carrying
+    # `runtime` (api|local) and `status` — not the {"tools": [...]} list the old parser assumed
+    # (which silently yielded zero tools). The catalog must parse it and honour per-tool status.
+    monkeypatch.setattr(capabilities, "_CATALOG_CACHE", None)
+    envelope = json.dumps({
+        "video_compose": {"name": "video_compose", "runtime": "local", "status": "available",
+                          "capability": "video_post"},
+        "flux_image": {"name": "flux_image", "runtime": "api", "status": "unavailable",
+                       "install_instructions": "Set FAL_KEY."},
+    })
+    monkeypatch.setattr(capabilities, "_spawn_catalog", lambda: envelope)
+    entries = {e.id: e for e in capabilities.production_tool_entries(refresh=True)}
+    assert set(entries) == {"video_compose", "flux_image"}
+    assert entries["video_compose"].availability == "available"
+    assert entries["video_compose"].cost == "free" and entries["video_compose"].reason is None
+    assert entries["flux_image"].availability == "unavailable"
+    assert entries["flux_image"].cost == "paid" and entries["flux_image"].reason == "missing_key"
+    assert entries["flux_image"].enablement == "Set FAL_KEY."
+
+
 def test_mcp_entries_tolerate_broken_config(monkeypatch):
     def broken():
         raise OSError("mcp.json unreadable")
