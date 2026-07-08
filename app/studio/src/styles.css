@@ -838,3 +838,50 @@ button.resume { padding: 0.35rem 0.7rem; font-size: 0.85rem; margin-top: 0.4rem;
 .markdown a { color: var(--accent); }
 
 code { color: var(--accent); }
+
+/* Recipes screen (catalog + launch). The screen had no layout, so its <label> children
+   flowed inline and the subject textarea overlapped the opt-in rows and the launch button. */
+.recipes-screen {
+  max-width: 760px;
+  display: grid;
+  gap: 1rem;
+}
+.recipes-screen h1 {
+  margin: 0 0 0.5rem;
+  color: var(--studio-text);
+  font-size: var(--studio-font-xl);
+  letter-spacing: 0;
+}
+/* Subject: label above, full-width textarea below. */
+.recipes-subject {
+  display: grid;
+  gap: 0.3rem;
+  color: var(--studio-muted);
+  font-size: var(--studio-font-sm);
+  font-weight: 650;
+}
+.recipes-subject textarea {
+  width: 100%;
+  background: #fff;
+  color: var(--studio-text);
+  border: 1px solid var(--studio-border);
+  border-radius: var(--studio-radius);
+  padding: 0.55rem 0.65rem;
+  font: inherit;
+  resize: vertical;
+}
+/* Cloud/local opt-in: checkbox and its label inline, one row each. */
+.recipes-optin {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--studio-text);
+}
+.recipes-optin input {
+  width: auto;
+  margin: 0;
+  flex: none;
+}
+.recipes-screen > button {
+  justify-self: start;
+}
