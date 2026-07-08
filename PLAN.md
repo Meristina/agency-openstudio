@@ -168,14 +168,22 @@ neither proven); an engines × capabilities compatibility matrix published in
 verified sources (Brick 3) on each. ✅ claude-code + codex (offline suite green;
 `--engine gemini` now errors as unknown, no silent substitution).
 
-### Deferred follow-ups *(closed #28/#30/#31 — not on the critical path)*
+### Follow-ups — all resolved *(zero open issues)*
 
-Three tracking issues were closed as documented deferrals, not abandoned. Each is blocked on
-an **external** dependency (a CLI/network environment, an official-docs fact) or is speculative
-against a deployment that does not exist — so an open ticket would have implied pending code
-that doesn't exist. Reopen (or file a fresh scoped issue) when the trigger is met.
+Every tracking follow-up is resolved: one shipped (`#27`), three closed as documented
+deferrals (`#28`/`#30`/`#31`). The deferrals were not abandoned — each is blocked on an
+**external** dependency (a CLI/network environment, an official-docs fact) or is speculative
+against a deployment that does not exist, so an open ticket would have implied pending code
+that doesn't exist. Each carries a plan of record + a **reopen trigger** below; reopen (or
+file a fresh scoped issue) when a trigger is met.
 
-**Live-validate antigravity & opencode** (`#30`): both engines already ship in the correct
+**Recipe resume across a reload** (`#27`): ✅ **shipped** (`#33`, `64e343b`). A recipe run
+that fails at a post-mission stage now resumes correctly after a full page reload — the run
+kind is persisted as `resumeKind` on the follow pointer, so `missionSession.resume` dispatches
+to `POST /api/recipe` (not the mission path that 404s a recipe checkpoint). Frontend-only, no
+backend change; mission resume path byte-identical. Frontend suite green, tsc clean.
+
+**Live-validate antigravity & opencode** (`#30`): 🕓 **deferred (closed)**. Both engines already ship in the correct
 fail-safe posture (`validated=False` / `web_search_headless=False` → refused, no silent
 substitution, `EngineSpec` invariant holds), and claude-code + codex already cover
 production. The remaining work is *environment-dependent* — real `agy` / `opencode` CLIs,
@@ -187,7 +195,7 @@ consistency test enforces the row), and append the run to
 `docs/legacy/brick9-multi-cli-live-test.md`; on fail keep it refused and document the limit.
 **Reopen trigger:** a maintainer has the CLI + network to run the live test.
 
-**Antigravity init-harness adapter** (`#31`): additive polish to the `agency init --agent`
+**Antigravity init-harness adapter** (`#31`): 🕓 **deferred (closed)**. Additive polish to the `agency init --agent`
 scaffolder (a separate axis from `ENGINE_SPECS` — never touches the mission loop). Blocked on
 an external fact: Antigravity's slash-command / prompt directory format is **not documented
 in-repo**, and Constitution Art. III (no-invented-info) forbids guessing it. Plan once the
@@ -198,7 +206,7 @@ register it in `_ADAPTERS`, add `"antigravity"` to `SUPPORTED`, update the `--ag
 only as a deliberate separate change. **Reopen trigger:** Antigravity's command format is
 confirmed from official docs.
 
-**OpenMontage runner OS/container sandbox** (`#28`, from Brick 8): the production runner
+**OpenMontage runner OS/container sandbox** (`#28`, from Brick 8): 🕓 **deferred (closed)**. The production runner
 (`agency_studio/recipes/om_bridge.py`) drives a broad-tool CLI agent whose `subject` is
 prompt-controlled. This is deliberately **trusted-operator-only** and safe under the current
 model — the studio binds `127.0.0.1` (no CORS `*`), single-operator + local-first, so the
