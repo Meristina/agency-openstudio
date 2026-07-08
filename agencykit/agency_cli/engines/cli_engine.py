@@ -410,31 +410,52 @@ def _route_via_cli(
 _MAX_DEPT_CHARS = 4000  # per department, to keep prompts manageable
 
 
+def _verdict_token(line: str) -> Optional[str]:
+    """Severity-ordered token from one line: VETO > PASS-WITH-FIXES > PASS, else None.
+
+    Severity (not last-position) ordering avoids the flip-case where a bare "PASS"
+    after a "PASS-WITH-FIXES" conclusion downgrades the verdict. Word boundaries stop
+    "PASS" inside "BYPASS" / "COMPASS" or the "PASS" of "PASS-WITH-FIXES" from reading
+    as a bare PASS.
+    """
+    if re.search(r"\bVETO\b", line):
+        return "VETO"
+    if re.search(r"\bPASS[\s-]WITH[\s-]FIXES\b", line):
+        return "PASS-WITH-FIXES"
+    if re.search(r"\bPASS\b", line):
+        return "PASS"
+    return None
+
+
 def _short_verdict(text: str) -> str:
     """Pull a short verdict token (PASS / PASS-WITH-FIXES / VETO) from inspector text.
 
     Used so `agency missions` / `batch status` show a clean token instead of the
-    inspector's full prose. Whole-token, severity-ordered: VETO > PASS-WITH-FIXES >
-    PASS. Matching by severity (not by last position) avoids the substring flip-case
-    where a bare "PASS" in prose AFTER a "PASS-WITH-FIXES" conclusion would otherwise
-    downgrade the reported verdict. Word boundaries stop "PASS" inside "BYPASS" /
-    "COMPASS" or the "PASS" inside "PASS-WITH-FIXES" from being read as a bare PASS.
+    inspector's full prose, and so the veto loop records the RIGHT verdict.
+
+    The inspector states its conclusion on an explicit ``VERDICT`` line (e.g.
+    ``## VERDICT: PASS-WITH-FIXES``). We therefore read the token from the LAST
+    ``VERDICT``-bearing line, NOT from a whole-text keyword scan — a scan mis-reads a
+    negated mention elsewhere in the prose ("this is **not a veto**", "no reason to
+    **VETO**") as a VETO, wrongly downgrading a passing deliverable (issue #36). Only
+    when no ``VERDICT`` line exists do we fall back to a whole-text severity scan.
 
     Cases the heuristic must cover:
       "VERDICT: PASS"                              -> PASS
-      "... — VETO"                                 -> VETO
+      "... — VETO"                                 -> VETO   (no VERDICT line → scan)
       "VERDICT: PASS-WITH-FIXES, see notes"        -> PASS-WITH-FIXES
       "PASS-WITH-FIXES. It would PASS once fixed." -> PASS-WITH-FIXES (no downgrade)
+      "## VERDICT: PASS-WITH-FIXES ... no reason to VETO" -> PASS-WITH-FIXES (#36)
       "no verdict word here"                       -> DELIVERED
     """
     upper = (text or "").upper()
-    if re.search(r"\bVETO\b", upper):
-        return "VETO"
-    if re.search(r"\bPASS[\s-]WITH[\s-]FIXES\b", upper):
-        return "PASS-WITH-FIXES"
-    if re.search(r"\bPASS\b", upper):
-        return "PASS"
-    return "DELIVERED"
+    # Prefer the explicit verdict declaration; the LAST one is the final conclusion.
+    for line in reversed([ln for ln in upper.splitlines() if "VERDICT" in ln]):
+        token = _verdict_token(line)
+        if token:
+            return token
+    # No declared verdict line — fall back to a whole-text severity scan.
+    return _verdict_token(upper) or "DELIVERED"
 
 
 def _extract_sources(text: str) -> list:
