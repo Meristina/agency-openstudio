@@ -17,6 +17,7 @@ Endpoints:
   GET  /api/missions          list saved missions (JSON), optionally filtered by taxonomy
   GET  /api/taxonomy          client/project/campaign tree for the current workspace
   GET  /api/mission/{id}      load one saved dossier (JSON)
+  DELETE /api/mission/{id}    permanently delete a saved mission (204; 404 unknown/out-of-scope)
   POST /api/mission/{id}/assign set/clear a taxonomy override
   GET  /api/mission/{id}/pdf  export the deliverable as PDF ([pdf] extra)
   GET  /api/checkpoints       list resumable mission checkpoints (crash-recovery)
@@ -1045,6 +1046,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             return self._handle_delete_checkpoint(path[len("/api/checkpoints/"):])
         if path.startswith("/api/capabilities/selection/"):
             return self._handle_clear_capability(path[len("/api/capabilities/selection/"):])
+        if path.startswith("/api/mission/"):
+            return self._handle_delete_mission(path[len("/api/mission/"):])
         self._reject(404, "not found")
 
     # ── API: list / get saved missions ───────────────────────────────────────
@@ -1131,6 +1134,25 @@ class StudioHandler(BaseHTTPRequestHandler):
         dossier = self._load_scoped_dossier(mission_id)
         if dossier is not None:
             self._send_json(dossier)
+
+    def _handle_delete_mission(self, mission_id: str) -> None:
+        """Delete a saved mission (DELETE /api/mission/{id}). 204 on removal, 404 for an
+        unknown/malformed/unsafe id — same ``_safe_mission_id`` traversal defense as GET, and
+        scoped to THIS project (``_load_scoped_dossier`` 404s a mission from another project
+        exactly as the GET route does), so the GUI can only delete its own history. The store's
+        own ``path_inside``-equivalent guard is belt-and-braces underneath."""
+        from agency_kit import store
+        mission_id = _safe_mission_id(mission_id)
+        if mission_id is None:
+            return self._send_error_json(404, "mission not found")
+        if self._load_scoped_dossier(mission_id) is None:
+            return None  # absent or out of project scope — _load_scoped_dossier already sent 404
+        if store.delete(mission_id):
+            self.send_response(204)
+            self._cors()
+            self.end_headers()
+        else:
+            self._send_error_json(404, "mission not found")
 
     def _handle_mission_pdf(self, mission_id: str) -> None:
         """Export a mission's deliverable to PDF and stream it back.

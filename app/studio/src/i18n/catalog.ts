@@ -7,6 +7,7 @@ export type KnownCatalogKey =
   | "home.question" | "home.intentLabel" | "home.intentPlaceholder" | "home.start"
   | "home.resume.title" | "home.resume.draft" | "home.resume.recentTitle"
   | "home.recent.inProgress" | "home.recent.delivered" | "home.recent.failedVerdict" | "home.recent.empty" | "home.recent.loadError" | "home.recent.seeAll" | "home.recent.untitled"
+  | "home.recent.delete" | "home.recent.deleteConfirm" | "home.recent.deleteConfirmYes" | "home.recent.deleteConfirmCancel" | "home.recent.deleteError"
   | "home.shortcuts.title" | "home.shortcuts.library" | "home.shortcuts.import" | "home.shortcuts.models"
   | "home.context.scopedTo" | "home.context.none"
   | "state.loading" | "state.empty" | "state.error" | "state.comingSoon.title" | "state.comingSoon.body" | "state.backHome" | "state.notFound.title" | "state.notFound.body"

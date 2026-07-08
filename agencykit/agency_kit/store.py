@@ -7,6 +7,7 @@ so missions survive across CLI runs and can be resumed or audited offline.
 import json
 import os
 import re
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -116,6 +117,28 @@ def load(mission_id: str) -> dict:
     """Load a dossier from disk. Raises FileNotFoundError if not found."""
     path = missions_dir() / mission_id / "dossier.json"
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def delete(mission_id: str) -> bool:
+    """Permanently remove a saved mission's directory from the store.
+
+    Returns ``True`` when a mission directory was removed, ``False`` when the id is
+    unsafe or the mission was already absent (idempotent — a missing directory is a
+    no-op, never an error, so a stale caller or a double delete can't raise).
+
+    Traversal-safe and self-contained (the store never depends on the studio's
+    ``path_inside``): the id must resolve to a **direct child** of ``missions_dir()``.
+    An id containing a path separator, ``.``/``..``, or resolving outside the store is
+    refused and touches nothing — deletion can never escape the mission store.
+    """
+    if not mission_id or "/" in mission_id or "\\" in mission_id or mission_id in (".", ".."):
+        return False
+    root = missions_dir().resolve()
+    target = (root / mission_id).resolve()
+    if target.parent != root or not target.is_dir():
+        return False  # escaped the root, or already absent
+    shutil.rmtree(target)
+    return True
 
 
 def last_verdict_token(dossier: dict) -> str:

@@ -18,6 +18,8 @@ describe("homeModel", () => {
     expect(view.map((item) => item.label)).toEqual(["Live campaign", "Sponsor deck", "Broken video", "Extra 1", "Extra 2"]);
     expect(view.map((item) => item.statusKey)).toEqual(["home.recent.inProgress", "home.recent.delivered", "home.recent.failedVerdict", "home.recent.inProgress", "home.recent.inProgress"]);
     expect(view.map((item) => item.target)).toEqual(["#/missions", "#/library?deliverable=m2", "#/library?deliverable=m3", "#/library?deliverable=m4", "#/library?deliverable=m5"]);
+    // The live-followed run (m1) is not deletable; the saved missions are (FR-008).
+    expect(view.map((item) => item.deletable)).toEqual([false, true, true, true, true]);
     expect(view.some((item) => item.label === "m1" || item.label === "VETO")).toBe(false);
   });
 
