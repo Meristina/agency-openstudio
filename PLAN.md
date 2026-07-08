@@ -168,6 +168,35 @@ neither proven); an engines × capabilities compatibility matrix published in
 verified sources (Brick 3) on each. ✅ claude-code + codex (offline suite green;
 `--engine gemini` now errors as unknown, no silent substitution).
 
+### Deferred follow-ups *(closed #30/#31 — not on the critical path)*
+
+Two Brick 9 tracking issues were closed as documented deferrals, not abandoned. Each is
+blocked on an **external** dependency, not repo effort, so an open ticket would have implied
+pending code that doesn't exist. Reopen (or file a fresh scoped issue) when the trigger is met.
+
+**Live-validate antigravity & opencode** (`#30`): both engines already ship in the correct
+fail-safe posture (`validated=False` / `web_search_headless=False` → refused, no silent
+substitution, `EngineSpec` invariant holds), and claude-code + codex already cover
+production. The remaining work is *environment-dependent* — real `agy` / `opencode` CLIs,
+live network, working auth — none of which run in the offline suite. Procedure when a
+maintainer has the environment: run each engine end-to-end, apply the Brick 3 postcondition
+(min sources/department + URL resolution); on pass set `validated=True` **and**
+`web_search_headless=True` in `cli_engine.py`, update the `agencykit/README.md` matrix (the
+consistency test enforces the row), and append the run to
+`docs/legacy/brick9-multi-cli-live-test.md`; on fail keep it refused and document the limit.
+**Reopen trigger:** a maintainer has the CLI + network to run the live test.
+
+**Antigravity init-harness adapter** (`#31`): additive polish to the `agency init --agent`
+scaffolder (a separate axis from `ENGINE_SPECS` — never touches the mission loop). Blocked on
+an external fact: Antigravity's slash-command / prompt directory format is **not documented
+in-repo**, and Constitution Art. III (no-invented-info) forbids guessing it. Plan once the
+format is confirmed from official docs: add `_install_antigravity` to `integrations.py`,
+register it in `_ADAPTERS`, add `"antigravity"` to `SUPPORTED`, update the `--agent` help in
+`cli.py` + `agencykit/CLAUDE.md`, and add per-harness coverage in `tests/test_cli.py`. Keep
+`gemini` as a legacy adapter (still writes valid `.gemini/commands/agency/*.toml`); remove
+only as a deliberate separate change. **Reopen trigger:** Antigravity's command format is
+confirmed from official docs.
+
 ---
 
 ## Invariants (all bricks)
