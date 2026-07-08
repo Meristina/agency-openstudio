@@ -20,12 +20,12 @@ export default function RecipeLaunch({ recipe }: { recipe: Recipe }) {
   return (
     <section className="recipes-screen" aria-labelledby="recipe-launch-title">
       <h1 id="recipe-launch-title">{t(recipe.name_key)}</h1>
-      <label>
+      <label className="recipes-subject">
         <span>{t("recipes.input.subject")}</span>
         <textarea value={subject} onChange={(event) => setSubject(event.target.value)} rows={4} />
       </label>
       {tiers.map((tier) => (
-        <label key={tier.kind}>
+        <label key={tier.kind} className="recipes-optin">
           <input
             type="checkbox"
             checked={cloudOptins.includes(tier.kind)}
